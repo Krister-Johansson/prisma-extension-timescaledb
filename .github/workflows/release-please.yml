@@ -12,7 +12,7 @@ jobs:
   release-please:
     runs-on: ubuntu-latest
     steps:
-      - uses: googleapis/release-please-action@v4
+      - uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4
         id: release
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -26,9 +26,9 @@ jobs:
       # (Note: a release PR opened by the default GITHUB_TOKEN does not trigger ci.yml;
       #  use a PAT as `token` above if you want CI to run on the release PR itself.)
       #
-      # - uses: actions/checkout@v4
+      # - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       #   if: ${{ steps.release.outputs.release_created }}
-      # - uses: actions/setup-node@v4
+      # - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
       #   if: ${{ steps.release.outputs.release_created }}
       #   with:
       #     node-version: 20
