@@ -1,0 +1,41 @@
+name: release-please
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          # Manifest mode: config in release-please-config.json + .release-please-manifest.json.
+          # Maintains a release PR that bumps the version and updates CHANGELOG.md from
+          # Conventional Commits; merging that PR creates the git tag + GitHub release.
+
+      # ─────────────────────────────────────────────────────────────────────────────
+      # npm publish is intentionally NOT wired up yet (holding publish until v0.1 is
+      # final). To enable later: add an `NPM_TOKEN` repo secret and uncomment below.
+      # (Note: a release PR opened by the default GITHUB_TOKEN does not trigger ci.yml;
+      #  use a PAT as `token` above if you want CI to run on the release PR itself.)
+      #
+      # - uses: actions/checkout@v4
+      #   if: ${{ steps.release.outputs.release_created }}
+      # - uses: actions/setup-node@v4
+      #   if: ${{ steps.release.outputs.release_created }}
+      #   with:
+      #     node-version: 20
+      #     registry-url: "https://registry.npmjs.org"
+      # - run: npm ci
+      #   if: ${{ steps.release.outputs.release_created }}
+      # - run: npm publish --access public
+      #   if: ${{ steps.release.outputs.release_created }}
+      #   env:
+      #     NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
