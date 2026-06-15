@@ -72,13 +72,13 @@
     "@prisma/internals": "^7.8.0",
     "@types/node": "^25.9.3",
     "@types/pg": "^8.20.0",
-    "@vitest/coverage-v8": "^3.2.6",
+    "@vitest/coverage-v8": "^4.1.9",
     "pg": "^8.21.0",
     "prisma": "7.8.0",
     "testcontainers": "^12.0.2",
     "tsup": "^8.5.0",
-    "typescript": "^5.9.2",
-    "vitest": "^3.2.4"
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.9"
   },
   "engines": {
     "node": ">=18.18"
