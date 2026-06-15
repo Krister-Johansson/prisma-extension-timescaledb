@@ -42,4 +42,11 @@ describe("makeManage.refreshContinuousAggregate", () => {
     const { client } = fakeClient();
     await expect(makeManage(client).refreshContinuousAggregate("bad name")).rejects.toThrow(/Invalid/);
   });
+
+  it("resolves the Prisma view model name to its @@map DB view name", async () => {
+    const { client, calls } = fakeClient();
+    const viewByModel = new Map([["SensorHourly", "sensor_hourly"]]);
+    await makeManage(client, viewByModel).refreshContinuousAggregate("SensorHourly");
+    expect(calls[0]!.sql).toBe(`CALL refresh_continuous_aggregate('"sensor_hourly"', NULL, NULL)`);
+  });
 });

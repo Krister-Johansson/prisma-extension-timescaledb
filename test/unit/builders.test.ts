@@ -58,7 +58,7 @@ describe("createContinuousAggregateSql", () => {
     bucket: "1 hour",
     timeColumn: "time",
     bucketColumn: "bucket",
-    groupBy: ["deviceId"],
+    groupBy: [{ source: "deviceId", output: "deviceId" }],
     aggregates: [
       { name: "avgTemp", fn: "avg", column: "temperature" },
       { name: "maxTemp", fn: "max", column: "temperature" },

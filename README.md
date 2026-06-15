@@ -29,6 +29,7 @@ Prisma can't model TimescaleDB features in its schema language, and the naive se
 - [Setup in detail](#setup-in-detail)
 - [Runtime usage](#runtime-usage)
 - [Without the generator](#without-the-generator-manual-config)
+- [Renamed tables/columns (`@@map` / `@map`)](#renamed-tablescolumns-map--map)
 - [Shadow database](#shadow-database)
 - [Annotation reference](#annotation-reference)
 - [Troubleshooting](#troubleshooting)
@@ -174,6 +175,35 @@ All emitted SQL is idempotent (`IF NOT EXISTS`, `if_not_exists => TRUE`), so
 
 ## Runtime usage
 
+### Adding data
+
+A hypertable is an ordinary Prisma model, so you insert with the normal Prisma API — no
+special calls needed. TimescaleDB routes rows into the right time chunks automatically.
+
+```ts
+// single row
+await prisma.sensorReading.create({
+  data: { time: new Date(), deviceId: 1, temperature: 21.5 },
+});
+
+// bulk insert
+await prisma.sensorReading.createMany({
+  data: [
+    { time: new Date("2026-06-15T10:05:00Z"), deviceId: 1, temperature: 20 },
+    { time: new Date("2026-06-15T10:25:00Z"), deviceId: 1, temperature: 22 },
+    { time: new Date("2026-06-15T11:10:00Z"), deviceId: 1, temperature: 30 },
+  ],
+});
+```
+
+Continuous aggregates are populated by their refresh policy on a schedule; to materialize new
+rows immediately (e.g. right after a bulk insert, or in a test), refresh on demand:
+
+```ts
+await prisma.$timescale.refreshContinuousAggregate("SensorHourly");
+const hourly = await prisma.sensorHourly.findMany({ orderBy: { bucket: "desc" } });
+```
+
 ### Ad-hoc `time_bucket` queries
 
 ```ts
@@ -232,6 +262,52 @@ migrations: `createExtensionSql`, `createHypertableSql`, `createContinuousAggreg
 
 ---
 
+## Renamed tables/columns (`@@map` / `@map`)
+
+`@@map` (table) and `@map` (column) are fully supported. The generator reads the real
+database names from the DMMF and emits all SQL against them, while the runtime keeps
+accepting and returning **Prisma** field names — so nothing in your application code changes.
+
+```prisma
+/// @timescale.hypertable(column: "time", chunkInterval: "1 day")
+model SensorReading {
+  time        DateTime @map("ts")
+  deviceId    Int      @map("device_id")
+  temperature Float
+
+  @@id([deviceId, time])
+  @@map("sensor_readings")
+}
+```
+
+```ts
+// You still write Prisma field names; the runtime maps them to ts / device_id:
+await prisma.sensorReading.timeBucket({
+  bucket: "1 hour",
+  range: { start, end },
+  where: { deviceId: 1 },
+  groupBy: ["deviceId"],
+  aggregate: { avgTemp: { avg: "temperature" } },
+});
+```
+
+If you use the **manual config** (no generator), provide the DB names yourself:
+
+```ts
+timescaledb({
+  hypertables: [{
+    model: "SensorReading",                 // Prisma model name (drives prisma.sensorReading.*)
+    table: "sensor_readings",               // @@map table
+    column: "ts",                           // @map time column
+    columns: { deviceId: "device_id" },     // Prisma field -> DB column (where/groupBy/aggregate)
+  }],
+});
+```
+
+> Multi-schema (`@@schema`) is not yet supported — see [Limitations](#limitations-v01).
+
+---
+
 ## Shadow database
 
 `prisma migrate dev` / `migrate reset` validate migrations against a temporary **shadow
@@ -280,7 +356,9 @@ database) ships in this repo.
 
 - **`timeBucket` `where`** supports top-level equality only at runtime (typed with Prisma's
   full where input; throws on operators / nested filters).
-- **Table name must equal the model name** — `@@map` is not yet handled.
+- **`@@schema` (multiSchema)** is not yet handled — relations aren't schema-qualified, so
+  models must live in the default schema. (`@@map`/`@map` table & column renaming **is**
+  supported — see [Renamed tables/columns](#renamed-tablescolumns-map--map) below.)
 - **Integer-column aggregates:** `count` returns a JS `number`; `sum`/`avg` over integer
   columns may return a Postgres `bigint`/`numeric` while typed as `number`. Float columns
   behave as expected.

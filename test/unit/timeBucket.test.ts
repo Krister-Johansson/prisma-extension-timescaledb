@@ -38,6 +38,22 @@ describe("buildTimeBucketQuery", () => {
     );
   });
 
+  it("resolves @map columns to DB names while aliasing results to Prisma field names", () => {
+    const { sql, params } = buildTimeBucketQuery(
+      "sensor_readings",
+      "ts",
+      { ...base, groupBy: ["deviceId"], where: { deviceId: 1 } },
+      { deviceId: "device_id", time: "ts" },
+    );
+    expect(sql).toContain(`FROM "sensor_readings"`);
+    expect(sql).toContain(`time_bucket($1, "ts") AS "bucket"`);
+    expect(sql).toContain(`"device_id" AS "deviceId"`); // DB column selected, Prisma name aliased
+    expect(sql).toContain(`avg("temperature") AS "avgTemp"`); // unmapped column = identity
+    expect(sql).toContain(`AND "device_id" = $4`); // where key resolved to DB column
+    expect(sql).toContain(`GROUP BY "bucket", "deviceId"`); // group by the output alias
+    expect(params).toEqual(["1 hour", range.start, range.end, 1]);
+  });
+
   it("throws when range bounds are missing", () => {
     expect(() =>
       buildTimeBucketQuery("SensorReading", "time", { bucket: "1 hour", aggregate: base.aggregate } as TimeBucketRuntimeArgs),

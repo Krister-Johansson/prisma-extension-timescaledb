@@ -22,7 +22,10 @@ export function createContinuousAggregateSql(config: CaggConfig): MigrationSql {
   assertSafeIdent(timeColumn, "time column");
   assertSafeIdent(bucketColumn, "bucket column");
   assertInterval(bucket);
-  groupBy.forEach((col) => assertSafeIdent(col, "groupBy column"));
+  groupBy.forEach((g) => {
+    assertSafeIdent(g.source, "groupBy source column");
+    assertSafeIdent(g.output, "groupBy output column");
+  });
 
   if (aggregates.length === 0) {
     throw new Error(`Continuous aggregate "${name}" must declare at least one aggregate.`);
@@ -40,11 +43,11 @@ export function createContinuousAggregateSql(config: CaggConfig): MigrationSql {
   // SELECT: time_bucket first, then group-by passthroughs, then the aggregates.
   const selectLines = [
     `time_bucket(${quoteLiteral(bucket)}, ${quoteIdent(timeColumn)}) AS ${quoteIdent(bucketColumn)}`,
-    ...groupBy.map((col) => `${quoteIdent(col)} AS ${quoteIdent(col)}`),
+    ...groupBy.map((g) => `${quoteIdent(g.source)} AS ${quoteIdent(g.output)}`),
     ...aggregates.map((a) => `${a.fn}(${quoteIdent(a.column)}) AS ${quoteIdent(a.name)}`),
   ];
 
-  const groupByCols = [bucketColumn, ...groupBy].map(quoteIdent).join(", ");
+  const groupByCols = [bucketColumn, ...groupBy.map((g) => g.output)].map(quoteIdent).join(", ");
 
   let up = `CREATE MATERIALIZED VIEW IF NOT EXISTS ${quoteIdent(name)}
   WITH (timescaledb.continuous) AS

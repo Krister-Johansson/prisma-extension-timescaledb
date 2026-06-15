@@ -2,7 +2,7 @@
 // internal shapes (HypertableConfig / CaggConfig) and never touches `options.dmmf`. A Prisma
 // internal-API change should only require edits in this file.
 import type { DMMF } from "@prisma/generator-helper";
-import type { AggregateSpec, CaggConfig, HypertableConfig, RefreshPolicy } from "../core/types.js";
+import type { AggregateSpec, CaggConfig, CaggGroupBy, HypertableConfig, RefreshPolicy } from "../core/types.js";
 import type { Interval } from "../core/interval.js";
 import { assertInterval } from "../core/interval.js";
 import {
@@ -71,10 +71,15 @@ function buildHypertable(model: DMMF.Model, annotations: ReturnType<typeof parse
   }
   if (chunkInterval !== undefined) assertInterval(chunkInterval);
 
+  const columns = columnMap(model);
+  const table = dbTable(model);
+
   return {
-    table: model.name,
-    column,
+    ...(model.name !== table ? { model: model.name } : {}),
+    table,
+    column: dbCol(field),
     ...(chunkInterval !== undefined ? { chunkInterval: chunkInterval as Interval } : {}),
+    ...(Object.keys(columns).length > 0 ? { columns } : {}),
   };
 }
 
@@ -105,9 +110,12 @@ function buildCagg(
     );
   }
 
-  // Field-level annotations on the view.
-  let bucketColumn: string | undefined;
-  const groupBy: string[] = [];
+  // Field-level annotations on the view. All names below are resolved to DB names: the
+  // view's output columns use the view fields' @map names; source refs use the source
+  // fields' @map names.
+  let bucketColumn: string | undefined; // view bucket field's DB name
+  let sawBucket = false;
+  const groupBy: CaggGroupBy[] = [];
   const aggregates: AggregateSpec[] = [];
 
   for (const field of view.fields) {
@@ -115,16 +123,18 @@ function buildCagg(
     const fctx = `@timescale field on "${view.name}.${field.name}"`;
 
     if (findAnnotation(fieldAnns, "bucket")) {
-      if (bucketColumn !== undefined) {
-        throw new Error(`${ctx}: more than one @timescale.bucket field ("${bucketColumn}" and "${field.name}").`);
+      if (sawBucket) {
+        throw new Error(`${ctx}: more than one @timescale.bucket field (second on "${field.name}").`);
       }
-      bucketColumn = field.name;
+      sawBucket = true;
+      bucketColumn = dbCol(field);
     }
     if (findAnnotation(fieldAnns, "groupBy")) {
-      if (!findScalarField(sourceModel, field.name)) {
+      const srcField = findScalarField(sourceModel, field.name);
+      if (!srcField) {
         throw new Error(`${fctx}: groupBy column "${field.name}" does not exist on source "${source}".`);
       }
-      groupBy.push(field.name);
+      groupBy.push({ source: dbCol(srcField), output: dbCol(field) });
     }
     const aggAnn = findAnnotation(fieldAnns, "aggregate");
     if (aggAnn) {
@@ -133,10 +143,11 @@ function buildCagg(
       if (!AGG_FNS.has(fn)) {
         throw new Error(`${fctx}: unsupported aggregate function "${fn}" (expected ${[...AGG_FNS].join(", ")}).`);
       }
-      if (!findScalarField(sourceModel, column)) {
+      const srcField = findScalarField(sourceModel, column);
+      if (!srcField) {
         throw new Error(`${fctx}: aggregate column "${column}" does not exist on source "${source}".`);
       }
-      aggregates.push({ name: field.name, fn, column });
+      aggregates.push({ name: dbCol(field), fn, column: dbCol(srcField) });
     }
   }
 
@@ -148,12 +159,14 @@ function buildCagg(
   }
 
   const refresh = buildRefresh(ann, ctx);
+  const viewName = dbTable(view);
 
   return {
-    name: view.name,
-    source,
+    ...(view.name !== viewName ? { model: view.name } : {}),
+    name: viewName,
+    source: dbTable(sourceModel),
     bucket: bucket as Interval,
-    timeColumn,
+    timeColumn: dbCol(timeField),
     bucketColumn,
     groupBy,
     aggregates,
@@ -180,4 +193,23 @@ function buildRefresh(ann: ReturnType<typeof parseAnnotations>[number], ctx: str
 
 function findScalarField(model: DMMF.Model, name: string): DMMF.Field | undefined {
   return model.fields.find((f) => f.name === name && f.kind === "scalar");
+}
+
+/** DB table name: the @@map value, or the model name. */
+function dbTable(model: DMMF.Model): string {
+  return model.dbName ?? model.name;
+}
+
+/** DB column name: the @map value, or the field name. */
+function dbCol(field: DMMF.Field): string {
+  return field.dbName ?? field.name;
+}
+
+/** Map of Prisma field name -> DB column name, for fields that were renamed via @map. */
+function columnMap(model: DMMF.Model): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const f of model.fields) {
+    if (f.kind === "scalar" && f.dbName) map[f.name] = f.dbName;
+  }
+  return map;
 }
