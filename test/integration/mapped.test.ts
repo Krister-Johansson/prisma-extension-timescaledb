@@ -17,6 +17,12 @@ const DOCKER_OK = (() => {
   }
 })();
 
+if (!DOCKER_OK) {
+  console.warn(
+    "\n[integration] SKIPPED: Docker is not available. The @@map/@map reset-safety + runtime checks are NOT verified.\n",
+  );
+}
+
 const MODELS = `/// @timescale.hypertable(column: "time", chunkInterval: "1 day")
 model SensorReading {
   time        DateTime @map("ts")
@@ -66,6 +72,18 @@ describe.skipIf(!DOCKER_OK)("@@map / @map (generated migrations + runtime)", () 
   });
 
   it("creates the hypertable + cagg under their mapped DB names", async () => {
+    const [hyper] = await h.query<{ n: number }>(
+      "SELECT count(*)::int AS n FROM timescaledb_information.hypertables WHERE hypertable_name = 'sensor_readings'",
+    );
+    const [cagg] = await h.query<{ n: number }>(
+      "SELECT count(*)::int AS n FROM timescaledb_information.continuous_aggregates WHERE view_name = 'sensor_hourly'",
+    );
+    expect({ hypertables: hyper?.n, caggs: cagg?.n }).toEqual({ hypertables: 1, caggs: 1 });
+  });
+
+  it("reproduces the mapped hypertable + cagg after migrate reset", async () => {
+    // reset drops the DB and replays all migrations (re-running our deterministic generator).
+    h.prisma(["migrate", "reset", "--force"]);
     const [hyper] = await h.query<{ n: number }>(
       "SELECT count(*)::int AS n FROM timescaledb_information.hypertables WHERE hypertable_name = 'sensor_readings'",
     );
