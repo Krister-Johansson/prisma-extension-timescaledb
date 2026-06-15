@@ -22,9 +22,16 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm run typecheck
-      - run: npm test
+      - run: npm run coverage      # runs unit tests + enforces coverage thresholds
       - run: npm run test:types
       - run: npm run attw
+      - name: Upload coverage report
+        if: matrix.node == 20
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage/
+          if-no-files-found: error
 
   integration:
     name: integration (real TimescaleDB)

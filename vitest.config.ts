@@ -5,5 +5,27 @@ export default defineConfig({
     // Unit tests live in test/unit; integration tests (Testcontainers, Milestone 5) will
     // live in test/integration and run separately.
     include: ["test/unit/**/*.test.ts"],
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "text-summary", "html", "lcov"],
+      reportsDirectory: "coverage",
+      include: ["src/**/*.ts"],
+      exclude: [
+        // Generator bin/handler entry: registers a JSON-RPC handler at import and is
+        // exercised end-to-end by the integration suite, not unit tests.
+        "src/generator/index.ts",
+        // Type-only module (interfaces) — no executable code to cover.
+        "src/core/types.ts",
+      ],
+      // Unit-suite gate (no Docker). The client runtime wiring in src/client/index.ts is
+      // additionally covered by the integration suite; thresholds sit below the unit numbers
+      // for headroom.
+      thresholds: {
+        statements: 88,
+        branches: 85,
+        functions: 90,
+        lines: 88,
+      },
+    },
   },
 });
