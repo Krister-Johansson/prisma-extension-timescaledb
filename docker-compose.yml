@@ -1,0 +1,29 @@
+services:
+  timescaledb:
+    # NOTE: this is a TimescaleDB-bundled image, NOT vanilla postgres.
+    # `CREATE EXTENSION timescaledb` only works because the extension binaries
+    # ship inside this image. Swap to -pg16 if you need PG16, or pin a specific
+    # TimescaleDB version (e.g. timescale/timescaledb:2.17.2-pg17) for reproducibility.
+    # For features needing timescaledb_toolkit (hyperfunctions) later, consider
+    # the HA image: timescale/timescaledb-ha:pg17 (closer to Tiger Cloud).
+    image: timescale/timescaledb:latest-pg17
+    container_name: prisma_timescaledb
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: app
+    ports:
+      - "5432:5432"
+    volumes:
+      - timescale_data:/var/lib/postgresql/data
+      # Runs once on first init: creates the empty shadow database Prisma needs.
+      - ./docker/init-shadow-db.sql:/docker-entrypoint-initdb.d/01-init-shadow-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d app"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  timescale_data:

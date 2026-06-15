@@ -1,0 +1,86 @@
+{
+  "name": "prisma-extension-timescaledb",
+  "version": "0.1.0",
+  "description": "Type-safe TimescaleDB / TigerData time-series support for Prisma: reset-safe migrations, hypertables, continuous aggregates, and typed query helpers.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "CHANGELOG.md"
+  ],
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "prisma-extension-timescaledb": "./dist/generator/index.js"
+  },
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./core": {
+      "import": {
+        "types": "./dist/core/index.d.ts",
+        "default": "./dist/core/index.js"
+      },
+      "require": {
+        "types": "./dist/core/index.d.cts",
+        "default": "./dist/core/index.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "coverage": "vitest run --coverage",
+    "test:types": "tsc -p tsconfig.types.json",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "attw": "attw --pack . --profile node16",
+    "prepublishOnly": "npm run build && npm run test && npm run test:types && npm run attw"
+  },
+  "keywords": [
+    "prisma",
+    "prisma-extension",
+    "timescaledb",
+    "tigerdata",
+    "time-series",
+    "hypertable",
+    "continuous-aggregate",
+    "postgresql"
+  ],
+  "peerDependencies": {
+    "@prisma/client": ">=7.0.0",
+    "prisma": ">=7.0.0"
+  },
+  "dependencies": {
+    "@prisma/generator-helper": ">=7.0.0"
+  },
+  "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.2",
+    "@prisma/adapter-pg": "^7.8.0",
+    "@prisma/client": "7.8.0",
+    "@prisma/internals": "^7.8.0",
+    "@types/node": "^25.9.3",
+    "@types/pg": "^8.20.0",
+    "@vitest/coverage-v8": "^4.1.9",
+    "pg": "^8.21.0",
+    "prisma": "7.8.0",
+    "testcontainers": "^12.0.2",
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.9"
+  },
+  "engines": {
+    "node": ">=18.18"
+  }
+}
