@@ -16,6 +16,9 @@ import { makeManage, type RawClient } from "./manage.js";
 /** Manual configuration accepted by `timescaledb()` (also satisfied by the generated registry). */
 export interface TimescaleConfig {
   hypertables?: readonly HypertableConfig[];
+  // Accepted so the generated `registry` is assignable as-is. Not needed at runtime today
+  // (cagg reads go through the Prisma `view`; refresh takes the name) — reserved for future
+  // use (e.g. typed cagg helpers) without a breaking config change.
   continuousAggregates?: readonly CaggConfig[];
 }
 

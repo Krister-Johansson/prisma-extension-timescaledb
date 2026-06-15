@@ -124,6 +124,7 @@ export function buildTimeBucketQuery(
 
   let where = `${time} >= $2 AND ${time} < $3`;
   for (const [key, value] of Object.entries(args.where ?? {})) {
+    if (value === undefined) continue; // unset key — treat as "no filter" (Prisma semantics)
     if (value === null || typeof value === "object") {
       throw new Error(`timeBucket: \`where\` supports top-level equality only in v0.1 (got non-primitive for "${key}").`);
     }

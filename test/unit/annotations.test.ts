@@ -42,4 +42,12 @@ describe("parseAnnotations", () => {
     const [ann] = parseAnnotations(`@timescale.x(a: "1", nested: { b: "2", c: "3" }, d: "4")`);
     expect(ann?.args).toEqual({ a: "1", nested: { b: "2", c: "3" }, d: "4" });
   });
+
+  it("rejects trailing characters after a string value", () => {
+    expect(() => parseAnnotations(`@timescale.hypertable(column: "time"oops)`)).toThrow(/trailing characters after string/);
+  });
+
+  it("rejects trailing characters after an object value", () => {
+    expect(() => parseAnnotations(`@timescale.x(refresh: { a: "1" }junk)`)).toThrow(/trailing characters after object/);
+  });
 });

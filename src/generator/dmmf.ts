@@ -40,6 +40,17 @@ export function extractTimescaleSchema(dmmf: DMMF.Document): TimescaleSchema {
     }
   }
 
+  // A continuous aggregate's source must itself be a hypertable, otherwise the emitted
+  // `CREATE MATERIALIZED VIEW ... WITH (timescaledb.continuous)` fails at deploy/reset.
+  const hypertableNames = new Set(hypertables.map((h) => h.table));
+  for (const cagg of continuousAggregates) {
+    if (!hypertableNames.has(cagg.source)) {
+      throw new Error(
+        `@timescale.continuousAggregate on view "${cagg.name}": source "${cagg.source}" must also be annotated with @timescale.hypertable.`,
+      );
+    }
+  }
+
   return { hypertables, continuousAggregates };
 }
 
@@ -84,8 +95,14 @@ function buildCagg(
   if (!sourceModel) {
     throw new Error(`${ctx}: source "${source}" is not a known model.`);
   }
-  if (!findScalarField(sourceModel, timeColumn)) {
+  const timeField = findScalarField(sourceModel, timeColumn);
+  if (!timeField) {
     throw new Error(`${ctx}: timeColumn "${timeColumn}" does not exist on source "${source}".`);
+  }
+  if (!TIME_TYPES.has(timeField.type)) {
+    throw new Error(
+      `${ctx}: timeColumn "${timeColumn}" has type ${timeField.type}; it must be a DateTime or integer field.`,
+    );
   }
 
   // Field-level annotations on the view.

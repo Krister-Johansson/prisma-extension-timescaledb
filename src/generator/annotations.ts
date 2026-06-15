@@ -120,20 +120,26 @@ function parseArgs(body: string): AnnotationArgs {
 function parseValue(raw: string): AnnotationValue {
   const v = raw.trim();
   if (v.startsWith('"')) {
-    const { body } = readBalancedString(v);
+    const { body, end } = readBalancedString(v);
+    if (v.slice(end).trim() !== "") {
+      throw new Error(`Malformed annotation value (trailing characters after string): ${JSON.stringify(v)}.`);
+    }
     return body.replace(/\\"/g, '"').replace(/\\\\/g, "\\");
   }
   if (v.startsWith("{")) {
-    const { body } = readBalanced(v, 0, "{", "}");
+    const { body, end } = readBalanced(v, 0, "{", "}");
+    if (v.slice(end).trim() !== "") {
+      throw new Error(`Malformed annotation value (trailing characters after object): ${JSON.stringify(v)}.`);
+    }
     return parseArgs(body);
   }
   return v;
 }
 
-/** Read a "double-quoted" string starting at index 0, returning its inner (still-escaped) body. */
-function readBalancedString(s: string): { body: string } {
+/** Read a "double-quoted" string starting at index 0, returning its inner body + the index after the closing quote. */
+function readBalancedString(s: string): { body: string; end: number } {
   for (let i = 1; i < s.length; i++) {
-    if (s[i] === '"' && s[i - 1] !== "\\") return { body: s.slice(1, i) };
+    if (s[i] === '"' && s[i - 1] !== "\\") return { body: s.slice(1, i), end: i + 1 };
   }
   throw new Error(`Unterminated string in annotation: ${JSON.stringify(s)}`);
 }

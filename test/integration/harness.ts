@@ -13,7 +13,8 @@ import { GenericContainer, type StartedTestContainer } from "testcontainers";
 export const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const PRISMA_BIN = join(REPO_ROOT, "node_modules", ".bin", "prisma");
 const GENERATOR_PROVIDER = join(REPO_ROOT, "dist", "generator", "index.js");
-const IMAGE = "timescale/timescaledb:latest-pg17";
+// Pinned to an immutable version tag for reproducible CI (not `latest-pg17`).
+const IMAGE = "timescale/timescaledb:2.27.2-pg17";
 
 // Prisma 7 blocks destructive commands from AI agents without explicit consent; the user
 // granted it for this build (their message: "yes"). Required so reset runs unattended.

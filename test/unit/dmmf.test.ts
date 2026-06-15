@@ -194,4 +194,23 @@ ${body}
       ),
     ).rejects.toThrow(/unsupported aggregate function "median"/);
   });
+
+  it("timeColumn exists but is not a time type", async () => {
+    await expect(
+      extract(
+        view(`@timescale.continuousAggregate(source: "SensorReading", bucket: "1 hour", timeColumn: "label")`,
+          `  bucket  DateTime /// @timescale.bucket\n  avgTemp Float /// @timescale.aggregate(fn: "avg", column: "temperature")\n  @@unique([bucket])`),
+      ),
+    ).rejects.toThrow(/timeColumn "label" has type String; it must be a DateTime or integer field/);
+  });
+
+  it("source is a known model but not a hypertable", async () => {
+    // SOURCE (SensorReading) here is a plain model — no @timescale.hypertable annotation.
+    await expect(
+      extract(
+        view(`@timescale.continuousAggregate(source: "SensorReading", bucket: "1 hour", timeColumn: "time")`,
+          `  bucket  DateTime /// @timescale.bucket\n  avgTemp Float /// @timescale.aggregate(fn: "avg", column: "temperature")\n  @@unique([bucket])`),
+      ),
+    ).rejects.toThrow(/source "SensorReading" must also be annotated with @timescale.hypertable/);
+  });
 });
