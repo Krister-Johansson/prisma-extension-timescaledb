@@ -58,7 +58,7 @@ view SensorHourly {
         bucket: "1 hour",
         timeColumn: "time",
         bucketColumn: "bucket",
-        groupBy: ["deviceId"],
+        groupBy: [{ source: "deviceId", output: "deviceId" }],
         aggregates: [
           { name: "avgTemp", fn: "avg", column: "temperature" },
           { name: "maxTemp", fn: "max", column: "temperature" },
@@ -212,5 +212,51 @@ ${body}
           `  bucket  DateTime /// @timescale.bucket\n  avgTemp Float /// @timescale.aggregate(fn: "avg", column: "temperature")\n  @@unique([bucket])`),
       ),
     ).rejects.toThrow(/source "SensorReading" must also be annotated with @timescale.hypertable/);
+  });
+});
+
+describe("extractTimescaleSchema — @@map / @map", () => {
+  it("resolves table/column names to DB names and records the column map", async () => {
+    const result = await extract(`
+/// @timescale.hypertable(column: "time", chunkInterval: "1 day")
+model SensorReading {
+  time        DateTime @map("ts")
+  deviceId    Int      @map("device_id")
+  temperature Float
+  @@id([deviceId, time])
+  @@map("sensor_readings")
+}
+
+/// @timescale.continuousAggregate(source: "SensorReading", bucket: "1 hour", timeColumn: "time")
+view SensorHourly {
+  bucket   DateTime /// @timescale.bucket
+  deviceId Int      @map("device_id") /// @timescale.groupBy
+  avgTemp  Float    @map("avg_temp")  /// @timescale.aggregate(fn: "avg", column: "temperature")
+  @@unique([deviceId, bucket])
+  @@map("sensor_hourly")
+}
+`);
+
+    expect(result.hypertables).toEqual([
+      {
+        model: "SensorReading",
+        table: "sensor_readings",
+        column: "ts",
+        chunkInterval: "1 day",
+        columns: { time: "ts", deviceId: "device_id" },
+      },
+    ]);
+    expect(result.continuousAggregates).toEqual([
+      {
+        model: "SensorHourly",
+        name: "sensor_hourly",
+        source: "sensor_readings",
+        bucket: "1 hour",
+        timeColumn: "ts",
+        bucketColumn: "bucket",
+        groupBy: [{ source: "device_id", output: "device_id" }],
+        aggregates: [{ name: "avg_temp", fn: "avg", column: "temperature" }],
+      },
+    ]);
   });
 });

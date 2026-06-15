@@ -77,11 +77,16 @@ export interface TimeBucketRuntimeArgs {
   aggregate: Record<string, Record<string, string>>;
 }
 
-/** Build the parameterized time_bucket query. Identifiers are quoted; values are $-params. */
+/**
+ * Build the parameterized time_bucket query. Identifiers are quoted; values are $-params.
+ * `columns` maps Prisma field names (used in args) to DB column names (@map); output columns
+ * keep the Prisma field names so the inferred result row shape is unchanged.
+ */
 export function buildTimeBucketQuery(
   table: string,
   timeColumn: string,
   args: TimeBucketRuntimeArgs,
+  columns: Record<string, string> = {},
 ): { sql: string; params: unknown[] } {
   assertSafeIdent(table, "model table");
   assertSafeIdent(timeColumn, "time column");
@@ -89,6 +94,13 @@ export function buildTimeBucketQuery(
   if (!args.range || !(args.range.start instanceof Date) || !(args.range.end instanceof Date)) {
     throw new Error("timeBucket: `range.start` and `range.end` are required Dates.");
   }
+
+  // Resolve a Prisma field name to its DB column name (identity when not @map-renamed).
+  const col = (name: string): string => {
+    const dbName = columns[name] ?? name;
+    assertSafeIdent(dbName, "column");
+    return dbName;
+  };
 
   const params: unknown[] = [args.bucket, args.range.start, args.range.end];
   const time = quoteIdent(timeColumn);
@@ -98,7 +110,7 @@ export function buildTimeBucketQuery(
   const groupCols = args.groupBy ?? [];
   for (const g of groupCols) {
     assertSafeIdent(g, "groupBy column");
-    select.push(`${quoteIdent(g)} AS ${quoteIdent(g)}`);
+    select.push(`${quoteIdent(col(g))} AS ${quoteIdent(g)}`);
   }
 
   const aggregateEntries = Object.entries(args.aggregate ?? {});
@@ -113,12 +125,12 @@ export function buildTimeBucketQuery(
     if (!AGG_FNS.has(fn)) {
       throw new Error(`timeBucket: unsupported aggregate function "${fn}" for "${resultName}".`);
     }
-    assertSafeIdent(column, "aggregate source column");
+    const src = quoteIdent(col(column));
     // count -> ::int so it returns a JS number (Postgres count is bigint otherwise).
     select.push(
       fn === "count"
-        ? `count(${quoteIdent(column)})::int AS ${quoteIdent(resultName)}`
-        : `${fn}(${quoteIdent(column)}) AS ${quoteIdent(resultName)}`,
+        ? `count(${src})::int AS ${quoteIdent(resultName)}`
+        : `${fn}(${src}) AS ${quoteIdent(resultName)}`,
     );
   }
 
@@ -130,7 +142,7 @@ export function buildTimeBucketQuery(
     }
     assertSafeIdent(key, "where column");
     params.push(value);
-    where += ` AND ${quoteIdent(key)} = $${params.length}`;
+    where += ` AND ${quoteIdent(col(key))} = $${params.length}`;
   }
 
   const groupBy = [`"bucket"`, ...groupCols.map((g) => quoteIdent(g))].join(", ");

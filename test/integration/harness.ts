@@ -39,7 +39,14 @@ export function ensureBuilt(): void {
   }
 }
 
-export async function startHarness(): Promise<Harness> {
+export interface HarnessOptions {
+  /** Override the model/view definitions (the generator/datasource header is always added). */
+  models?: string;
+  /** Override the Prisma CREATE TABLE migration SQL (must match the schema's DB names). */
+  initSql?: string;
+}
+
+export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> {
   ensureBuilt();
 
   const container = await new GenericContainer(IMAGE)
@@ -59,7 +66,7 @@ export async function startHarness(): Promise<Harness> {
   await runOnce(`${baseUrl}/postgres`, "CREATE DATABASE shadow");
 
   const projectDir = mkdtempSync(join(REPO_ROOT, ".tmp-int-"));
-  scaffoldProject(projectDir);
+  scaffoldProject(projectDir, opts);
 
   const env = {
     ...process.env,
@@ -99,9 +106,9 @@ export async function startHarness(): Promise<Harness> {
 
 // --- scaffolding -----------------------------------------------------------
 
-function scaffoldProject(dir: string): void {
+function scaffoldProject(dir: string, opts: HarnessOptions): void {
   writeFileSync(join(dir, "prisma.config.ts"), PRISMA_CONFIG);
-  writeFileSync(join(dir, "schema.prisma"), schemaPrisma());
+  writeFileSync(join(dir, "schema.prisma"), schemaPrisma(opts.models ?? DEFAULT_MODELS));
 
   const migrations = join(dir, "migrations");
   mkdirSync(migrations, { recursive: true });
@@ -111,7 +118,7 @@ function scaffoldProject(dir: string): void {
   // extension (sorts first) and the hypertable+cagg objects (sorts last) at generate time.
   const init = join(migrations, "20260101000000_init");
   mkdirSync(init, { recursive: true });
-  writeFileSync(join(init, "migration.sql"), INIT_TABLE_SQL);
+  writeFileSync(join(init, "migration.sql"), opts.initSql ?? INIT_TABLE_SQL);
 }
 
 const PRISMA_CONFIG = `import "dotenv/config";
@@ -127,7 +134,7 @@ export default defineConfig({
 });
 `;
 
-function schemaPrisma(): string {
+function schemaPrisma(models: string): string {
   // provider is an absolute path to our built generator binary.
   const provider = GENERATOR_PROVIDER.replace(/\\/g, "/");
   return `generator client {
@@ -145,7 +152,10 @@ datasource db {
   provider = "postgresql"
 }
 
-/// @timescale.hypertable(column: "time", chunkInterval: "1 day")
+${models}`;
+}
+
+const DEFAULT_MODELS = `/// @timescale.hypertable(column: "time", chunkInterval: "1 day")
 model SensorReading {
   time        DateTime
   deviceId    Int
@@ -164,7 +174,6 @@ view SensorHourly {
   @@unique([deviceId, bucket])
 }
 `;
-}
 
 const INIT_TABLE_SQL = `-- CreateTable
 CREATE TABLE "SensorReading" (

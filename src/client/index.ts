@@ -33,9 +33,16 @@ interface UnsafeRawClient extends RawClient {
  * const prisma = new PrismaClient().$extends(timescaledb(registry));
  */
 export function timescaledb(config: TimescaleConfig = {}) {
-  const timeColumnByModel = new Map<string, string>(
-    (config.hypertables ?? []).map((h) => [h.table, h.column]),
-  );
+  // Key by Prisma model name (ctx.$name); values hold the resolved DB table + column map.
+  const hypertableByModel = new Map<string, { table: string; column: string; columns: Record<string, string> }>();
+  for (const h of config.hypertables ?? []) {
+    hypertableByModel.set(h.model ?? h.table, { table: h.table, column: h.column, columns: { ...(h.columns ?? {}) } });
+  }
+  // Prisma view model name -> DB view name, for refreshContinuousAggregate.
+  const caggViewByModel = new Map<string, string>();
+  for (const c of config.continuousAggregates ?? []) {
+    caggViewByModel.set(c.model ?? c.name, c.name);
+  }
 
   const timeBucket = async function (this: unknown, args: TimeBucketRuntimeArgs) {
     const ctx = Prisma.getExtensionContext(this);
@@ -43,15 +50,14 @@ export function timescaledb(config: TimescaleConfig = {}) {
     if (typeof model !== "string") {
       throw new Error("timeBucket: could not resolve the model name from the extension context.");
     }
-    const timeColumn = timeColumnByModel.get(model);
-    if (!timeColumn) {
+    const ht = hypertableByModel.get(model);
+    if (!ht) {
       throw new Error(
         `timeBucket: "${model}" is not a registered hypertable. Pass it via timescaledb({ hypertables: [...] }) or run the generator.`,
       );
     }
     assertInterval(args.bucket);
-    // v0.1 assumes table name == model name (no @@map handling yet).
-    const { sql, params } = buildTimeBucketQuery(model, timeColumn, args);
+    const { sql, params } = buildTimeBucketQuery(ht.table, ht.column, args, ht.columns);
     return (ctx.$parent as UnsafeRawClient).$queryRawUnsafe(sql, ...params);
   } as unknown as TimeBucketMethod;
 
@@ -62,7 +68,7 @@ export function timescaledb(config: TimescaleConfig = {}) {
         $allModels: { timeBucket },
       },
       client: {
-        $timescale: makeManage(client as unknown as RawClient),
+        $timescale: makeManage(client as unknown as RawClient, caggViewByModel),
       },
     }),
   );

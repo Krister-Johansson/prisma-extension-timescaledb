@@ -159,7 +159,10 @@ describe("emitTypes", () => {
             "timeColumn": "time",
             "bucketColumn": "bucket",
             "groupBy": [
-              "deviceId"
+              {
+                "source": "deviceId",
+                "output": "deviceId"
+              }
             ],
             "aggregates": [
               {

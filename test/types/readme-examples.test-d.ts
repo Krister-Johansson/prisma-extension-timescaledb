@@ -15,6 +15,14 @@ const extension = timescaledb({
 });
 void extension;
 
+// Manual config with @@map / @map renaming — must type-check.
+const mapped = timescaledb({
+  hypertables: [
+    { model: "SensorReading", table: "sensor_readings", column: "ts", columns: { deviceId: "device_id" } },
+  ],
+});
+void mapped;
+
 // Core SQL builders exported from "prisma-extension-timescaledb/core".
 const ext: MigrationSql = createExtensionSql();
 const hyper: MigrationSql = createHypertableSql({ table: "SensorReading", column: "time", chunkInterval: "1 day" });
@@ -24,7 +32,7 @@ const cagg: MigrationSql = createContinuousAggregateSql({
   bucket: "1 hour",
   timeColumn: "time",
   bucketColumn: "bucket",
-  groupBy: ["deviceId"],
+  groupBy: [{ source: "deviceId", output: "deviceId" }],
   aggregates: [{ name: "avgTemp", fn: "avg", column: "temperature" }],
   refresh: { startOffset: "1 month", endOffset: "1 hour", scheduleInterval: "1 hour" },
 });
