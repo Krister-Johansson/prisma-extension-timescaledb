@@ -210,7 +210,10 @@ const hourly = await prisma.sensorHourly.findMany({ orderBy: { bucket: "desc" } 
 const rows = await prisma.sensorReading.timeBucket({
   bucket: "1 hour",
   range: { start, end },          // both bounds required
-  where: { deviceId: 1 },         // top-level equality (v0.1)
+  where: {                        // Prisma where operators + AND/OR/NOT
+    deviceId: { in: [1, 2] },
+    temperature: { gte: 20, lt: 35 },
+  },
   groupBy: ["deviceId"],
   aggregate: {
     avgTemp: { avg: "temperature" },
@@ -354,8 +357,10 @@ database) ships in this repo.
 
 ## Limitations (v0.1)
 
-- **`timeBucket` `where`** supports top-level equality only at runtime (typed with Prisma's
-  full where input; throws on operators / nested filters).
+- **`timeBucket` `where`** supports scalar operators (`equals`, `not`, `in`, `notIn`, `lt`,
+  `lte`, `gt`, `gte`, `contains`, `startsWith`, `endsWith` + `mode: "insensitive"`), `null`
+  checks, and `AND`/`OR`/`NOT`. **Relation filters** (`some`/`none`/`every`) and nested
+  `not: { ... }` are not supported (they can't be a single-table query) and throw a clear error.
 - **`@@schema` (multiSchema)** is not yet handled — relations aren't schema-qualified, so
   models must live in the default schema. (`@@map`/`@map` table & column renaming **is**
   supported — see [Renamed tables/columns](#renamed-tablescolumns-map--map) below.)

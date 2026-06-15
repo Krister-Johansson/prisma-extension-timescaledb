@@ -5,6 +5,7 @@ import { Prisma } from "@prisma/client/extension";
 import type { Interval } from "../core/interval.js";
 import { assertInterval } from "../core/interval.js";
 import { assertSafeIdent, quoteIdent } from "../core/sql.js";
+import { whereToSql } from "./where.js";
 
 // --- type machinery --------------------------------------------------------
 
@@ -135,15 +136,14 @@ export function buildTimeBucketQuery(
   }
 
   let where = `${time} >= $2 AND ${time} < $3`;
-  for (const [key, value] of Object.entries(args.where ?? {})) {
-    if (value === undefined) continue; // unset key — treat as "no filter" (Prisma semantics)
-    if (value === null || typeof value === "object") {
-      throw new Error(`timeBucket: \`where\` supports top-level equality only in v0.1 (got non-primitive for "${key}").`);
-    }
-    assertSafeIdent(key, "where column");
-    params.push(value);
-    where += ` AND ${quoteIdent(col(key))} = $${params.length}`;
-  }
+  const whereSql = whereToSql(args.where, {
+    col: (name) => quoteIdent(col(name)),
+    push: (value) => {
+      params.push(value);
+      return `$${params.length}`;
+    },
+  });
+  if (whereSql) where += ` AND (${whereSql})`;
 
   const groupBy = [`"bucket"`, ...groupCols.map((g) => quoteIdent(g))].join(", ");
   const sql = `SELECT ${select.join(", ")} FROM ${quoteIdent(table)} WHERE ${where} GROUP BY ${groupBy} ORDER BY "bucket"`;

@@ -22,7 +22,7 @@ describe("buildTimeBucketQuery", () => {
 
   it("appends equality filters as bound params", () => {
     const { sql, params } = buildTimeBucketQuery("SensorReading", "time", { ...base, where: { deviceId: 1 } });
-    expect(sql).toContain(`AND "deviceId" = $4`);
+    expect(sql).toContain(`AND ("deviceId" = $4)`);
     expect(params).toEqual(["1 hour", range.start, range.end, 1]);
   });
 
@@ -32,10 +32,19 @@ describe("buildTimeBucketQuery", () => {
     expect(params).toEqual(["1 hour", range.start, range.end]);
   });
 
-  it("throws on non-primitive where values (operators not supported in v0.1)", () => {
-    expect(() => buildTimeBucketQuery("SensorReading", "time", { ...base, where: { deviceId: { gte: 1 } } })).toThrow(
-      /equality only/,
-    );
+  it("supports comparison operators in where (parameterized)", () => {
+    const { sql, params } = buildTimeBucketQuery("SensorReading", "time", {
+      ...base,
+      where: { deviceId: { in: [1, 2] }, temperature: { gte: 20 } },
+    });
+    expect(sql).toContain(`AND ("deviceId" IN ($4, $5) AND "temperature" >= $6)`);
+    expect(params).toEqual(["1 hour", range.start, range.end, 1, 2, 20]);
+  });
+
+  it("throws on an unsupported where operator", () => {
+    expect(() =>
+      buildTimeBucketQuery("SensorReading", "time", { ...base, where: { deviceId: { foo: 1 } } }),
+    ).toThrow(/unsupported where operator/);
   });
 
   it("resolves @map columns to DB names while aliasing results to Prisma field names", () => {
@@ -49,7 +58,7 @@ describe("buildTimeBucketQuery", () => {
     expect(sql).toContain(`time_bucket($1, "ts") AS "bucket"`);
     expect(sql).toContain(`"device_id" AS "deviceId"`); // DB column selected, Prisma name aliased
     expect(sql).toContain(`avg("temperature") AS "avgTemp"`); // unmapped column = identity
-    expect(sql).toContain(`AND "device_id" = $4`); // where key resolved to DB column
+    expect(sql).toContain(`AND ("device_id" = $4)`); // where key resolved to DB column
     expect(sql).toContain(`GROUP BY "bucket", "deviceId"`); // group by the output alias
     expect(params).toEqual(["1 hour", range.start, range.end, 1]);
   });
