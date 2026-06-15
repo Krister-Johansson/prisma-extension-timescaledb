@@ -41,7 +41,9 @@ export function whereToSql(where: Record<string, unknown> | undefined, ctx: Wher
 
 function combine(wheres: unknown[], ctx: WhereCtx, op: "AND" | "OR"): string {
   const parts = wheres.map((w) => whereToSql(w as Record<string, unknown>, ctx)).filter(Boolean);
-  if (parts.length === 0) return "";
+  // Prisma semantics: an empty OR matches nothing; an empty AND (also used for NOT) imposes
+  // no constraint.
+  if (parts.length === 0) return op === "OR" ? "false" : "";
   if (parts.length === 1) return parts[0]!;
   return `(${parts.join(` ${op} `)})`;
 }

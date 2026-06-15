@@ -72,6 +72,12 @@ describe("whereToSql", () => {
     expect(whereToSql({ NOT: { deviceId: 1 } }, harness().ctx)).toBe(`NOT ("deviceId" = $1)`);
   });
 
+  it("empty OR matches nothing (false); empty AND / NOT impose no constraint", () => {
+    expect(whereToSql({ OR: [] }, harness().ctx)).toBe("false");
+    expect(whereToSql({ AND: [] }, harness().ctx)).toBe("");
+    expect(whereToSql({ NOT: [] }, harness().ctx)).toBe("");
+  });
+
   it("multiple top-level fields AND together", () => {
     expect(whereToSql({ deviceId: 1, temperature: { gt: 0 } }, harness().ctx)).toBe(
       `"deviceId" = $1 AND "temperature" > $2`,
