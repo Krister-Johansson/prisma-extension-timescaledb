@@ -1,0 +1,69 @@
+// Runtime client extension entry (SPEC §4 / BUILD_PLAN M4).
+//
+// Resilience requirement (CLAUDE.md): timescaledb() accepts a manual config object so it
+// works WITHOUT the generator. The generator's emitted `registry` is assignable to this
+// config shape, so `timescaledb(registry)` is just the generated path.
+import { Prisma } from "@prisma/client/extension";
+import type { CaggConfig, HypertableConfig } from "../core/types.js";
+import { assertInterval } from "../core/interval.js";
+import {
+  buildTimeBucketQuery,
+  type TimeBucketMethod,
+  type TimeBucketRuntimeArgs,
+} from "./timeBucket.js";
+import { makeManage, type RawClient } from "./manage.js";
+
+/** Manual configuration accepted by `timescaledb()` (also satisfied by the generated registry). */
+export interface TimescaleConfig {
+  hypertables?: readonly HypertableConfig[];
+  continuousAggregates?: readonly CaggConfig[];
+}
+
+interface UnsafeRawClient extends RawClient {
+  $queryRawUnsafe<T = unknown>(query: string, ...values: unknown[]): Promise<T>;
+}
+
+/**
+ * Build the TimescaleDB Prisma client extension.
+ *
+ * @example
+ * const prisma = new PrismaClient().$extends(timescaledb(registry));
+ */
+export function timescaledb(config: TimescaleConfig = {}) {
+  const timeColumnByModel = new Map<string, string>(
+    (config.hypertables ?? []).map((h) => [h.table, h.column]),
+  );
+
+  const timeBucket = async function (this: unknown, args: TimeBucketRuntimeArgs) {
+    const ctx = Prisma.getExtensionContext(this);
+    const model = ctx.$name;
+    if (typeof model !== "string") {
+      throw new Error("timeBucket: could not resolve the model name from the extension context.");
+    }
+    const timeColumn = timeColumnByModel.get(model);
+    if (!timeColumn) {
+      throw new Error(
+        `timeBucket: "${model}" is not a registered hypertable. Pass it via timescaledb({ hypertables: [...] }) or run the generator.`,
+      );
+    }
+    assertInterval(args.bucket);
+    // v0.1 assumes table name == model name (no @@map handling yet).
+    const { sql, params } = buildTimeBucketQuery(model, timeColumn, args);
+    return (ctx.$parent as UnsafeRawClient).$queryRawUnsafe(sql, ...params);
+  } as unknown as TimeBucketMethod;
+
+  return Prisma.defineExtension((client) =>
+    client.$extends({
+      name: "prisma-extension-timescaledb",
+      model: {
+        $allModels: { timeBucket },
+      },
+      client: {
+        $timescale: makeManage(client as unknown as RawClient),
+      },
+    }),
+  );
+}
+
+export type { TimeBucketArgs, TimeBucketRow, AggregateInput } from "./timeBucket.js";
+export type { TimescaleManage, RefreshRange } from "./manage.js";
