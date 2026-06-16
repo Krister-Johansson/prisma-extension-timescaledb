@@ -67,7 +67,11 @@ export function makeManage(
   viewByModel: ReadonlyMap<string, CaggRef> = new Map(),
   options: ManageOptions = {},
 ): TimescaleManage {
-  const maxAttempts = Math.max(1, options.maxRefreshAttempts ?? 8);
+  // Coerce to a finite integer >= 1. A NaN here would make the retry loop's `attempt <=
+  // maxAttempts` guard false on the first iteration — a silent no-op that never runs the
+  // refresh — and Infinity would retry unboundedly on repeated 55P03; both fall back to 8.
+  const requestedAttempts = options.maxRefreshAttempts ?? 8;
+  const maxAttempts = Number.isFinite(requestedAttempts) ? Math.max(1, Math.floor(requestedAttempts)) : 8;
   const sleep = options.sleep ?? defaultSleep;
   return {
     async refreshContinuousAggregate(name, range) {

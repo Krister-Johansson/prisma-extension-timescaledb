@@ -109,4 +109,15 @@ describe("makeManage.refreshContinuousAggregate", () => {
     ).rejects.toBe(otherError);
     expect(attempts()).toBe(1); // failed fast, no retry
   });
+
+  it("treats a non-finite or sub-1 maxRefreshAttempts as a safe default (never a silent no-op)", async () => {
+    // NaN/Infinity/0/negative must not skip the loop entirely — the refresh must still run.
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, 0, -3]) {
+      const { client, calls } = fakeClient();
+      await makeManage(client, new Map(), { maxRefreshAttempts: bad, sleep: noSleep }).refreshContinuousAggregate(
+        "SensorHourly",
+      );
+      expect(calls).toHaveLength(1); // executed exactly once
+    }
+  });
 });
