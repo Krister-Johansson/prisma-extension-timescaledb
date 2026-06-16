@@ -2,7 +2,15 @@
 // compile time; the runtime validator guards the string we interpolate into SQL (intervals
 // are interpolated, so validating their shape also closes the injection vector there).
 
+// The full set of PostgreSQL interval *input* units (datatype-datetime.html §8.5.4),
+// singular + plural. Note: `quarter` is NOT here — it is an EXTRACT field only, not a valid
+// interval input unit (`INTERVAL '1 quarter'` errors). Combined forms ("1 year 2 months"),
+// ISO 8601, and bare abbreviations are intentionally unsupported by this single-unit type.
 const UNITS = [
+  "microsecond",
+  "microseconds",
+  "millisecond",
+  "milliseconds",
   "second",
   "seconds",
   "minute",
@@ -17,6 +25,10 @@ const UNITS = [
   "months",
   "year",
   "years",
+  "decade",
+  "decades",
+  "century",
+  "centuries",
 ] as const;
 
 type Unit = (typeof UNITS)[number];

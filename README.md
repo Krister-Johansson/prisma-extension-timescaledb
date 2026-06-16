@@ -426,9 +426,11 @@ database) ships in this repo.
 | `@timescale.groupBy` | view field | — |
 | `@timescale.aggregate` | view field | `fn` (`avg`\|`sum`\|`min`\|`max`\|`count`), `column` |
 
-**Intervals** are `"<amount> <unit>"` where unit is `second(s)`, `minute(s)`, `hour(s)`,
-`day(s)`, `week(s)`, `month(s)`, or `year(s)` — validated at compile time (`"1 hour"`, `"7 days"`,
-`"2 years"`).
+**Intervals** are `"<amount> <unit>"` where unit is any PostgreSQL interval input unit —
+`microsecond(s)`, `millisecond(s)`, `second(s)`, `minute(s)`, `hour(s)`, `day(s)`, `week(s)`,
+`month(s)`, `year(s)`, `decade(s)`, or `centur(y|ies)` — validated at compile time *and* runtime
+(`"1 hour"`, `"7 days"`, `"2 years"`). (`quarter` is not an interval unit in PostgreSQL; combined
+forms like `"1 year 2 months"` aren't supported by this single-unit type.)
 
 ---
 
