@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/Krister-Johansson/prisma-extension-timescaledb/compare/prisma-extension-timescaledb-v0.3.0...prisma-extension-timescaledb-v0.4.0) (2026-06-16)
+
+
+### Features
+
+* nest relation filters through other relations in `timeBucket` where ([#19](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/19)) ([d50266f](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/d50266f85c5463c4f7bcff1cfa67825adaaba377))
+
 ## [0.3.0](https://github.com/Krister-Johansson/prisma-extension-timescaledb/compare/prisma-extension-timescaledb-v0.2.0...prisma-extension-timescaledb-v0.3.0) (2026-06-16)
 
 
