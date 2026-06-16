@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createExtensionSql } from "../../src/core/extension.js";
 import { createHypertableSql } from "../../src/core/hypertable.js";
 import { createContinuousAggregateSql } from "../../src/core/continuousAggregate.js";
+import { createRetentionPolicySql } from "../../src/core/retention.js";
 import type { CaggConfig } from "../../src/core/types.js";
 
 describe("createExtensionSql", () => {
@@ -131,5 +132,39 @@ SELECT add_continuous_aggregate_policy('"SensorHourly"',
     expect(sql.up).toContain(`FROM "metrics"."SensorReading"`);
     expect(sql.up).toContain(`add_continuous_aggregate_policy('"metrics"."SensorHourly"'`);
     expect(sql.down).toBe(`DROP MATERIALIZED VIEW IF EXISTS "metrics"."SensorHourly";`);
+  });
+});
+
+describe("createRetentionPolicySql", () => {
+  const sql = createRetentionPolicySql({ table: "SensorReading", dropAfter: "30 days" });
+
+  it("matches the reset-safe add/remove retention SQL", () => {
+    expect(sql.up).toBe(
+      `SELECT add_retention_policy('"SensorReading"', drop_after => INTERVAL '30 days', if_not_exists => TRUE);`,
+    );
+    expect(sql.down).toBe(`SELECT remove_retention_policy('"SensorReading"', if_exists => TRUE);`);
+  });
+
+  it("contains NO ::regclass cast; passes the relation as a quoted string literal (constraint 2)", () => {
+    expect(sql.up).not.toContain("::regclass");
+    expect(sql.up).toContain(`'"SensorReading"'`);
+  });
+
+  it("is idempotent up and down (if_not_exists / if_exists)", () => {
+    expect(sql.up).toContain("if_not_exists => TRUE");
+    expect(sql.down).toContain("if_exists => TRUE");
+  });
+
+  it("schema-qualifies the relation under multiSchema (@@schema)", () => {
+    const q = createRetentionPolicySql({ table: "sensor_readings", schema: "metrics", dropAfter: "7 days" });
+    expect(q.up).toContain(`'"metrics"."sensor_readings"'`);
+    expect(q.down).toContain(`'"metrics"."sensor_readings"'`);
+  });
+
+  it("rejects bad identifiers and intervals", () => {
+    expect(() => createRetentionPolicySql({ table: "a-b", dropAfter: "30 days" })).toThrow(/Invalid/);
+    expect(() => createRetentionPolicySql({ table: "X", dropAfter: "1 fortnight" as never })).toThrow(
+      /Invalid interval/,
+    );
   });
 });

@@ -78,7 +78,7 @@ export function timescaledb(config: TimescaleConfig = {}) {
         $allModels: { timeBucket },
       },
       client: {
-        $timescale: makeManage(client as unknown as RawClient, caggViewByModel),
+        $timescale: makeManage(client as unknown as RawClient, caggViewByModel, { hypertableByModel }),
       },
     }),
   );

@@ -2,7 +2,7 @@
 // internal shapes (HypertableConfig / CaggConfig) and never touches `options.dmmf`. A Prisma
 // internal-API change should only require edits in this file.
 import type { DMMF } from "@prisma/generator-helper";
-import type { AggregateSpec, CaggConfig, CaggGroupBy, HypertableConfig, RefreshPolicy } from "../core/types.js";
+import type { AggregateSpec, CaggConfig, CaggGroupBy, HypertableConfig, RefreshPolicy, RetentionConfig } from "../core/types.js";
 import type { Interval } from "../core/interval.js";
 import { assertInterval } from "../core/interval.js";
 import {
@@ -34,6 +34,11 @@ export function extractTimescaleSchema(dmmf: DMMF.Document): TimescaleSchema {
     const annotations = parseAnnotations(model.documentation);
     if (findAnnotation(annotations, "hypertable")) {
       hypertables.push(buildHypertable(model, annotations));
+    } else if (findAnnotation(annotations, "retention")) {
+      // Retention attaches to a hypertable's chunks; it is meaningless on a plain model.
+      throw new Error(
+        `@timescale.retention on model "${model.name}": only valid together with @timescale.hypertable.`,
+      );
     }
     if (findAnnotation(annotations, "continuousAggregate")) {
       continuousAggregates.push(buildCagg(model, annotations, byName));
@@ -73,6 +78,7 @@ function buildHypertable(model: DMMF.Model, annotations: ReturnType<typeof parse
 
   const columns = columnMap(model);
   const table = dbTable(model);
+  const retention = buildRetention(annotations, model.name);
 
   return {
     ...(model.name !== table ? { model: model.name } : {}),
@@ -81,7 +87,20 @@ function buildHypertable(model: DMMF.Model, annotations: ReturnType<typeof parse
     column: dbCol(field),
     ...(chunkInterval !== undefined ? { chunkInterval: chunkInterval as Interval } : {}),
     ...(Object.keys(columns).length > 0 ? { columns } : {}),
+    ...(retention ? { retention } : {}),
   };
+}
+
+function buildRetention(
+  annotations: ReturnType<typeof parseAnnotations>,
+  modelName: string,
+): RetentionConfig | undefined {
+  const ann = findAnnotation(annotations, "retention");
+  if (!ann) return undefined;
+  const ctx = `@timescale.retention on model "${modelName}"`;
+  const dropAfter = requireString(ann.args, "dropAfter", ctx);
+  assertInterval(dropAfter);
+  return { dropAfter: dropAfter as Interval };
 }
 
 function buildCagg(

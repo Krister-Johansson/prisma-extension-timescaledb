@@ -303,3 +303,60 @@ view SensorHourly {
     ]);
   });
 });
+
+describe("extractTimescaleSchema — retention", () => {
+  it("parses @timescale.retention(dropAfter) on a hypertable", async () => {
+    const result = await extract(`
+/// @timescale.hypertable(column: "time", chunkInterval: "1 day")
+/// @timescale.retention(dropAfter: "30 days")
+model SensorReading {
+  time     DateTime
+  deviceId Int
+  @@id([deviceId, time])
+}
+`);
+    expect(result.hypertables).toEqual([
+      { table: "SensorReading", column: "time", chunkInterval: "1 day", retention: { dropAfter: "30 days" } },
+    ]);
+  });
+
+  it("rejects @timescale.retention without @timescale.hypertable", async () => {
+    await expect(
+      extract(`
+/// @timescale.retention(dropAfter: "30 days")
+model Plain {
+  id   Int      @id
+  time DateTime
+}
+`),
+    ).rejects.toThrow(/only valid together with @timescale.hypertable/);
+  });
+
+  it("requires the dropAfter argument", async () => {
+    await expect(
+      extract(`
+/// @timescale.hypertable(column: "time")
+/// @timescale.retention
+model SensorReading {
+  time     DateTime
+  deviceId Int
+  @@id([deviceId, time])
+}
+`),
+    ).rejects.toThrow(/missing or non-string argument "dropAfter"/);
+  });
+
+  it("rejects an invalid dropAfter interval", async () => {
+    await expect(
+      extract(`
+/// @timescale.hypertable(column: "time")
+/// @timescale.retention(dropAfter: "1 fortnight")
+model SensorReading {
+  time     DateTime
+  deviceId Int
+  @@id([deviceId, time])
+}
+`),
+    ).rejects.toThrow(/Invalid interval/);
+  });
+});

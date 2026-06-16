@@ -121,3 +121,44 @@ describe("makeManage.refreshContinuousAggregate", () => {
     }
   });
 });
+
+describe("makeManage retention policies", () => {
+  it("addRetentionPolicy emits add_retention_policy with the quoted relation literal", async () => {
+    const { client, calls } = fakeClient();
+    await makeManage(client).addRetentionPolicy("SensorReading", { dropAfter: "30 days" });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.sql).toBe(
+      `SELECT add_retention_policy('"SensorReading"', drop_after => INTERVAL '30 days', if_not_exists => TRUE)`,
+    );
+    expect(calls[0]!.params).toEqual([]);
+  });
+
+  it("resolves the model to its @@map / @@schema relation", async () => {
+    const { client, calls } = fakeClient();
+    const hypertableByModel = new Map([["SensorReading", { table: "sensor_readings", schema: "metrics" }]]);
+    await makeManage(client, new Map(), { hypertableByModel }).addRetentionPolicy("SensorReading", {
+      dropAfter: "7 days",
+    });
+    expect(calls[0]!.sql).toBe(
+      `SELECT add_retention_policy('"metrics"."sensor_readings"', drop_after => INTERVAL '7 days', if_not_exists => TRUE)`,
+    );
+  });
+
+  it("removeRetentionPolicy emits an idempotent remove", async () => {
+    const { client, calls } = fakeClient();
+    await makeManage(client).removeRetentionPolicy("SensorReading");
+    expect(calls[0]!.sql).toBe(`SELECT remove_retention_policy('"SensorReading"', if_exists => TRUE)`);
+  });
+
+  it("rejects an invalid dropAfter interval", async () => {
+    const { client } = fakeClient();
+    await expect(
+      makeManage(client).addRetentionPolicy("SensorReading", { dropAfter: "1 fortnight" as never }),
+    ).rejects.toThrow(/Invalid interval/);
+  });
+
+  it("rejects an unsafe model/relation name", async () => {
+    const { client } = fakeClient();
+    await expect(makeManage(client).addRetentionPolicy("bad name", { dropAfter: "1 day" })).rejects.toThrow(/Invalid/);
+  });
+});
