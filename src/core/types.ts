@@ -7,6 +7,12 @@ export interface MigrationSql {
   down: string;
 }
 
+/** Optional data-retention policy attached to a hypertable (drops chunks older than `dropAfter`). */
+export interface RetentionConfig {
+  /** Drop chunks whose data is older than this interval (TimescaleDB `drop_after`). */
+  dropAfter: Interval;
+}
+
 /** Hypertable conversion config (SPEC §1.1 / §2.2). All names are DB names (post-@@map). */
 export interface HypertableConfig {
   /**
@@ -28,6 +34,8 @@ export interface HypertableConfig {
    * there are no @map renames (callers fall back to identity).
    */
   columns?: Record<string, string>;
+  /** Optional data-retention policy (`@timescale.retention`); omitted means no policy. */
+  retention?: RetentionConfig;
 }
 
 /** A single aggregate column in a continuous aggregate (SPEC §1.2). DB names. */
@@ -76,10 +84,11 @@ export interface CaggConfig {
   timeColumn: string;
   /** Output column (view field DB name) for the time_bucket expression (`@timescale.bucket`). */
   bucketColumn: string;
-  /** Optional group-by passthroughs (besides the bucket). */
-  groupBy?: CaggGroupBy[];
-  /** One or more aggregate columns. */
-  aggregates: AggregateSpec[];
+  /** Optional group-by passthroughs (besides the bucket). `readonly` so a generated `as const`
+   * registry is assignable (the generator builds mutable arrays, which assign fine). */
+  groupBy?: readonly CaggGroupBy[];
+  /** One or more aggregate columns. `readonly` for the same `as const` registry reason. */
+  aggregates: readonly AggregateSpec[];
   /** Optional refresh policy; omitted means manual refresh only. */
   refresh?: RefreshPolicy;
 }

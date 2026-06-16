@@ -1,10 +1,23 @@
 // The $timescale management namespace (SPEC §4.3).
-import { assertSafeIdent, qualifiedIdent } from "../core/sql.js";
+import { assertSafeIdent, qualifiedIdent, quoteLiteral, relationLiteral } from "../core/sql.js";
+import { assertInterval, type Interval } from "../core/interval.js";
 
 /** Resolved DB identity of a continuous aggregate (name + optional @@schema). */
 export interface CaggRef {
   name: string;
   schema?: string;
+}
+
+/** Resolved DB identity of a hypertable (relation + optional @@schema). */
+export interface HypertableRef {
+  table: string;
+  schema?: string;
+}
+
+/** Options for a data-retention policy. */
+export interface RetentionOptions {
+  /** Drop chunks whose data is older than this interval (TimescaleDB `drop_after`). */
+  dropAfter: Interval;
 }
 
 /** Minimal raw-capable client surface we rely on (PrismaClient provides these). */
@@ -18,8 +31,10 @@ export interface RefreshRange {
   end?: Date | null;
 }
 
-/** Tuning for the concurrent-refresh retry. Defaults are sensible; mainly for tests. */
+/** Registry refs + tuning for the `$timescale` namespace. */
 export interface ManageOptions {
+  /** Prisma model name -> hypertable DB relation, for the retention helpers (@@map/@@schema). */
+  hypertableByModel?: ReadonlyMap<string, HypertableRef>;
   /**
    * Max attempts for a refresh that collides with the cagg's background refresh policy
    * (SQLSTATE 55P03). Default 8.
@@ -29,7 +44,16 @@ export interface ManageOptions {
   sleep?: (ms: number) => Promise<void>;
 }
 
-export interface TimescaleManage {
+/**
+ * The `$timescale` management namespace. The type parameters are the registered model-name
+ * unions taken from the config/registry, so a name argument is checked at compile time — a
+ * typo like `"SensorRead"` is a type error. They default to `string` for the manual config
+ * path or when the names aren't string literals.
+ *
+ * @typeParam HModels - registered hypertable model names (retention helpers)
+ * @typeParam CModels - registered continuous-aggregate model names (refresh)
+ */
+export interface TimescaleManage<HModels extends string = string, CModels extends string = string> {
   /**
    * Refresh a continuous aggregate over an optional time window (SPEC §4.3).
    * Accepts the Prisma view model name; it is resolved to the DB view name (@@map) and passed
@@ -39,7 +63,18 @@ export interface TimescaleManage {
    * If a scheduled refresh policy is running on the same cagg, the manual refresh briefly
    * retries (see SQLSTATE 55P03 below) instead of failing.
    */
-  refreshContinuousAggregate(name: string, range?: RefreshRange): Promise<void>;
+  refreshContinuousAggregate(name: CModels, range?: RefreshRange): Promise<void>;
+
+  /**
+   * Add a data-retention policy to a hypertable — drops chunks whose data is older than
+   * `dropAfter`. Accepts the Prisma model name (resolved to the DB relation via @@map/@@schema).
+   * Idempotent: re-adding an identical policy is a no-op. NB: TimescaleDB will NOT update an
+   * existing policy whose `dropAfter` differs — remove it first.
+   */
+  addRetentionPolicy(model: HModels, options: RetentionOptions): Promise<void>;
+
+  /** Remove the data-retention policy from a hypertable (no-op if there is none). */
+  removeRetentionPolicy(model: HModels): Promise<void>;
 }
 
 // SQLSTATE 55P03 (lock_not_available): TimescaleDB raises this when a manual
@@ -62,17 +97,27 @@ function isConcurrentRefreshError(err: unknown): boolean {
 const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** @param viewByModel Prisma view model name -> { DB view name, schema } (for @@map/@@schema). */
-export function makeManage(
+export function makeManage<HModels extends string = string, CModels extends string = string>(
   client: RawClient,
   viewByModel: ReadonlyMap<string, CaggRef> = new Map(),
   options: ManageOptions = {},
-): TimescaleManage {
+): TimescaleManage<HModels, CModels> {
   // Coerce to a finite integer >= 1. A NaN here would make the retry loop's `attempt <=
   // maxAttempts` guard false on the first iteration — a silent no-op that never runs the
   // refresh — and Infinity would retry unboundedly on repeated 55P03; both fall back to 8.
   const requestedAttempts = options.maxRefreshAttempts ?? 8;
   const maxAttempts = Number.isFinite(requestedAttempts) ? Math.max(1, Math.floor(requestedAttempts)) : 8;
   const sleep = options.sleep ?? defaultSleep;
+  const hypertableByModel = options.hypertableByModel ?? new Map<string, HypertableRef>();
+
+  /** Resolve a Prisma model name to its hypertable DB relation (identity when unregistered). */
+  const resolveHypertable = (model: string): HypertableRef => {
+    const ref = hypertableByModel.get(model) ?? { table: model };
+    assertSafeIdent(ref.table, "hypertable table");
+    if (ref.schema !== undefined) assertSafeIdent(ref.schema, "hypertable schema");
+    return ref;
+  };
+
   return {
     async refreshContinuousAggregate(name, range) {
       const ref = viewByModel.get(name) ?? { name };
@@ -99,6 +144,22 @@ export function makeManage(
           await sleep(Math.min(50 * 2 ** (attempt - 1), 1000));
         }
       }
+    },
+
+    async addRetentionPolicy(model, opts) {
+      const ref = resolveHypertable(model);
+      assertInterval(opts.dropAfter);
+      const rel = relationLiteral(ref.table, ref.schema);
+      // drop_after is a strict-grammar Interval (assertInterval) quoted as a literal — no cast
+      // on the relation (constraint 2); if_not_exists keeps a re-add a no-op.
+      const sql = `SELECT add_retention_policy(${rel}, drop_after => INTERVAL ${quoteLiteral(opts.dropAfter)}, if_not_exists => TRUE)`;
+      await client.$executeRawUnsafe(sql);
+    },
+
+    async removeRetentionPolicy(model) {
+      const ref = resolveHypertable(model);
+      const rel = relationLiteral(ref.table, ref.schema);
+      await client.$executeRawUnsafe(`SELECT remove_retention_policy(${rel}, if_exists => TRUE)`);
     },
   };
 }

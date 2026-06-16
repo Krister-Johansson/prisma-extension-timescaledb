@@ -10,6 +10,7 @@ import type { TimescaleSchema } from "./dmmf.js";
 import { createExtensionSql } from "../core/extension.js";
 import { createHypertableSql } from "../core/hypertable.js";
 import { createContinuousAggregateSql } from "../core/continuousAggregate.js";
+import { createRetentionPolicySql } from "../core/retention.js";
 
 export const EXTENSION_MIGRATION = "00000000000000_timescaledb_extension";
 export const OBJECTS_MIGRATION = "99999999999999_timescaledb_objects";
@@ -36,6 +37,14 @@ ${createExtensionSql().up}
   const parts: string[] = [];
   for (const h of hypertables) {
     parts.push(`-- Hypertable: ${h.table}\n${createHypertableSql(h).up}`);
+    if (h.retention) {
+      const sql = createRetentionPolicySql({
+        table: h.table,
+        ...(h.schema !== undefined ? { schema: h.schema } : {}),
+        dropAfter: h.retention.dropAfter,
+      }).up;
+      parts.push(`-- Retention policy: ${h.table}\n${sql}`);
+    }
   }
   for (const c of caggs) {
     parts.push(`-- Continuous aggregate: ${c.name}\n${createContinuousAggregateSql(c).up}`);

@@ -22,6 +22,30 @@ export interface TimescaleConfig {
   continuousAggregates?: readonly CaggConfig[];
 }
 
+/**
+ * @internal Union of registered hypertable model names from a config (`model ?? table`), used to
+ * type the `$timescale` retention helpers so a typo is a compile error. `never` when none.
+ */
+export type HypertableModelNames<C> = C extends { hypertables: readonly (infer H)[] }
+  ? H extends { model: infer M extends string }
+    ? M
+    : H extends { table: infer T extends string }
+      ? T
+      : never
+  : never;
+
+/** @internal Union of registered continuous-aggregate model names (`model ?? name`), for refresh. */
+export type CaggModelNames<C> = C extends { continuousAggregates: readonly (infer X)[] }
+  ? X extends { model: infer M extends string }
+    ? M
+    : X extends { name: infer N extends string }
+      ? N
+      : never
+  : never;
+
+/** @internal `never` (nothing registered / non-literal names) widens back to `string` so the helper stays callable. */
+export type NamesOrString<T> = [T] extends [never] ? string : T;
+
 interface UnsafeRawClient extends RawClient {
   $queryRawUnsafe<T = unknown>(query: string, ...values: unknown[]): Promise<T>;
 }
@@ -32,7 +56,7 @@ interface UnsafeRawClient extends RawClient {
  * @example
  * const prisma = new PrismaClient().$extends(timescaledb(registry));
  */
-export function timescaledb(config: TimescaleConfig = {}) {
+export function timescaledb<const C extends TimescaleConfig = TimescaleConfig>(config: C = {} as C) {
   // Key by Prisma model name (ctx.$name); values hold the resolved DB table + schema + column map.
   const hypertableByModel = new Map<
     string,
@@ -78,7 +102,11 @@ export function timescaledb(config: TimescaleConfig = {}) {
         $allModels: { timeBucket },
       },
       client: {
-        $timescale: makeManage(client as unknown as RawClient, caggViewByModel),
+        $timescale: makeManage<NamesOrString<HypertableModelNames<C>>, NamesOrString<CaggModelNames<C>>>(
+          client as unknown as RawClient,
+          caggViewByModel,
+          { hypertableByModel },
+        ),
       },
     }),
   );

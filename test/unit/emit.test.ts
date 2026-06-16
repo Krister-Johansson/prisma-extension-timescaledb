@@ -123,6 +123,36 @@ describe("emitMigrations", () => {
       "
     `);
   });
+
+  it("emits the retention policy after its hypertable when @timescale.retention is set", async () => {
+    const dmmf = await getDMMF({
+      datamodel: `
+generator client {
+  provider = "prisma-client"
+  output = "../generated/prisma"
+  previewFeatures = ["views"]
+}
+datasource db {
+  provider = "postgresql"
+}
+
+/// @timescale.hypertable(column: "time", chunkInterval: "1 day")
+/// @timescale.retention(dropAfter: "30 days")
+model SensorReading {
+  time     DateTime
+  deviceId Int
+  @@id([deviceId, time])
+}
+`,
+    });
+    const objects = emitMigrations(extractTimescaleSchema(dmmf))[`${OBJECTS_MIGRATION}/migration.sql`]!;
+    expect(objects).toContain(
+      `SELECT add_retention_policy('"SensorReading"', drop_after => INTERVAL '30 days', if_not_exists => TRUE);`,
+    );
+    expect(objects).not.toContain("::regclass");
+    // Retention is emitted after the create_hypertable it depends on.
+    expect(objects.indexOf("create_hypertable")).toBeLessThan(objects.indexOf("add_retention_policy"));
+  });
 });
 
 describe("emitTypes", () => {

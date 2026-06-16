@@ -11,13 +11,14 @@ Prisma can't model TimescaleDB features in its schema language, and the naive se
 **breaks on `prisma migrate reset` / `migrate dev`**. This package fixes that with:
 
 - 🧱 **Hypertables & continuous aggregates** from `///` schema annotations
+- 🧹 **Retention policies** — drop old chunks automatically via `@timescale.retention` or `$timescale`
 - ♻️ **Reset-safe migrations** — survive `prisma migrate reset` (proven twice, on real TimescaleDB)
 - 🔎 **Typed `timeBucket(...)` queries** with result-row inference and compile-time column checks
 - 🛟 **Generator-optional** — the client extension works from a manual config too, so a Prisma
   internal-API change can't fully break you
 
-> **v0.1 scope:** hypertables, continuous aggregates, reset-safe migrations, typed query
-> helpers. Vector / BM25 / hypercore / retention are out of scope for now.
+> **Scope:** hypertables, continuous aggregates, retention policies, reset-safe migrations, typed
+> query helpers. Vector / BM25 / hypercore are out of scope for now.
 
 ---
 
@@ -28,6 +29,7 @@ Prisma can't model TimescaleDB features in its schema language, and the naive se
 - [Quick start](#quick-start)
 - [Setup in detail](#setup-in-detail)
 - [Runtime usage](#runtime-usage)
+- [Data retention (`@timescale.retention`)](#data-retention-timescaleretention)
 - [Without the generator](#without-the-generator-manual-config)
 - [Renamed tables/columns (`@@map` / `@map`)](#renamed-tablescolumns-map--map)
 - [Shadow database](#shadow-database)
@@ -276,11 +278,54 @@ await prisma.$timescale.refreshContinuousAggregate("SensorHourly");             
 await prisma.$timescale.refreshContinuousAggregate("SensorHourly", { start, end }); // window
 ```
 
+> **Typo-safe.** The model/view names passed to every `$timescale` method (and
+> `addRetentionPolicy` / `removeRetentionPolicy`) are checked against your registered
+> hypertables and continuous aggregates — `refreshContinuousAggregate("SensorHrly")` is a
+> **compile error**, not a runtime surprise. This works automatically from the generated
+> `registry` (and from inline `timescaledb({ hypertables: [...] })` literals); only names built
+> from runtime `string` variables fall back to unchecked `string`.
+
 If a scheduled refresh policy happens to be running on the same continuous aggregate, a manual
 refresh would otherwise fail with `SQLSTATE 55P03` (*"could not refresh … due to a concurrent
 refresh"*). `refreshContinuousAggregate` retries this transient case with bounded exponential
 backoff (default: up to 8 attempts); if the contention persists beyond that budget, the original
 `55P03` error is rethrown.
+
+---
+
+## Data retention (`@timescale.retention`)
+
+Drop old chunks automatically with a retention policy. Annotate the hypertable model and the
+generator emits a **reset-safe** `add_retention_policy(...)` into the managed migration:
+
+```prisma
+/// @timescale.hypertable(column: "time", chunkInterval: "1 day")
+/// @timescale.retention(dropAfter: "30 days")
+model SensorReading {
+  time        DateTime
+  deviceId    Int
+  temperature Float
+
+  @@id([deviceId, time])
+}
+```
+
+`dropAfter` is an [interval](#annotation-reference): chunks whose data is older than it are dropped
+on TimescaleDB's schedule. The policy survives `prisma migrate reset` like everything else this
+package emits.
+
+You can also manage policies at runtime — and this is the path to use with the
+[manual config](#without-the-generator-manual-config) (no annotation):
+
+```ts
+await prisma.$timescale.addRetentionPolicy("SensorReading", { dropAfter: "30 days" });
+await prisma.$timescale.removeRetentionPolicy("SensorReading");
+```
+
+> **Changing `dropAfter`:** TimescaleDB won't *update* an existing policy whose interval differs —
+> `add_retention_policy(… if_not_exists => TRUE)` keeps the old one and warns. To change the window,
+> `removeRetentionPolicy(...)` first (or change the annotation and reset). This is a TimescaleDB
+> behavior, not a plugin limitation.
 
 ---
 
@@ -297,7 +342,8 @@ const prisma = new PrismaClient({ adapter }).$extends(
 ```
 
 The SQL builders are also exported from `prisma-extension-timescaledb/core` for hand-written
-migrations: `createExtensionSql`, `createHypertableSql`, `createContinuousAggregateSql`.
+migrations: `createExtensionSql`, `createHypertableSql`, `createContinuousAggregateSql`,
+`createRetentionPolicySql`.
 
 ---
 
@@ -374,13 +420,17 @@ database) ships in this repo.
 | Annotation | On | Arguments |
 | --- | --- | --- |
 | `@timescale.hypertable` | model | `column` (required), `chunkInterval` (default `"7 days"`) |
+| `@timescale.retention` | model (also a hypertable) | `dropAfter` (required) — drop chunks older than this interval |
 | `@timescale.continuousAggregate` | view | `source`, `bucket`, `timeColumn` (required); `refresh: { startOffset, endOffset, scheduleInterval }` (optional) |
 | `@timescale.bucket` | view field | — (exactly one per aggregate) |
 | `@timescale.groupBy` | view field | — |
 | `@timescale.aggregate` | view field | `fn` (`avg`\|`sum`\|`min`\|`max`\|`count`), `column` |
 
-**Intervals** are `"<amount> <unit>"` where unit is `second(s)`, `minute(s)`, `hour(s)`,
-`day(s)`, `week(s)`, or `month(s)` — validated at compile time (`"1 hour"`, `"7 days"`).
+**Intervals** are `"<amount> <unit>"` where unit is any PostgreSQL interval input unit —
+`microsecond(s)`, `millisecond(s)`, `second(s)`, `minute(s)`, `hour(s)`, `day(s)`, `week(s)`,
+`month(s)`, `year(s)`, `decade(s)`, or `centur(y|ies)` — validated at compile time *and* runtime
+(`"1 hour"`, `"7 days"`, `"2 years"`). (`quarter` is not an interval unit in PostgreSQL; combined
+forms like `"1 year 2 months"` aren't supported by this single-unit type.)
 
 ---
 

@@ -3,6 +3,7 @@
 export type {
   MigrationSql,
   HypertableConfig,
+  RetentionConfig,
   CaggConfig,
   AggregateSpec,
   RefreshPolicy,
@@ -12,4 +13,5 @@ export { assertInterval, isInterval } from "./interval.js";
 export { createExtensionSql } from "./extension.js";
 export { createHypertableSql } from "./hypertable.js";
 export { createContinuousAggregateSql } from "./continuousAggregate.js";
+export { createRetentionPolicySql, type RetentionPolicyConfig } from "./retention.js";
 export { quoteIdent, quoteLiteral, qualifiedIdent, relationLiteral, assertSafeIdent } from "./sql.js";
