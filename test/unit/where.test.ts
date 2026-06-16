@@ -215,10 +215,80 @@ describe("whereToSql relation filters (EXISTS)", () => {
     expect(a.params).toEqual([0, "x"]);
   });
 
-  it("throws on a bad list operator and on a nested relation filter (one level only)", () => {
+  it("throws on a bad list operator, and on nesting when the related model's relations are unregistered", () => {
     expect(() => whereToSql({ tags: { has: {} } }, relHarness().ctx)).toThrow(/unsupported list relation filter "has"/);
-    // a relation filter inside the related where is not supported (the inner has no relations)
+    // relHarness has no `relationsOf`, so a relation filter inside the related where can't resolve
+    // and falls through to the scalar-operator error (the one-level fallback for old configs).
     expect(() => whereToSql({ device: { is: { tags: { some: {} } } } }, relHarness().ctx)).toThrow(
+      /unsupported where operator "some"/,
+    );
+  });
+});
+
+// A registry-style harness with `relationsOf` + `targetModel`, enabling relation filters nested
+// through other relations. Reading -> device (Device, to-one) / tags (Tag, to-many);
+// Device -> readings (Reading, to-many); Tag -> reading (Reading, to-one).
+function nestedRelHarness() {
+  const params: unknown[] = [];
+  const byModel = new Map<string, Map<string, RuntimeRelation>>([
+    [
+      "Reading",
+      new Map<string, RuntimeRelation>([
+        ["device", { table: `"public"."Device"`, list: false, on: [{ related: "id", outer: "deviceId" }], fk: ["deviceId"], targetModel: "Device" }],
+        ["tags", { table: `"public"."Tag"`, list: true, on: [{ related: "readingId", outer: "id" }], targetModel: "Tag" }],
+      ]),
+    ],
+    ["Device", new Map<string, RuntimeRelation>([["readings", { table: `"public"."Reading"`, list: true, on: [{ related: "deviceId", outer: "id" }], targetModel: "Reading" }]])],
+    ["Tag", new Map<string, RuntimeRelation>([["reading", { table: `"public"."Reading"`, list: false, on: [{ related: "id", outer: "readingId" }], fk: ["readingId"], targetModel: "Reading" }]])],
+  ]);
+  const relationsOf = (m: string) => {
+    const fm = byModel.get(m);
+    return fm ? (f: string) => fm.get(f) : undefined;
+  };
+  const ctx: WhereCtx = {
+    col: (f) => `"${f}"`,
+    push: (v) => {
+      params.push(v);
+      return `$${params.length}`;
+    },
+    rel: { outerTable: `"public"."Reading"`, get: (f) => byModel.get("Reading")!.get(f), depth: 0, relationsOf },
+  };
+  return { ctx, params };
+}
+
+describe("whereToSql nested relation filters (multi-level EXISTS)", () => {
+  it("nests a to-many filter inside a to-one, correlating the inner alias to the outer", () => {
+    const { ctx, params } = nestedRelHarness();
+    expect(whereToSql({ device: { is: { readings: { some: { deviceId: 1 } } } } }, ctx)).toBe(
+      `EXISTS (SELECT 1 FROM "public"."Device" AS "_rel" WHERE "_rel"."id" = "public"."Reading"."deviceId" AND (` +
+        `EXISTS (SELECT 1 FROM "public"."Reading" AS "_rel2" WHERE "_rel2"."deviceId" = "_rel"."id" AND ("_rel2"."deviceId" = $1))))`,
+    );
+    expect(params).toEqual([1]);
+  });
+
+  it("nests three levels with distinct aliases, each correlated to the level above", () => {
+    const { ctx, params } = nestedRelHarness();
+    const sql = whereToSql({ tags: { some: { reading: { is: { device: { is: { active: true } } } } } } }, ctx);
+    expect(sql).toContain(`FROM "public"."Tag" AS "_rel"`);
+    expect(sql).toContain(`FROM "public"."Reading" AS "_rel2"`);
+    expect(sql).toContain(`FROM "public"."Device" AS "_rel3"`);
+    expect(sql).toContain(`"_rel"."readingId" = "public"."Reading"."id"`);
+    expect(sql).toContain(`"_rel2"."id" = "_rel"."readingId"`);
+    expect(sql).toContain(`"_rel3"."id" = "_rel2"."deviceId"`);
+    expect(sql).toContain(`"_rel3"."active" = $1`);
+    expect(params).toEqual([true]);
+  });
+
+  it("composes nested none with the outer EXISTS (negation wraps the inner subquery)", () => {
+    const { ctx } = nestedRelHarness();
+    expect(whereToSql({ device: { is: { readings: { none: { deviceId: 1 } } } } }, ctx)).toContain(
+      `AND (NOT EXISTS (SELECT 1 FROM "public"."Reading" AS "_rel2"`,
+    );
+  });
+
+  it("still throws when a key inside a registered nest is not a relation of that model", () => {
+    const { ctx } = nestedRelHarness();
+    expect(() => whereToSql({ device: { is: { bogus: { some: {} } } } }, ctx)).toThrow(
       /unsupported where operator "some"/,
     );
   });

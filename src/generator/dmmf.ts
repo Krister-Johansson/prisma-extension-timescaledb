@@ -27,6 +27,9 @@ import {
 export interface TimescaleSchema {
   hypertables: HypertableConfig[];
   continuousAggregates: CaggConfig[];
+  /** Relations of every non-hypertable model, keyed by Prisma model name — lets timeBucket where
+   * resolve relation filters nested through other relations to any depth. */
+  relationsByModel: Record<string, RelationConfig[]>;
 }
 
 // Field types acceptable as a hypertable / time_bucket partitioning column.
@@ -71,7 +74,19 @@ export function extractTimescaleSchema(dmmf: DMMF.Document): TimescaleSchema {
     }
   }
 
-  return { hypertables, continuousAggregates };
+  // Relations of every NON-hypertable model (keyed by Prisma model name), so timeBucket where can
+  // resolve relation filters nested THROUGH a relation. Hypertables' own relations stay on their
+  // config entry (the runtime merges both). Cycle-safe: lookups are by name and recursion is
+  // bounded by the query's actual nesting depth, so a Reading<->Device cycle never loops here.
+  const hypertableModelNames = new Set(hypertables.map((h) => h.model ?? h.table));
+  const relationsByModel: Record<string, RelationConfig[]> = {};
+  for (const model of models) {
+    if (hypertableModelNames.has(model.name)) continue;
+    const rels = buildRelations(model, byName);
+    if (rels.length > 0) relationsByModel[model.name] = rels;
+  }
+
+  return { hypertables, continuousAggregates, relationsByModel };
 }
 
 /** Build a HypertableConfig from a `@timescale.hypertable` model — validates the time column and
@@ -156,6 +171,7 @@ function buildRelations(model: DMMF.Model, byName: Map<string, DMMF.Model>): Rel
     const columns = columnMap(related);
     relations.push({
       field: f.name,
+      targetModel: related.name,
       table: dbTable(related),
       ...(related.schema ? { schema: related.schema } : {}),
       list: f.isList,

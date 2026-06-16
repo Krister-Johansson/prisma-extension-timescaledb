@@ -5,8 +5,10 @@
 // Supported: equals, not (incl. nested `not: { ... }`), in, notIn, lt, lte, gt, gte, contains,
 // startsWith, endsWith (+ mode: "insensitive"), null checks, shorthand equality, AND / OR / NOT,
 // and relation filters (some/none/every/is/isNot) via EXISTS subqueries when relation metadata
-// is provided. Unsupported (throws): any operator not in the list above, and nested relation
-// filters (a relation filter inside another relation's inner where).
+// is provided — including relation filters NESTED inside other relation filters to any depth
+// (each level a correlated EXISTS), as long as the related models' relations are registered.
+// Unsupported (throws): any operator not in the list above; a relation filter whose related
+// model's relations aren't registered (the inner relation key falls through and throws).
 import { assertSafeIdent, quoteIdent } from "../core/sql.js";
 
 export interface WhereCtx {
@@ -16,10 +18,16 @@ export interface WhereCtx {
   push: (value: unknown) => string;
   /** Relation-filter support; absent => relation keys fall through to the unsupported-operator error. */
   rel?: {
-    /** The current (outer) table, already quoted/qualified, for the EXISTS join (e.g. `"public"."Reading"`). */
+    /** The current (outer) table/alias, already quoted/qualified, that this level's EXISTS join
+     * correlates to (e.g. `"public"."Reading"` at the base, `"_rel"` one level in). */
     outerTable: string;
-    /** Look up a relation by Prisma field name; undefined if `field` is not a relation. */
+    /** Look up a relation by Prisma field name on the CURRENT model; undefined if not a relation. */
     get: (field: string) => RuntimeRelation | undefined;
+    /** Nesting depth (0 at the base) — drives unique subquery aliases (`_rel`, `_rel2`, …). Default 0. */
+    depth?: number;
+    /** Resolve another model's relations by Prisma name, for a relation filter nested INSIDE this
+     * one. Absent (or returns undefined) => nested relation filters are unsupported at this level. */
+    relationsOf?: (model: string) => ((field: string) => RuntimeRelation | undefined) | undefined;
   };
 }
 
@@ -35,6 +43,8 @@ export interface RuntimeRelation {
   columns?: Record<string, string>;
   /** Outer FK column(s) (DB names) for `is`/`isNot: null` (optional to-one only). */
   fk?: readonly string[];
+  /** Related model's Prisma name, used to resolve its own relations for deeper nesting. */
+  targetModel?: string;
 }
 
 const SUPPORTED = "equals, not, in, notIn, lt, lte, gt, gte, contains, startsWith, endsWith";
@@ -75,10 +85,19 @@ function relationClause(field: string, value: unknown, rel: RuntimeRelation, ctx
     throw new Error(`timeBucket: relation filter on "${field}" must be an object (some/none/every/is/isNot).`);
   }
   const filter = value as Record<string, unknown>;
-  const alias = quoteIdent("_rel");
+  // Unique alias per nesting level so a correlated inner EXISTS never shadows its outer: the
+  // first level keeps `_rel` (so single-level SQL is unchanged); deeper levels are `_rel2`, `_rel3`…
+  const depth = ctx.rel!.depth ?? 0;
+  const level = depth + 1;
+  const alias = quoteIdent(level === 1 ? "_rel" : `_rel${level}`);
   const outer = ctx.rel!.outerTable;
 
-  // Inner where resolves against the related table; params are shared; no nested relation filters.
+  // Nest one level deeper only when this relation knows its target model AND the context can
+  // resolve that model's relations; otherwise the inner ctx has no `rel`, so a nested relation
+  // key falls through and throws (the one-level fallback for configs without `relationsByModel`).
+  const nestedGet = rel.targetModel && ctx.rel!.relationsOf ? ctx.rel!.relationsOf(rel.targetModel) : undefined;
+
+  // Inner where resolves against the related table (aliased); params are shared.
   const innerCtx: WhereCtx = {
     push: ctx.push,
     col: (f) => {
@@ -86,6 +105,9 @@ function relationClause(field: string, value: unknown, rel: RuntimeRelation, ctx
       assertSafeIdent(c, "relation column");
       return `${alias}.${quoteIdent(c)}`;
     },
+    ...(nestedGet
+      ? { rel: { outerTable: alias, get: nestedGet, depth: level, relationsOf: ctx.rel!.relationsOf } }
+      : {}),
   };
   const join = rel.on.map((p) => `${alias}.${quoteIdent(p.related)} = ${outer}.${quoteIdent(p.outer)}`).join(" AND ");
   const from = `${rel.table} AS ${alias}`;

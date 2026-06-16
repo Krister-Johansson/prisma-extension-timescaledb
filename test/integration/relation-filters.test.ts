@@ -103,6 +103,16 @@ describe.skipIf(!DOCKER_OK)("timeBucket relation filters (real TimescaleDB)", ()
     const rows = await prisma.reading.timeBucket({ bucket: "1 hour", range, where, aggregate: { n: { count: "id" } } });
     return rows.reduce((s: number, r: { n: number }) => s + Number(r.n), 0);
   };
+  // The gold standard: the same where through Prisma's own findMany (time-bounded to match the
+  // timeBucket range), so results are checked against Prisma rather than hand-computed counts.
+  const expected = async (where: object): Promise<number> =>
+    (
+      await prisma.reading.findMany({
+        // AND (not spread) so a case carrying its own `time` can never override the range guardrail.
+        where: { AND: [{ time: { gte: range.start, lt: range.end } }, where] },
+        select: { id: true },
+      })
+    ).length;
 
   it("no filter counts all rows", async () => {
     expect(await count()).toBe(4);
@@ -125,5 +135,20 @@ describe.skipIf(!DOCKER_OK)("timeBucket relation filters (real TimescaleDB)", ()
   it("composes with scalar filters and AND/OR", async () => {
     expect(await count({ AND: [{ device: { is: { active: true } } }, { tags: { some: { label: "dev" } } }] })).toBe(2); // R1, R4
     expect(await count({ deviceId: { not: null }, tags: { none: { label: "dev" } } })).toBe(1); // R2 (has device, no dev tag)
+  });
+
+  it("nests relation filters THROUGH other relations, matching Prisma findMany exactly", async () => {
+    // Each case crosses ≥2 relation levels; the runtime builds correlated, nested EXISTS. Comparing
+    // to Prisma's own findMany (same time-bounded where) verifies the semantics rather than guessing.
+    const cases: object[] = [
+      { device: { is: { readings: { some: { id: 1 } } } } }, // Reading→Device→readings (2 levels)
+      { device: { is: { readings: { some: { tags: { some: { label: "dev" } } } } } } }, // →readings→tags (3)
+      { device: { is: { readings: { none: { tags: { some: { label: "dev" } } } } } } }, // nested `none`
+      { tags: { some: { reading: { is: { device: { is: { active: true } } } } } } }, // Reading→Tag→reading→Device (3)
+      { device: { isNot: { readings: { every: { tags: { some: { label: "prod" } } } } } } }, // nested `every` under isNot
+    ];
+    for (const where of cases) {
+      expect(await count(where)).toBe(await expected(where));
+    }
   });
 });

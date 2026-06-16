@@ -45,6 +45,10 @@ export interface CompressionConfig {
 export interface RelationConfig {
   /** Prisma relation field name on the hypertable (the `where` key), e.g. "device". */
   field: string;
+  /** Related model's Prisma name, used to resolve ITS relations for filters nested one level
+   * deeper (via the registry's `relationsByModel`). Omitted => nesting through this relation is
+   * unsupported (one level only — the back-compat fallback for configs without it). */
+  targetModel?: string;
   /** Related model's DB table name. */
   table: string;
   /** Related model's `@@schema` (multiSchema); omitted for the default schema. */
