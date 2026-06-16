@@ -572,6 +572,19 @@ model SensorReading {
 `),
     ).rejects.toThrow(/partitions must be a positive integer/);
   });
+
+  it("rejects a partitionColumn missing from the primary key (TimescaleDB partitioning requirement)", async () => {
+    await expect(
+      extract(`
+/// @timescale.hypertable(column: "time", partitionColumn: "deviceId", partitions: 4)
+model SensorReading {
+  time     DateTime
+  deviceId Int
+  @@id([time])
+}
+`),
+    ).rejects.toThrow(/must be included in every primary key \/ unique constraint/);
+  });
 });
 
 describe("extractTimescaleSchema — relations", () => {

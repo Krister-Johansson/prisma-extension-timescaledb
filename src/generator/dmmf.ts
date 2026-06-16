@@ -274,6 +274,22 @@ function buildSpacePartition(
   if (!field) {
     throw new Error(`${ctx}: partitionColumn "${partitionColumn}" is not a scalar field on the model.`);
   }
+  // TimescaleDB requires every PK / unique index to include all partitioning columns, so a
+  // partitionColumn outside them fails at `migrate` ("cannot create a unique index without the
+  // column …"). Reject it at generation time with a clear error instead. Field names below are
+  // Prisma names, matching `partitionColumn`.
+  const keyFieldSets: (readonly string[])[] = [
+    ...(model.primaryKey?.fields ? [model.primaryKey.fields] : []),
+    ...model.fields.filter((f) => f.isId).map((f) => [f.name]), // single-field @id
+    ...model.uniqueIndexes.map((u) => u.fields),
+    ...model.fields.filter((f) => f.isUnique).map((f) => [f.name]), // single-field @unique
+  ];
+  const missingFrom = keyFieldSets.find((fields) => !fields.includes(partitionColumn));
+  if (missingFrom) {
+    throw new Error(
+      `${ctx}: partitionColumn "${partitionColumn}" must be included in every primary key / unique constraint (TimescaleDB requires all partitioning columns in unique indexes); it is missing from [${missingFrom.join(", ")}].`,
+    );
+  }
   const partitions = Number(partitionsRaw);
   if (!Number.isInteger(partitions) || partitions < 1) {
     throw new Error(`${ctx}: partitions must be a positive integer (got ${JSON.stringify(partitionsRaw)}).`);
