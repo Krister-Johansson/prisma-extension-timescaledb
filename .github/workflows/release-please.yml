@@ -7,10 +7,15 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  id-token: write # npm provenance (supply-chain attestation) via OIDC
 
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    env:
+      # Surfaced so the publish steps can gate on its presence. Empty when the secret is
+      # unset, which makes the steps below skip — npm publish stays OFF until you add it.
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4
         id: release
@@ -20,22 +25,22 @@ jobs:
           # Maintains a release PR that bumps the version and updates CHANGELOG.md from
           # Conventional Commits; merging that PR creates the git tag + GitHub release.
 
-      # ─────────────────────────────────────────────────────────────────────────────
-      # npm publish is intentionally NOT wired up yet (holding publish until v0.1 is
-      # final). To enable later: add an `NPM_TOKEN` repo secret and uncomment below.
-      # (Note: a release PR opened by the default GITHUB_TOKEN does not trigger ci.yml;
-      #  use a PAT as `token` above if you want CI to run on the release PR itself.)
-      #
-      # - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      #   if: ${{ steps.release.outputs.release_created }}
-      # - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-      #   if: ${{ steps.release.outputs.release_created }}
-      #   with:
-      #     node-version: 20
-      #     registry-url: "https://registry.npmjs.org"
-      # - run: npm ci
-      #   if: ${{ steps.release.outputs.release_created }}
-      # - run: npm publish --access public
-      #   if: ${{ steps.release.outputs.release_created }}
-      #   env:
-      #     NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # ── npm publish — runs ONLY when a release was just created AND an NPM_TOKEN secret is
+      # configured. No secret => these steps skip, so publishing stays off until you opt in
+      # (just add the NPM_TOKEN repo secret; no workflow change needed). prepublishOnly
+      # (build + tests + attw) runs as the pre-publish gate.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        if: ${{ steps.release.outputs.release_created && env.NPM_TOKEN != '' }}
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: ${{ steps.release.outputs.release_created && env.NPM_TOKEN != '' }}
+        with:
+          node-version: 20
+          registry-url: "https://registry.npmjs.org"
+      - run: npm ci
+        if: ${{ steps.release.outputs.release_created && env.NPM_TOKEN != '' }}
+      - run: npm publish --provenance --access public
+        if: ${{ steps.release.outputs.release_created && env.NPM_TOKEN != '' }}
+        env:
+          NODE_AUTH_TOKEN: ${{ env.NPM_TOKEN }}
