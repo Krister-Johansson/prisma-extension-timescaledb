@@ -236,4 +236,13 @@ CALL add_columnstore_policy('"SensorReading"', after => INTERVAL '7 days', if_no
     expect(() => createCompressionPolicySql({ table: "X", after: "1 fortnight" as never })).toThrow(/Invalid interval/);
     expect(() => createCompressionPolicySql({ table: "X", after: "7 days", segmentBy: ["a-b"] })).toThrow(/Invalid/);
   });
+
+  it("rejects invalid orderBy direction / nulls in object form (fail fast, no silent coercion)", () => {
+    expect(() =>
+      createCompressionPolicySql({ table: "T", after: "1 day", orderBy: [{ column: "time", direction: "ascending" as never }] }),
+    ).toThrow(/Invalid orderBy direction/);
+    expect(() =>
+      createCompressionPolicySql({ table: "T", after: "1 day", orderBy: [{ column: "time", nulls: "frist" as never }] }),
+    ).toThrow(/Invalid orderBy nulls/);
+  });
 });

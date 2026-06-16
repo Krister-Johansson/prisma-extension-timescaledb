@@ -73,12 +73,26 @@ export function columnstoreReloptions(
   return opts;
 }
 
-/** Render one orderby term to `"col" [ASC|DESC] [NULLS FIRST|LAST]` (DB column name). */
+/**
+ * Render one orderby term to `"col" [ASC|DESC] [NULLS FIRST|LAST]` (DB column name). Validates the
+ * direction / nulls so an invalid object-form input (a JS caller bypassing the types) fails fast
+ * instead of silently coercing to ASC / NULLS LAST.
+ */
 function renderOrderByTerm(o: CompressionOrderBy): string {
   assertSafeIdent(o.column, "compression orderBy column");
   let term = quoteIdent(o.column);
-  if (o.direction) term += o.direction === "desc" ? " DESC" : " ASC";
-  if (o.nulls) term += o.nulls === "first" ? " NULLS FIRST" : " NULLS LAST";
+  if (o.direction) {
+    if (o.direction !== "asc" && o.direction !== "desc") {
+      throw new Error(`Invalid orderBy direction ${JSON.stringify(o.direction)} for column "${o.column}": expected "asc" or "desc".`);
+    }
+    term += o.direction === "desc" ? " DESC" : " ASC";
+  }
+  if (o.nulls) {
+    if (o.nulls !== "first" && o.nulls !== "last") {
+      throw new Error(`Invalid orderBy nulls ${JSON.stringify(o.nulls)} for column "${o.column}": expected "first" or "last".`);
+    }
+    term += o.nulls === "first" ? " NULLS FIRST" : " NULLS LAST";
+  }
   return term;
 }
 
