@@ -66,6 +66,7 @@ m.removeContinuousAggregatePolicy("SensorHourly"); // ok
 m.addContinuousAggregatePolicy("SensorHrly", { startOffset: "1 month", endOffset: "1 hour", scheduleInterval: "1 hour" });
 // @ts-expect-error - typo on the cagg name
 m.removeContinuousAggregatePolicy("SensorHrly");
+loose.addContinuousAggregatePolicy("anything", { startOffset: "1 month", endOffset: "1 hour", scheduleInterval: "1 hour" }); // ok — string fallback
 loose.removeContinuousAggregatePolicy("anything"); // ok — string fallback
 
 // --- 2) name extraction from a const registry (model ?? table / model ?? name) ---
