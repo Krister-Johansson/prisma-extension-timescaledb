@@ -44,7 +44,16 @@ export interface ManageOptions {
   sleep?: (ms: number) => Promise<void>;
 }
 
-export interface TimescaleManage {
+/**
+ * The `$timescale` management namespace. The type parameters are the registered model-name
+ * unions taken from the config/registry, so a name argument is checked at compile time — a
+ * typo like `"SensorRead"` is a type error. They default to `string` for the manual config
+ * path or when the names aren't string literals.
+ *
+ * @typeParam HModels - registered hypertable model names (retention helpers)
+ * @typeParam CModels - registered continuous-aggregate model names (refresh)
+ */
+export interface TimescaleManage<HModels extends string = string, CModels extends string = string> {
   /**
    * Refresh a continuous aggregate over an optional time window (SPEC §4.3).
    * Accepts the Prisma view model name; it is resolved to the DB view name (@@map) and passed
@@ -54,7 +63,7 @@ export interface TimescaleManage {
    * If a scheduled refresh policy is running on the same cagg, the manual refresh briefly
    * retries (see SQLSTATE 55P03 below) instead of failing.
    */
-  refreshContinuousAggregate(name: string, range?: RefreshRange): Promise<void>;
+  refreshContinuousAggregate(name: CModels, range?: RefreshRange): Promise<void>;
 
   /**
    * Add a data-retention policy to a hypertable — drops chunks whose data is older than
@@ -62,10 +71,10 @@ export interface TimescaleManage {
    * Idempotent: re-adding an identical policy is a no-op. NB: TimescaleDB will NOT update an
    * existing policy whose `dropAfter` differs — remove it first.
    */
-  addRetentionPolicy(model: string, options: RetentionOptions): Promise<void>;
+  addRetentionPolicy(model: HModels, options: RetentionOptions): Promise<void>;
 
   /** Remove the data-retention policy from a hypertable (no-op if there is none). */
-  removeRetentionPolicy(model: string): Promise<void>;
+  removeRetentionPolicy(model: HModels): Promise<void>;
 }
 
 // SQLSTATE 55P03 (lock_not_available): TimescaleDB raises this when a manual
@@ -88,11 +97,11 @@ function isConcurrentRefreshError(err: unknown): boolean {
 const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** @param viewByModel Prisma view model name -> { DB view name, schema } (for @@map/@@schema). */
-export function makeManage(
+export function makeManage<HModels extends string = string, CModels extends string = string>(
   client: RawClient,
   viewByModel: ReadonlyMap<string, CaggRef> = new Map(),
   options: ManageOptions = {},
-): TimescaleManage {
+): TimescaleManage<HModels, CModels> {
   // Coerce to a finite integer >= 1. A NaN here would make the retry loop's `attempt <=
   // maxAttempts` guard false on the first iteration — a silent no-op that never runs the
   // refresh — and Infinity would retry unboundedly on repeated 55P03; both fall back to 8.

@@ -84,10 +84,11 @@ export interface CaggConfig {
   timeColumn: string;
   /** Output column (view field DB name) for the time_bucket expression (`@timescale.bucket`). */
   bucketColumn: string;
-  /** Optional group-by passthroughs (besides the bucket). */
-  groupBy?: CaggGroupBy[];
-  /** One or more aggregate columns. */
-  aggregates: AggregateSpec[];
+  /** Optional group-by passthroughs (besides the bucket). `readonly` so a generated `as const`
+   * registry is assignable (the generator builds mutable arrays, which assign fine). */
+  groupBy?: readonly CaggGroupBy[];
+  /** One or more aggregate columns. `readonly` for the same `as const` registry reason. */
+  aggregates: readonly AggregateSpec[];
   /** Optional refresh policy; omitted means manual refresh only. */
   refresh?: RefreshPolicy;
 }

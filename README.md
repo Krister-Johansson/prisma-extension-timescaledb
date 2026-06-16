@@ -278,6 +278,13 @@ await prisma.$timescale.refreshContinuousAggregate("SensorHourly");             
 await prisma.$timescale.refreshContinuousAggregate("SensorHourly", { start, end }); // window
 ```
 
+> **Typo-safe.** The model/view names passed to every `$timescale` method (and
+> `addRetentionPolicy` / `removeRetentionPolicy`) are checked against your registered
+> hypertables and continuous aggregates — `refreshContinuousAggregate("SensorHrly")` is a
+> **compile error**, not a runtime surprise. This works automatically from the generated
+> `registry` (and from inline `timescaledb({ hypertables: [...] })` literals); only names built
+> from runtime `string` variables fall back to unchecked `string`.
+
 If a scheduled refresh policy happens to be running on the same continuous aggregate, a manual
 refresh would otherwise fail with `SQLSTATE 55P03` (*"could not refresh … due to a concurrent
 refresh"*). `refreshContinuousAggregate` retries this transient case with bounded exponential
