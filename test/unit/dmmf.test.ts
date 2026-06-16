@@ -653,6 +653,19 @@ model SensorReading {
     ).rejects.toThrow(/chunkSkipping column "time" is the time\/partitioning column/);
   });
 
+  it("rejects the hash space-partition column (it already prunes chunks)", async () => {
+    await expect(
+      extract(`
+/// @timescale.hypertable(column: "time", partitionColumn: "deviceId", partitions: 4, chunkSkipping: "deviceId")
+model SensorReading {
+  time     DateTime
+  deviceId Int
+  @@id([deviceId, time])
+}
+`),
+    ).rejects.toThrow(/chunkSkipping column "deviceId" is the hash space-partition column/);
+  });
+
   it("rejects a column that is also a compression segmentBy column (it would skip wrong chunks)", async () => {
     // Verified empirically: enabling chunk skipping on the segmentBy column makes the planner
     // exclude matching chunks and return wrong (empty) results, so reject it at generation time.

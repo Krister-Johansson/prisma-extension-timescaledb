@@ -580,9 +580,9 @@ await prisma.$timescale.disableChunkSkipping("SensorReading", "eventId");
 > - **Range stats only exist on compressed chunks.** Pair it with
 >   [`@timescale.compression`](#data-compression-timescalecompression); uncompressed chunks are always
 >   scanned.
-> - **Not the `segmentBy` or time column.** `segmentBy` already gives per-segment min/max, and
->   enabling skipping there returns **wrong (empty) results** — the generator rejects it, as it does
->   the time/partitioning column.
+> - **Not a partitioning or `segmentBy` column.** `segmentBy` already gives per-segment min/max, and
+>   enabling skipping there returns **wrong (empty) results** — the generator rejects it, along with
+>   the time column and the hash space-partition column (both already prune chunks).
 
 ---
 
