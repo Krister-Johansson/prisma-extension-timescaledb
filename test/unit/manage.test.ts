@@ -339,3 +339,43 @@ describe("makeManage continuous-aggregate policies", () => {
     await expect(makeManage(fakeClient().client).removeContinuousAggregatePolicy("bad name")).rejects.toThrow(/Invalid/);
   });
 });
+
+describe("makeManage chunk skipping", () => {
+  it("enableChunkSkipping emits one DO block that sets the GUC then enables (pool-safe, idempotent)", async () => {
+    const { client, calls } = fakeClient();
+    await makeManage(client).enableChunkSkipping("SensorReading", "eventId");
+    expect(calls).toHaveLength(1);
+    // One statement / one connection: SET LOCAL + enable_chunk_skipping in a single DO block, so the
+    // session GUC is reliably on for the call even under Prisma's connection pool.
+    expect(calls[0]!.sql).toBe(
+      `DO $$ BEGIN SET LOCAL timescaledb.enable_chunk_skipping = on; PERFORM enable_chunk_skipping('"SensorReading"', 'eventId', if_not_exists => TRUE); END $$`,
+    );
+    expect(calls[0]!.params).toEqual([]);
+  });
+
+  it("disableChunkSkipping emits an idempotent disable in the same DO-block form", async () => {
+    const { client, calls } = fakeClient();
+    await makeManage(client).disableChunkSkipping("SensorReading", "eventId");
+    expect(calls[0]!.sql).toBe(
+      `DO $$ BEGIN SET LOCAL timescaledb.enable_chunk_skipping = on; PERFORM disable_chunk_skipping('"SensorReading"', 'eventId', if_not_exists => TRUE); END $$`,
+    );
+  });
+
+  it("maps the Prisma field name to its DB column and schema-qualifies the relation (@map / @@schema)", async () => {
+    const { client, calls } = fakeClient();
+    const hypertableByModel = new Map([
+      ["SensorReading", { table: "sensor_readings", schema: "metrics", columns: { eventId: "event_id" } }],
+    ]);
+    await makeManage(client, new Map(), { hypertableByModel }).enableChunkSkipping("SensorReading", "eventId");
+    expect(calls[0]!.sql).toBe(
+      `DO $$ BEGIN SET LOCAL timescaledb.enable_chunk_skipping = on; PERFORM enable_chunk_skipping('"metrics"."sensor_readings"', 'event_id', if_not_exists => TRUE); END $$`,
+    );
+  });
+
+  it("rejects an unsafe model/relation name and an unsafe column name", async () => {
+    await expect(makeManage(fakeClient().client).enableChunkSkipping("bad name", "eventId")).rejects.toThrow(/Invalid/);
+    await expect(makeManage(fakeClient().client).disableChunkSkipping("SensorReading", "bad col")).rejects.toThrow(
+      /Invalid/,
+    );
+  });
+});

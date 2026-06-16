@@ -172,6 +172,20 @@ export interface TimescaleManage<HModels extends string = string, CModels extend
 
   /** Columnstore-compression effectiveness: chunk counts and before/after sizes (`hypertable_columnstore_stats`). */
   compressionStats(model: HModels): Promise<CompressionStats>;
+
+  /**
+   * Enable chunk skipping on a secondary `column` of a hypertable — `enable_chunk_skipping`. The
+   * planner can then exclude whole chunks that cannot match a filter on that column, but ONLY for
+   * compressed chunks and ONLY when `timescaledb.enable_chunk_skipping` is on at query time (set it
+   * on the connection or database — see the README; this call just registers the column). Accepts
+   * the Prisma model name (resolved via @@map/@@schema) and a Prisma field name (mapped to its DB
+   * column). Idempotent (`if_not_exists`). Do NOT pass the `segmentBy` column — skipping there
+   * returns wrong (empty) results.
+   */
+  enableChunkSkipping(model: HModels, column: string): Promise<void>;
+
+  /** Disable chunk skipping on a `column` of a hypertable — `disable_chunk_skipping`. Idempotent (no-op if not enabled). */
+  disableChunkSkipping(model: HModels, column: string): Promise<void>;
 }
 
 // SQLSTATE 55P03 (lock_not_available): TimescaleDB raises this when a manual
@@ -238,6 +252,25 @@ export function makeManage<HModels extends string = string, CModels extends stri
     assertSafeIdent(ref.name, "continuous aggregate name");
     if (ref.schema !== undefined) assertSafeIdent(ref.schema, "continuous aggregate schema");
     return ref;
+  };
+
+  /**
+   * Build the single-statement `DO` block for enable/disable chunk skipping. The GUC
+   * `timescaledb.enable_chunk_skipping` must be on for the function to be callable, so `SET LOCAL`
+   * + the `PERFORM` live in ONE block run by ONE `$executeRawUnsafe` — i.e. one pooled connection —
+   * so the GUC reliably applies to the call. The column is a Prisma field name mapped to its DB
+   * column (@map); `if_not_exists => TRUE` makes both directions idempotent.
+   */
+  const chunkSkippingSql = (
+    model: string,
+    column: string,
+    fn: "enable_chunk_skipping" | "disable_chunk_skipping",
+  ): string => {
+    const ref = resolveHypertable(model);
+    const dbColumn = (ref.columns ?? {})[column] ?? column;
+    assertSafeIdent(dbColumn, "chunk-skipping column");
+    const rel = relationLiteral(ref.table, ref.schema);
+    return `DO $$ BEGIN SET LOCAL timescaledb.enable_chunk_skipping = on; PERFORM ${fn}(${rel}, ${quoteLiteral(dbColumn)}, if_not_exists => TRUE); END $$`;
   };
 
   return {
@@ -399,6 +432,14 @@ export function makeManage<HModels extends string = string, CModels extends stri
         beforeTotalBytes: r?.before_compression_total_bytes ?? null,
         afterTotalBytes: r?.after_compression_total_bytes ?? null,
       };
+    },
+
+    async enableChunkSkipping(model, column) {
+      await client.$executeRawUnsafe(chunkSkippingSql(model, column, "enable_chunk_skipping"));
+    },
+
+    async disableChunkSkipping(model, column) {
+      await client.$executeRawUnsafe(chunkSkippingSql(model, column, "disable_chunk_skipping"));
     },
   };
 }

@@ -91,6 +91,13 @@ export interface HypertableConfig {
   retention?: RetentionConfig;
   /** Optional columnstore-compression policy (`@timescale.compression`); omitted means no policy. */
   compression?: CompressionConfig;
+  /**
+   * Secondary columns (DB names) to enable chunk skipping on (`@timescale.hypertable(chunkSkipping:
+   * ...)`); omitted means none. Each must be a non-partitioning, non-`segmentBy` column — skipping
+   * only helps compressed chunks and the planner needs `timescaledb.enable_chunk_skipping = on` at
+   * query time (see README).
+   */
+  chunkSkipping?: readonly string[];
   /** Relations to other models, for relation filters in `timeBucket` where (EXISTS subqueries). */
   relations?: readonly RelationConfig[];
 }

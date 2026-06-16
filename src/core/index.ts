@@ -18,4 +18,5 @@ export { createHypertableSql } from "./hypertable.js";
 export { createContinuousAggregateSql } from "./continuousAggregate.js";
 export { createRetentionPolicySql, type RetentionPolicyConfig } from "./retention.js";
 export { createCompressionPolicySql, type CompressionPolicyConfig } from "./compression.js";
+export { createChunkSkippingSql, type ChunkSkippingConfig } from "./chunkSkipping.js";
 export { quoteIdent, quoteLiteral, qualifiedIdent, relationLiteral, assertSafeIdent } from "./sql.js";

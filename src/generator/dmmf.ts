@@ -120,6 +120,7 @@ function buildHypertable(
   const retention = buildRetention(annotations, model.name);
   const compression = buildCompression(annotations, model);
   const spacePartition = buildSpacePartition(ann, model, ctx);
+  const chunkSkipping = buildChunkSkipping(ann, model, ctx, dbCol(field), compression, spacePartition?.column);
   const relations = buildRelations(model, byName);
 
   return {
@@ -132,6 +133,7 @@ function buildHypertable(
     ...(retention ? { retention } : {}),
     ...(compression ? { compression } : {}),
     ...(spacePartition ? { spacePartition } : {}),
+    ...(chunkSkipping ? { chunkSkipping } : {}),
     ...(relations.length > 0 ? { relations } : {}),
   };
 }
@@ -295,6 +297,51 @@ function buildSpacePartition(
     throw new Error(`${ctx}: partitions must be a positive integer (got ${JSON.stringify(partitionsRaw)}).`);
   }
   return { column: dbCol(field), partitions };
+}
+
+/**
+ * Parse the optional `chunkSkipping` arg (a comma-separated list of Prisma field names) off the
+ * hypertable annotation into DB column names. Each must be a scalar field and is rejected if it is a
+ * partitioning column — the time dimension or the hash space-partition column (both already prune
+ * chunks) — or a compression `segmentBy` column (enabling chunk skipping there returns wrong query
+ * results — verified empirically). Comparisons are on DB names (`timeColumnDb`/`partitionColumnDb`
+ * are already resolved), so an `@map` alias is caught too.
+ */
+function buildChunkSkipping(
+  ann: ReturnType<typeof parseAnnotations>[number],
+  model: DMMF.Model,
+  ctx: string,
+  timeColumnDb: string,
+  compression: CompressionConfig | undefined,
+  partitionColumnDb: string | undefined,
+): string[] | undefined {
+  const raw = optionalString(ann.args, "chunkSkipping", ctx);
+  if (raw === undefined) return undefined;
+  const segmentBy = new Set(compression?.segmentBy ?? []); // DB names
+  const columns = splitList(raw).map((name) => {
+    const field = findScalarField(model, name);
+    if (!field) {
+      throw new Error(`${ctx}: chunkSkipping column "${name}" is not a scalar field on the model.`);
+    }
+    const db = dbCol(field);
+    if (db === timeColumnDb) {
+      throw new Error(
+        `${ctx}: chunkSkipping column "${name}" is the time/partitioning column; that dimension already prunes chunks.`,
+      );
+    }
+    if (partitionColumnDb !== undefined && db === partitionColumnDb) {
+      throw new Error(
+        `${ctx}: chunkSkipping column "${name}" is the hash space-partition column; that dimension already prunes chunks — chunkSkipping must target a non-partitioning column.`,
+      );
+    }
+    if (segmentBy.has(db)) {
+      throw new Error(
+        `${ctx}: chunkSkipping column "${name}" is also a compression segmentBy column; skipping on a segmentBy column returns wrong results — drop it from one of the two.`,
+      );
+    }
+    return db;
+  });
+  return columns.length > 0 ? columns : undefined;
 }
 
 /** Build a CaggConfig from a `@timescale.continuousAggregate` view + its field annotations

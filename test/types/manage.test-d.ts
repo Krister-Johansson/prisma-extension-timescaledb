@@ -69,6 +69,16 @@ m.removeContinuousAggregatePolicy("SensorHrly");
 loose.addContinuousAggregatePolicy("anything", { startOffset: "1 month", endOffset: "1 hour", scheduleInterval: "1 hour" }); // ok — string fallback
 loose.removeContinuousAggregatePolicy("anything"); // ok — string fallback
 
+// chunk skipping: hypertable model-name checked; the column is a free Prisma field-name string
+m.enableChunkSkipping("SensorReading", "eventId"); // ok
+m.disableChunkSkipping("DeviceLog", "eventId"); // ok
+// @ts-expect-error - "SensorRead" is not a registered hypertable
+m.enableChunkSkipping("SensorRead", "eventId");
+// @ts-expect-error - typo on the model name
+m.disableChunkSkipping("SensorRaeding", "eventId");
+loose.enableChunkSkipping("anything", "eventId"); // ok — string fallback
+loose.disableChunkSkipping("anything", "eventId"); // ok — string fallback
+
 // --- 2) name extraction from a const registry (model ?? table / model ?? name) ---
 const mapped = {
   hypertables: [{ model: "SensorReading", table: "sensor_readings" }],

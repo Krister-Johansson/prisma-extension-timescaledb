@@ -186,6 +186,35 @@ model SensorReading {
     // Compression is emitted after the create_hypertable it depends on.
     expect(objects.indexOf("create_hypertable")).toBeLessThan(objects.indexOf("add_columnstore_policy"));
   });
+
+  it("emits chunk skipping (DO block + enable_chunk_skipping) after its hypertable", async () => {
+    const dmmf = await getDMMF({
+      datamodel: `
+generator client {
+  provider = "prisma-client"
+  output = "../generated/prisma"
+  previewFeatures = ["views"]
+}
+datasource db {
+  provider = "postgresql"
+}
+
+/// @timescale.hypertable(column: "time", chunkInterval: "1 day", chunkSkipping: "eventId")
+model SensorReading {
+  time     DateTime
+  deviceId Int
+  eventId  BigInt
+  @@id([deviceId, time])
+}
+`,
+    });
+    const objects = emitMigrations(extractTimescaleSchema(dmmf))[`${OBJECTS_MIGRATION}/migration.sql`]!;
+    expect(objects).toContain("SET LOCAL timescaledb.enable_chunk_skipping = on;");
+    expect(objects).toContain(`PERFORM enable_chunk_skipping('"SensorReading"', 'eventId', if_not_exists => TRUE);`);
+    expect(objects).not.toContain("::regclass");
+    // Chunk skipping is emitted after the create_hypertable it depends on.
+    expect(objects.indexOf("create_hypertable")).toBeLessThan(objects.indexOf("enable_chunk_skipping"));
+  });
 });
 
 describe("emitTypes", () => {

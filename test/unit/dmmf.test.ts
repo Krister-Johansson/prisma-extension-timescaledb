@@ -587,6 +587,102 @@ model SensorReading {
   });
 });
 
+describe("extractTimescaleSchema — chunk skipping", () => {
+  it("parses chunkSkipping into a list of DB column names (single column)", async () => {
+    const result = await extract(`
+/// @timescale.hypertable(column: "time", chunkSkipping: "eventId")
+model SensorReading {
+  time     DateTime
+  deviceId Int
+  eventId  BigInt
+  @@id([deviceId, time])
+}
+`);
+    expect(result.hypertables[0]?.chunkSkipping).toEqual(["eventId"]);
+  });
+
+  it("supports a comma-separated list and maps @map names", async () => {
+    const result = await extract(`
+/// @timescale.hypertable(column: "time", chunkSkipping: "eventId, sensorId")
+model SensorReading {
+  time     DateTime
+  deviceId Int
+  eventId  BigInt @map("event_id")
+  sensorId Int
+  @@id([deviceId, time])
+}
+`);
+    expect(result.hypertables[0]?.chunkSkipping).toEqual(["event_id", "sensorId"]);
+  });
+
+  it("omits chunkSkipping when the annotation is absent", async () => {
+    const result = await extract(`
+/// @timescale.hypertable(column: "time")
+model SensorReading {
+  time     DateTime
+  deviceId Int
+  @@id([deviceId, time])
+}
+`);
+    expect(result.hypertables[0]?.chunkSkipping).toBeUndefined();
+  });
+
+  it("rejects an unknown chunkSkipping column", async () => {
+    await expect(
+      extract(`
+/// @timescale.hypertable(column: "time", chunkSkipping: "nope")
+model SensorReading {
+  time     DateTime
+  deviceId Int
+  @@id([deviceId, time])
+}
+`),
+    ).rejects.toThrow(/chunkSkipping column "nope" is not a scalar field/);
+  });
+
+  it("rejects the time / partitioning column (it already prunes chunks)", async () => {
+    await expect(
+      extract(`
+/// @timescale.hypertable(column: "time", chunkSkipping: "time")
+model SensorReading {
+  time     DateTime
+  deviceId Int
+  @@id([deviceId, time])
+}
+`),
+    ).rejects.toThrow(/chunkSkipping column "time" is the time\/partitioning column/);
+  });
+
+  it("rejects the hash space-partition column (it already prunes chunks)", async () => {
+    await expect(
+      extract(`
+/// @timescale.hypertable(column: "time", partitionColumn: "deviceId", partitions: 4, chunkSkipping: "deviceId")
+model SensorReading {
+  time     DateTime
+  deviceId Int
+  @@id([deviceId, time])
+}
+`),
+    ).rejects.toThrow(/chunkSkipping column "deviceId" is the hash space-partition column/);
+  });
+
+  it("rejects a column that is also a compression segmentBy column (it would skip wrong chunks)", async () => {
+    // Verified empirically: enabling chunk skipping on the segmentBy column makes the planner
+    // exclude matching chunks and return wrong (empty) results, so reject it at generation time.
+    await expect(
+      extract(`
+/// @timescale.hypertable(column: "time", chunkSkipping: "deviceId")
+/// @timescale.compression(after: "7 days", segmentBy: "deviceId")
+model SensorReading {
+  time     DateTime
+  deviceId Int
+  @@id([deviceId, time])
+}
+`),
+    ).rejects.toThrow(/chunkSkipping column "deviceId" is also a compression segmentBy column/);
+  });
+});
+
 describe("extractTimescaleSchema — relations", () => {
   it("extracts to-one (owning, with fk) and to-many (inverse) relations", async () => {
     const result = await extract(`
