@@ -14,7 +14,7 @@ Prisma can't model TimescaleDB features in its schema language, and the naive se
 - 🧹 **Retention policies** — drop old chunks automatically via `@timescale.retention` or `$timescale`
 - 🗜️ **Columnstore compression** — compress old chunks automatically via `@timescale.compression` or `$timescale` (TimescaleDB hypercore)
 - ♻️ **Reset-safe migrations** — survive `prisma migrate reset` (proven twice, on real TimescaleDB)
-- 🔎 **Typed `timeBucket(...)` queries** with result-row inference and compile-time column checks
+- 🔎 **Typed `timeBucket(...)` queries** with result-row inference, compile-time column checks, and gap-filling (`locf` / `interpolate`)
 - 🛟 **Generator-optional** — the client extension works from a manual config too, so a Prisma
   internal-API change can't fully break you
 
@@ -295,6 +295,34 @@ const rows = await prisma.sensorReading.timeBucket({
 
 The result-row type follows `as` per aggregate, and the disallowed combinations (`avg` + `bigint`,
 `count` + `string`) are compile errors.
+
+#### Gap-filling empty buckets (`gapfill` + `fill`)
+
+By default `timeBucket` returns only buckets that have rows. Set `gapfill: true` to emit a row for
+**every** bucket across `range` (TimescaleDB `time_bucket_gapfill`), then fill the empty ones per
+aggregate:
+
+```ts
+const rows = await prisma.sensorReading.timeBucket({
+  bucket: "1 hour",
+  range: { start, end },
+  gapfill: true,
+  aggregate: {
+    avgTemp: { avg: "temperature", fill: "locf" },        // carry the last value forward
+    smooth:  { avg: "temperature", fill: "interpolate" }, // linear interpolation
+    raw:     { avg: "temperature" },                      // null in empty buckets
+  },
+});
+// rows: Array<{ bucket: Date; avgTemp: number | null; smooth: number | null; raw: number | null }>
+```
+
+- `fill: "locf"` carries the last observed value forward into empty buckets; `fill: "interpolate"`
+  linearly interpolates between the surrounding values. Both are `null` at the range edges where
+  there's no neighbouring value, and gap-filling happens **per `groupBy` group**.
+- **Under `gapfill`, every aggregate is nullable** (`number | null`) — empty buckets have no data.
+- `fill` requires `gapfill: true` and is mutually exclusive with
+  [`as`](#exact-aggregate-results-as-bigint--string) (a carried/interpolated value is a JS `number`,
+  not an exact bigint/decimal).
 
 ### Reading a continuous aggregate
 
