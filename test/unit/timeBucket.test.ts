@@ -58,13 +58,13 @@ describe("buildTimeBucketQuery", () => {
     expect(sql).toContain(`sum("device_id")::bigint AS "total"`);
   });
 
-  it("rejects an invalid `as` value", () => {
-    expect(() =>
-      buildTimeBucketQuery("SensorReading", "time", {
-        ...base,
-        aggregate: { x: { sum: "deviceId", as: "float" } },
-      }),
-    ).toThrow(/invalid "as"/);
+  it("rejects fn + as combinations the types forbid (defensive, for non-TS callers)", () => {
+    const make = (agg: Record<string, Record<string, string>>) => () =>
+      buildTimeBucketQuery("SensorReading", "time", { ...base, aggregate: agg });
+    expect(make({ x: { avg: "deviceId", as: "bigint" } })).toThrow(/not valid for "avg"/); // avg is fractional
+    expect(make({ x: { count: "deviceId", as: "string" } })).toThrow(/not valid for "count"/); // count is an integer
+    expect(make({ x: { min: "deviceId", as: "bigint" } })).toThrow(/not valid for "min"/); // min/max have no `as`
+    expect(make({ x: { sum: "deviceId", as: "float" } })).toThrow(/not valid for "sum"/); // unknown `as` value
   });
 
   it("appends equality filters as bound params", () => {

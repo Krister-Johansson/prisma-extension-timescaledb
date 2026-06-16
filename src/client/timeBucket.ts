@@ -89,8 +89,17 @@ export interface TimeBucketMethod {
 
 // --- runtime SQL builder ---------------------------------------------------
 
-const AGG_FNS = new Set(["avg", "sum", "min", "max", "count"]);
-const OUTPUT_AS = new Set(["number", "bigint", "string"]);
+// Valid `as` output per aggregate function — mirrors the per-function TS unions, and doubles
+// as the set of valid function names. The runtime checks against this so a TypeScript bypass
+// (an `any` cast or dynamically-built args) can't slip through a combination the types forbid
+// — e.g. `avg` + `bigint` (which would silently round) or `count` + `string`.
+const AGG_AS: Record<string, ReadonlySet<string>> = {
+  sum: new Set(["number", "bigint", "string"]),
+  avg: new Set(["number", "string"]),
+  min: new Set(["number"]),
+  max: new Set(["number"]),
+  count: new Set(["number", "bigint"]),
+};
 
 /**
  * SQL cast that controls the JS type Prisma returns for an aggregate — the cast IS the type
@@ -98,7 +107,7 @@ const OUTPUT_AS = new Set(["number", "bigint", "string"]);
  *   `::bigint` -> JS `bigint` (exact integers)   `::text` -> JS `string` (exact decimal)
  * Default (`"number"` / unset): `count` -> `::int`, `sum`/`avg` -> `::double precision`
  * (JS `number`, loses precision past 2^53), `min`/`max` -> native (already a number for the
- * numeric column types those accept).
+ * numeric column types those accept). Callers are validated against AGG_AS first.
  */
 function castFor(fn: string, outputAs: string | undefined): string {
   if (outputAs === "bigint") return "::bigint";
@@ -163,16 +172,17 @@ export function buildTimeBucketQuery(
     assertSafeIdent(resultName, "aggregate result column");
     // Split the optional `as` selector from the single function entry ({ sum: "x", as: "bigint" }).
     const { as: outputAs, ...fnPart } = op;
-    if (outputAs !== undefined && !OUTPUT_AS.has(outputAs)) {
-      throw new Error(
-        `timeBucket: invalid "as" ${JSON.stringify(outputAs)} for "${resultName}" (expected ${[...OUTPUT_AS].join(", ")}).`,
-      );
-    }
     const entry = Object.entries(fnPart)[0];
     if (!entry) throw new Error(`timeBucket: aggregate "${resultName}" must specify a function.`);
     const [fn, column] = entry;
-    if (!AGG_FNS.has(fn)) {
+    const allowedAs = AGG_AS[fn];
+    if (!allowedAs) {
       throw new Error(`timeBucket: unsupported aggregate function "${fn}" for "${resultName}".`);
+    }
+    if (outputAs !== undefined && !allowedAs.has(outputAs)) {
+      throw new Error(
+        `timeBucket: as: ${JSON.stringify(outputAs)} is not valid for "${fn}" on "${resultName}" (allowed: ${[...allowedAs].join(", ")}).`,
+      );
     }
     const src = quoteIdent(col(column));
     const alias = quoteIdent(resultName);
