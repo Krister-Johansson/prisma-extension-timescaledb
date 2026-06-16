@@ -38,23 +38,34 @@ export type SumAs = "number" | "bigint" | "string";
 export type AvgAs = "number" | "string";
 export type CountAs = "number" | "bigint";
 
-/** A single aggregate operation: one function applied to one column of `R` (+ optional `as`). */
+/**
+ * Gap-fill mode for an aggregate under `gapfill: true`: `"locf"` carries the last observed value
+ * forward into empty buckets; `"interpolate"` linearly interpolates between surrounding values. A
+ * filled aggregate comes back as a JS `number` — `fill` is mutually exclusive with `as`, since a
+ * carried/interpolated value isn't the exact bigint/decimal that `as` selects.
+ */
+export type Fill = "locf" | "interpolate";
+
+/** A single aggregate operation: one function applied to one column of `R` (+ optional `as` / `fill`). */
 export type AggregateOp<R> =
-  | { sum: NumericColumn<R>; as?: SumAs }
-  | { avg: NumericColumn<R>; as?: AvgAs }
-  | { min: NumericColumn<R> }
-  | { max: NumericColumn<R> }
-  | { count: AnyColumn<R>; as?: CountAs };
+  | { sum: NumericColumn<R>; as?: SumAs; fill?: Fill }
+  | { avg: NumericColumn<R>; as?: AvgAs; fill?: Fill }
+  | { min: NumericColumn<R>; fill?: Fill }
+  | { max: NumericColumn<R>; fill?: Fill }
+  | { count: AnyColumn<R>; as?: CountAs; fill?: Fill };
 
 /** The `aggregate` spec: result-column name -> aggregate operation. */
 export type AggregateInput<R> = Record<string, AggregateOp<R>>;
 
-/** Map an aggregate op's `as` selector to its result-row TS type (default `number`). */
-export type AggOutput<Op> = Op extends { as: "bigint" }
-  ? bigint
-  : Op extends { as: "string" }
-    ? string
-    : number;
+/** Map an aggregate op to its result-row TS type: a `fill`ed value is a JS `number`; otherwise the
+ * `as` selector decides (default `number`). Nullability under `gapfill` is layered on in TimeBucketRow. */
+export type AggOutput<Op> = Op extends { fill: Fill }
+  ? number
+  : Op extends { as: "bigint" }
+    ? bigint
+    : Op extends { as: "string" }
+      ? string
+      : number;
 
 /** Arguments to `timeBucket`. `R` is the model's scalar row, `W` its where input. */
 export interface TimeBucketArgs<R, W = unknown> {
@@ -68,15 +79,24 @@ export interface TimeBucketArgs<R, W = unknown> {
   groupBy?: ReadonlyArray<AnyColumn<R>>;
   /** One or more aggregates; keys become result columns. */
   aggregate: AggregateInput<R>;
+  /**
+   * Emit a row for every bucket across `range`, not just buckets that have data (TimescaleDB
+   * `time_bucket_gapfill`). Empty buckets get `null` aggregates unless that aggregate sets `fill`.
+   * Enabling this makes every aggregate in the result row nullable.
+   */
+  gapfill?: boolean;
 }
 
 type GroupByOf<A> = A extends { groupBy: ReadonlyArray<infer G> } ? G : never;
+/** Under `gapfill: true`, empty buckets carry `null` aggregates, so every aggregate is nullable. */
+type GapNull<A> = A extends { gapfill: true } ? null : never;
 
-/** The inferred result row: bucket + selected group-by columns + each aggregate (typed by `as`). */
+/** The inferred result row: bucket + selected group-by columns + each aggregate (typed by `as`/`fill`,
+ * nullable under `gapfill`). */
 export type TimeBucketRow<R, A extends TimeBucketArgs<R, unknown>> = Prettify<
   { bucket: Date } & { [K in Extract<GroupByOf<A>, keyof R>]: R[K] } & {
     // -readonly: `const A` marks the aggregate keys readonly; the result row shouldn't be.
-    -readonly [K in keyof A["aggregate"]]: AggOutput<A["aggregate"][K]>;
+    -readonly [K in keyof A["aggregate"]]: AggOutput<A["aggregate"][K]> | GapNull<A>;
   }
 >;
 
@@ -125,6 +145,35 @@ export interface TimeBucketRuntimeArgs {
   where?: Record<string, unknown>;
   groupBy?: readonly string[];
   aggregate: Record<string, Record<string, string>>;
+  gapfill?: boolean;
+}
+
+/**
+ * Build the SQL for one aggregate, applying `fill` (gapfill-only) or the `as` cast.
+ *  - no `fill`: `fn(col)<as-cast>` (unchanged default behavior).
+ *  - `locf`: carry the last value forward — `locf(fn(col)<default-cast>)`.
+ *  - `interpolate`: linear, numeric-only — cast the aggregate to double precision *inside*
+ *    interpolate (avg over an int column is `numeric`, which interpolate has no overload for).
+ * `fill` requires `gapfill` and is mutually exclusive with `as` (a filled value is a JS number).
+ */
+function aggregateExpr(
+  fn: string,
+  src: string,
+  outputAs: string | undefined,
+  fill: string | undefined,
+  gapfill: boolean,
+  resultName: string,
+): string {
+  if (fill === undefined) return `${fn}(${src})${castFor(fn, outputAs)}`;
+  if (!gapfill) {
+    throw new Error(`timeBucket: aggregate "${resultName}" sets fill: ${JSON.stringify(fill)} but requires gapfill: true.`);
+  }
+  if (outputAs !== undefined) {
+    throw new Error(`timeBucket: aggregate "${resultName}" cannot combine fill with as — a filled value is a JS number.`);
+  }
+  if (fill === "locf") return `locf(${fn}(${src})${castFor(fn, undefined)})`;
+  if (fill === "interpolate") return `interpolate(${fn}(${src})::double precision)`;
+  throw new Error(`timeBucket: invalid fill ${JSON.stringify(fill)} on "${resultName}" (expected "locf" or "interpolate").`);
 }
 
 /**
@@ -159,7 +208,13 @@ export function buildTimeBucketQuery(
   const params: unknown[] = [args.bucket, args.range.start, args.range.end];
   const time = quoteIdent(timeColumn);
 
-  const select: string[] = [`time_bucket($1, ${time}) AS "bucket"`];
+  // gapfill emits a row for every bucket across the range (empty ones get null aggregates unless
+  // `fill`ed). Its bounds are inferred from the `time >= $2 AND time < $3` predicate below — always
+  // present since `range` is required — so the 2-arg form needs no extra args.
+  const gapfill = args.gapfill === true;
+  const bucketExpr = gapfill ? `time_bucket_gapfill($1, ${time})` : `time_bucket($1, ${time})`;
+
+  const select: string[] = [`${bucketExpr} AS "bucket"`];
 
   const groupCols = args.groupBy ?? [];
   for (const g of groupCols) {
@@ -173,8 +228,8 @@ export function buildTimeBucketQuery(
   }
   for (const [resultName, op] of aggregateEntries) {
     assertSafeIdent(resultName, "aggregate result column");
-    // Split the optional `as` selector from the single function entry ({ sum: "x", as: "bigint" }).
-    const { as: outputAs, ...fnPart } = op;
+    // Split the optional `as` / `fill` selectors from the single function entry ({ sum: "x", as: "bigint" }).
+    const { as: outputAs, fill, ...fnPart } = op;
     const entry = Object.entries(fnPart)[0];
     if (!entry) throw new Error(`timeBucket: aggregate "${resultName}" must specify a function.`);
     const [fn, column] = entry;
@@ -189,8 +244,8 @@ export function buildTimeBucketQuery(
     }
     const src = quoteIdent(col(column));
     const alias = quoteIdent(resultName);
-    // The cast picks the JS return type: default `number`, or exact `bigint`/`string` via `as`.
-    select.push(`${fn}(${src})${castFor(fn, outputAs)} AS ${alias}`);
+    // `aggregateExpr` applies `fill` (gapfill-only locf/interpolate) or the `as` cast.
+    select.push(`${aggregateExpr(fn, src, outputAs, fill, gapfill, resultName)} AS ${alias}`);
   }
 
   // Relation-filter lookup (some/none/every/is/isNot -> EXISTS). Precompute every model's

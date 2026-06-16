@@ -144,4 +144,60 @@ describe("buildTimeBucketQuery", () => {
     expect(sql).toContain(`EXISTS (SELECT 1 FROM "Reading" AS "_rel2" WHERE "_rel2"."deviceId" = "_rel"."id"`);
     expect(sql).not.toContain("::regclass");
   });
+
+  it("gapfill: true switches to time_bucket_gapfill (bounds inferred from the range WHERE)", () => {
+    const { sql, params } = buildTimeBucketQuery("SensorReading", "time", { ...base, gapfill: true });
+    expect(sql).toContain(`time_bucket_gapfill($1, "time") AS "bucket"`);
+    expect(sql).not.toMatch(/time_bucket\(\$1/); // not the plain (non-gapfill) form
+    expect(sql).toContain(`WHERE "time" >= $2 AND "time" < $3`);
+    expect(params).toEqual(["1 hour", range.start, range.end]);
+  });
+
+  it("fill locf / interpolate wrap the aggregate; an unfilled aggregate stays plain", () => {
+    const { sql } = buildTimeBucketQuery("SensorReading", "time", {
+      ...base,
+      gapfill: true,
+      aggregate: {
+        carried: { avg: "temperature", fill: "locf" },
+        line: { avg: "temperature", fill: "interpolate" },
+        raw: { avg: "temperature" },
+      },
+    });
+    expect(sql).toContain(`locf(avg("temperature")::double precision) AS "carried"`);
+    expect(sql).toContain(`interpolate(avg("temperature")::double precision) AS "line"`);
+    expect(sql).toContain(`avg("temperature")::double precision AS "raw"`);
+  });
+
+  it("locf keeps the per-fn default cast (count -> ::int, min/max native)", () => {
+    const { sql } = buildTimeBucketQuery("SensorReading", "time", {
+      ...base,
+      gapfill: true,
+      aggregate: { c: { count: "deviceId", fill: "locf" }, m: { max: "temperature", fill: "locf" } },
+    });
+    expect(sql).toContain(`locf(count("deviceId")::int) AS "c"`);
+    expect(sql).toContain(`locf(max("temperature")) AS "m"`);
+  });
+
+  it("rejects fill without gapfill, and fill combined with as", () => {
+    expect(() =>
+      buildTimeBucketQuery("SensorReading", "time", { ...base, aggregate: { x: { avg: "temperature", fill: "locf" } } }),
+    ).toThrow(/requires gapfill: true/);
+    expect(() =>
+      buildTimeBucketQuery("SensorReading", "time", {
+        ...base,
+        gapfill: true,
+        aggregate: { x: { sum: "deviceId", as: "bigint", fill: "locf" } },
+      }),
+    ).toThrow(/cannot combine fill with as/);
+  });
+
+  it("rejects an invalid fill value (non-TS caller)", () => {
+    expect(() =>
+      buildTimeBucketQuery("SensorReading", "time", {
+        ...base,
+        gapfill: true,
+        aggregate: { x: { avg: "temperature", fill: "ffill" } },
+      }),
+    ).toThrow(/invalid fill/);
+  });
 });

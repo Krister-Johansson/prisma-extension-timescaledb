@@ -80,7 +80,40 @@ type _exact = Expect<
   >
 >;
 
+// --- gapfill: every aggregate becomes nullable; a `fill`ed aggregate is number|null ---
+const gf = timeBucket({
+  bucket: "1 hour",
+  range: { start, end },
+  groupBy: ["deviceId"],
+  gapfill: true,
+  aggregate: {
+    carried: { avg: "temperature", fill: "locf" },
+    line: { avg: "temperature", fill: "interpolate" },
+    raw: { avg: "temperature" },
+    total: { sum: "temperature", as: "bigint" }, // `as` still applies; nullable under gapfill
+  },
+});
+type _gf = Expect<
+  Equal<
+    (typeof gf)[number],
+    { bucket: Date; deviceId: number; carried: number | null; line: number | null; raw: number | null; total: bigint | null }
+  >
+>;
+
+// without gapfill, aggregates stay non-null (unchanged)
+const nogf = timeBucket({ bucket: "1 hour", range: { start, end }, aggregate: { raw: { avg: "temperature" } } });
+type _nogf = Expect<Equal<(typeof nogf)[number], { bucket: Date; raw: number }>>;
+
 // --- negatives: each must fail to compile ---
+
+// an invalid fill mode
+timeBucket({
+  bucket: "1 hour",
+  range: { start, end },
+  gapfill: true,
+  // @ts-expect-error - "ffill" is not a valid fill mode
+  aggregate: { x: { avg: "temperature", fill: "ffill" } },
+});
 
 // avg cannot be "bigint" (it is fractional)
 timeBucket({
