@@ -41,7 +41,9 @@ export function timescaledb(config: TimescaleConfig = {}) {
   for (const h of config.hypertables ?? []) {
     hypertableByModel.set(h.model ?? h.table, {
       table: h.table,
-      ...(h.schema ? { schema: h.schema } : {}),
+      // !== undefined (not truthy): keep an explicitly-set schema so an invalid value like ""
+      // reaches identifier validation instead of being silently dropped to an unqualified target.
+      ...(h.schema !== undefined ? { schema: h.schema } : {}),
       column: h.column,
       columns: { ...(h.columns ?? {}) },
     });
@@ -49,7 +51,7 @@ export function timescaledb(config: TimescaleConfig = {}) {
   // Prisma view model name -> DB view name + schema, for refreshContinuousAggregate.
   const caggViewByModel = new Map<string, { name: string; schema?: string }>();
   for (const c of config.continuousAggregates ?? []) {
-    caggViewByModel.set(c.model ?? c.name, { name: c.name, ...(c.schema ? { schema: c.schema } : {}) });
+    caggViewByModel.set(c.model ?? c.name, { name: c.name, ...(c.schema !== undefined ? { schema: c.schema } : {}) });
   }
 
   const timeBucket = async function (this: unknown, args: TimeBucketRuntimeArgs) {

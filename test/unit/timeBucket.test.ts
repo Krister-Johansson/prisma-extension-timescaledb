@@ -78,6 +78,10 @@ describe("buildTimeBucketQuery", () => {
     expect(sql).toContain(`FROM "metrics"."sensor_readings"`);
   });
 
+  it("rejects an explicitly-set invalid (empty) schema rather than silently ignoring it", () => {
+    expect(() => buildTimeBucketQuery("sensor_readings", "ts", base, {}, "")).toThrow(/Invalid model schema/);
+  });
+
   it("throws when range bounds are missing", () => {
     expect(() =>
       buildTimeBucketQuery("SensorReading", "time", { bucket: "1 hour", aggregate: base.aggregate } as TimeBucketRuntimeArgs),

@@ -91,8 +91,9 @@ describe.skipIf(!DOCKER_OK)("@@schema / multiSchema (generated migrations + runt
     expect(await counts(h)).toEqual({ hypertables: 1, caggs: 1 });
   });
 
-  it("reproduces them after migrate reset", async () => {
+  it("reproduces them after migrate reset + deploy", async () => {
     h.prisma(["migrate", "reset", "--force"]);
+    h.prisma(["migrate", "deploy"]);
     expect(await counts(h)).toEqual({ hypertables: 1, caggs: 1 });
   });
 
