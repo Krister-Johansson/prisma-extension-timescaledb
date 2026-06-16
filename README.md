@@ -426,6 +426,19 @@ window), matching `@timescale.retention`'s `dropAfter` — absolute-timestamp cu
 The introspection helpers wrap `hypertable_size`, `hypertable_detailed_size`, `approximate_row_count`,
 and `hypertable_columnstore_stats`.
 
+#### Resizing chunks (`setChunkInterval`)
+
+```ts
+await prisma.$timescale.setChunkInterval("SensorReading", "6 hours");
+```
+
+Changes the time-dimension chunk interval of a **live** hypertable (`set_partitioning_interval`, the
+non-deprecated successor to `set_chunk_time_interval`). It affects only chunks created **after** the
+call — existing chunks keep their interval, so it never rewrites data. This is the runtime complement
+to the [`chunkInterval`](#annotation-reference) annotation: `chunkInterval` sets the size at create
+time, and re-generating the schema can't change it later (`create_hypertable` is a no-op once the
+table exists), so use `setChunkInterval` to adjust it in place.
+
 ---
 
 ## Data retention (`@timescale.retention`)

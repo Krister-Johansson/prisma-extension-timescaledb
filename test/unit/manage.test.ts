@@ -379,3 +379,30 @@ describe("makeManage chunk skipping", () => {
     );
   });
 });
+
+describe("makeManage chunk interval", () => {
+  it("setChunkInterval emits set_partitioning_interval with an INTERVAL literal (no cast)", async () => {
+    const { client, calls } = fakeClient();
+    await makeManage(client).setChunkInterval("SensorReading", "1 day");
+    expect(calls).toHaveLength(1);
+    // set_partitioning_interval is the non-deprecated successor to set_chunk_time_interval; its
+    // polymorphic `anyelement` interval is passed as a typed literal (a bind param is ambiguous).
+    expect(calls[0]!.sql).toBe(`SELECT set_partitioning_interval('"SensorReading"', INTERVAL '1 day')`);
+    expect(calls[0]!.params).toEqual([]);
+    expect(calls[0]!.sql).not.toContain("::");
+  });
+
+  it("resolves the model to its @@map / @@schema relation", async () => {
+    const { client, calls } = fakeClient();
+    const hypertableByModel = new Map([["SensorReading", { table: "sensor_readings", schema: "metrics" }]]);
+    await makeManage(client, new Map(), { hypertableByModel }).setChunkInterval("SensorReading", "7 days");
+    expect(calls[0]!.sql).toBe(`SELECT set_partitioning_interval('"metrics"."sensor_readings"', INTERVAL '7 days')`);
+  });
+
+  it("rejects an invalid interval and an unsafe model name", async () => {
+    await expect(
+      makeManage(fakeClient().client).setChunkInterval("SensorReading", "1 fortnight" as never),
+    ).rejects.toThrow(/Invalid interval/);
+    await expect(makeManage(fakeClient().client).setChunkInterval("bad name", "1 day")).rejects.toThrow(/Invalid/);
+  });
+});
