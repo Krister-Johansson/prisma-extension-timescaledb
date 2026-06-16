@@ -35,7 +35,7 @@ Prisma can't model TimescaleDB features in its schema language, and the naive se
 - [Shadow database](#shadow-database)
 - [Annotation reference](#annotation-reference)
 - [Troubleshooting](#troubleshooting)
-- [Limitations (v0.1)](#limitations-v01)
+- [Limitations](#limitations)
 
 ---
 
@@ -472,20 +472,21 @@ forms like `"1 year 2 months"` aren't supported by this single-unit type.)
 
 ---
 
-## Limitations (v0.1)
+## Limitations
 
-- **`timeBucket` `where`** mirrors Prisma's `findMany` where: scalar operators (`equals`, `not`
-  incl. nested `not: { ... }`, `in`, `notIn`, `lt`, `lte`, `gt`, `gte`, `contains`, `startsWith`,
-  `endsWith` + `mode: "insensitive"`), `null` checks, `AND`/`OR`/`NOT`, and **relation filters**
-  (`some`/`none`/`every`/`is`/`isNot`) via `EXISTS` subqueries — including `every`'s vacuous truth
-  and NULL semantics (verified against Prisma). The one gap: a relation filter **nested inside
-  another relation's** inner where (one level is supported) throws a clear error.
+`timeBucket` `where` now covers Prisma's full scalar + logical operators **and** relation filters
+(`some`/`none`/`every`/`is`/`isNot`) — see [Runtime usage](#runtime-usage). What's left:
+
+- **Relation filters** — a relation filter **nested inside another relation's** filter is one level
+  only (deeper nesting throws), and relations must be visible to the generator (or supplied via the
+  [manual config](#without-the-generator-manual-config)).
 - **`timeBucket` numeric precision:** aggregates **default** to JS `number` (`count` → `int`,
   `sum`/`avg` → `double precision`), so a default `sum` beyond 2^53 is float64-rounded. For exact
   results, opt an aggregate into [`as: "bigint"`](#exact-aggregate-results-as-bigint--string)
   (native `bigint`) or `as: "string"` (exact decimal text). (Continuous-aggregate columns use the
   type you declare on the `view` model.)
-- Continuous aggregates must be declared as Prisma `view`s with `@@unique` (not `@@id`).
+- **Continuous aggregates** must use `@@unique` (not `@@id`) — a **Prisma constraint** (Prisma 7:
+  *"Views cannot have primary keys"*), not a limitation of this package.
 
 ---
 
