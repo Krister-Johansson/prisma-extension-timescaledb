@@ -67,6 +67,8 @@ export function extractTimescaleSchema(dmmf: DMMF.Document): TimescaleSchema {
   return { hypertables, continuousAggregates };
 }
 
+/** Build a HypertableConfig from a `@timescale.hypertable` model — validates the time column and
+ * resolves @map/@@schema, retention, and relations. */
 function buildHypertable(
   model: DMMF.Model,
   annotations: ReturnType<typeof parseAnnotations>,
@@ -161,6 +163,7 @@ function resolveCol(model: DMMF.Model, fieldName: string): string {
   return model.fields.find((f) => f.name === fieldName)?.dbName ?? fieldName;
 }
 
+/** Parse the optional `@timescale.retention(dropAfter)` annotation on a hypertable model. */
 function buildRetention(
   annotations: ReturnType<typeof parseAnnotations>,
   modelName: string,
@@ -173,6 +176,8 @@ function buildRetention(
   return { dropAfter: dropAfter as Interval };
 }
 
+/** Build a CaggConfig from a `@timescale.continuousAggregate` view + its field annotations
+ * (`@timescale.bucket` / `groupBy` / `aggregate`), validating columns against the source model. */
 function buildCagg(
   view: DMMF.Model,
   annotations: ReturnType<typeof parseAnnotations>,
@@ -266,6 +271,7 @@ function buildCagg(
   };
 }
 
+/** Parse the optional `refresh: { startOffset, endOffset, scheduleInterval }` policy off a cagg annotation. */
 function buildRefresh(ann: ReturnType<typeof parseAnnotations>[number], ctx: string): RefreshPolicy | undefined {
   const obj = optionalObject(ann.args, "refresh", ctx);
   if (!obj) return undefined;
@@ -283,6 +289,7 @@ function buildRefresh(ann: ReturnType<typeof parseAnnotations>[number], ctx: str
   };
 }
 
+/** Find a scalar (non-relation) field by name on a model. */
 function findScalarField(model: DMMF.Model, name: string): DMMF.Field | undefined {
   return model.fields.find((f) => f.name === name && f.kind === "scalar");
 }

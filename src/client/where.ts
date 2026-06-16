@@ -132,6 +132,7 @@ function relationClause(field: string, value: unknown, rel: RuntimeRelation, ctx
   return parts.length > 1 ? `(${parts.join(" AND ")})` : (parts[0] ?? "");
 }
 
+/** Combine an AND/OR/NOT array of sub-`where`s into one parenthesized clause (Prisma's logical operators). */
 function combine(wheres: unknown[], ctx: WhereCtx, op: "AND" | "OR"): string {
   const parts = wheres.map((w) => whereToSql(w as Record<string, unknown>, ctx)).filter(Boolean);
   // Prisma semantics: an empty OR matches nothing; an empty AND (also used for NOT) imposes
@@ -141,6 +142,7 @@ function combine(wheres: unknown[], ctx: WhereCtx, op: "AND" | "OR"): string {
   return `(${parts.join(` ${op} `)})`;
 }
 
+/** Build the clause for one scalar field: `null` -> IS NULL, a scalar -> `=`, else an operator map. */
 function fieldClause(field: string, value: unknown, ctx: WhereCtx): string {
   const c = ctx.col(field);
   if (value === null) return `${c} IS NULL`;
@@ -163,6 +165,7 @@ function operatorMapToSql(col: string, field: string, filter: Record<string, unk
   return parts.join(" AND ");
 }
 
+/** Translate one Prisma operator (`gte`, `in`, `contains`, `not`, …) on a column into SQL. */
 function operatorClause(
   col: string,
   field: string,
@@ -211,6 +214,7 @@ function operatorClause(
   }
 }
 
+/** Build an `IN` / `NOT IN` clause; an empty list short-circuits to `false` / `true` (Prisma semantics). */
 function inClause(col: string, v: unknown, negate: boolean, field: string, ctx: WhereCtx): string {
   if (!Array.isArray(v)) {
     throw new Error(`timeBucket: "${negate ? "notIn" : "in"}" on "${field}" requires an array.`);
@@ -220,6 +224,7 @@ function inClause(col: string, v: unknown, negate: boolean, field: string, ctx: 
   return `${col} ${negate ? "NOT IN" : "IN"} (${list})`;
 }
 
+/** Build a `LIKE` / `ILIKE` clause for contains/startsWith/endsWith, escaping the user value's wildcards. */
 function likeClause(
   col: string,
   kind: "contains" | "startsWith" | "endsWith",
@@ -238,10 +243,12 @@ function likeClause(
   return `${col} ${operator} ${ctx.push(pattern)} ESCAPE '\\'`;
 }
 
+/** True for the JS values bindable as a single SQL scalar parameter (Date/string/number/boolean/bigint). */
 function isScalar(v: unknown): boolean {
   return v instanceof Date || typeof v === "string" || typeof v === "number" || typeof v === "boolean" || typeof v === "bigint";
 }
 
+/** Assert a value is a non-null scalar (for operators that require one), or throw a clear error. */
 function scalar(v: unknown, field: string, op: string): unknown {
   if (v === null || !isScalar(v)) {
     throw new Error(`timeBucket: "${op}" on "${field}" requires a scalar value.`);
@@ -249,6 +256,7 @@ function scalar(v: unknown, field: string, op: string): unknown {
   return v;
 }
 
+/** Normalize a value to an array (Prisma's AND/OR/NOT accept either a single object or an array). */
 function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [value];
 }

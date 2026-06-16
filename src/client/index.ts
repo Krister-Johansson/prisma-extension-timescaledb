@@ -79,6 +79,10 @@ export function timescaledb<const C extends TimescaleConfig = TimescaleConfig>(c
     caggViewByModel.set(c.model ?? c.name, { name: c.name, ...(c.schema !== undefined ? { schema: c.schema } : {}) });
   }
 
+  /**
+   * The `model.timeBucket(...)` method: resolve the model to its hypertable config, build the
+   * parameterized query (incl. where / relation filters), and run it via `$queryRawUnsafe`.
+   */
   const timeBucket = async function (this: unknown, args: TimeBucketRuntimeArgs) {
     const ctx = Prisma.getExtensionContext(this);
     const model = ctx.$name;
