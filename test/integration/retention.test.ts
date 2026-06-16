@@ -17,6 +17,12 @@ const DOCKER_OK = (() => {
   }
 })();
 
+if (!DOCKER_OK) {
+  console.warn(
+    "\n[integration] SKIPPED retention.test.ts: Docker is not available. Retention policies are NOT verified.\n",
+  );
+}
+
 // Hypertable-only schema with a retention policy (matches the harness default CREATE TABLE).
 const MODELS = `/// @timescale.hypertable(column: "time", chunkInterval: "1 day")
 /// @timescale.retention(dropAfter: "30 days")
