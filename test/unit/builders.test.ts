@@ -56,6 +56,42 @@ describe("createHypertableSql", () => {
     const { up } = createHypertableSql({ table: "sensor_readings", column: "ts", chunkInterval: "1 day", schema: "metrics" });
     expect(up).toContain(`'"metrics"."sensor_readings"'`);
   });
+
+  it("appends a reset-safe add_dimension(by_hash) for a hash space partition", () => {
+    const { up } = createHypertableSql({
+      table: "SensorReading",
+      column: "time",
+      chunkInterval: "1 day",
+      spacePartition: { column: "deviceId", partitions: 4 },
+    });
+    expect(up).toContain("SELECT create_hypertable(");
+    expect(up).toContain(`SELECT add_dimension('"SensorReading"', by_hash('deviceId', 4), if_not_exists => TRUE);`);
+    // create_hypertable must come before add_dimension (the table must be a hypertable first).
+    expect(up.indexOf("create_hypertable")).toBeLessThan(up.indexOf("add_dimension"));
+    expect(up).not.toContain("::regclass");
+  });
+
+  it("space partition schema-qualifies the relation and maps the column (@@schema / @map)", () => {
+    const { up } = createHypertableSql({
+      table: "sensor_readings",
+      column: "ts",
+      schema: "metrics",
+      spacePartition: { column: "device_id", partitions: 8 },
+    });
+    expect(up).toContain(`SELECT add_dimension('"metrics"."sensor_readings"', by_hash('device_id', 8), if_not_exists => TRUE);`);
+  });
+
+  it("space partition rejects a non-positive / non-integer count and a bad column", () => {
+    expect(() => createHypertableSql({ table: "X", column: "t", spacePartition: { column: "d", partitions: 0 } })).toThrow(
+      /positive integer/,
+    );
+    expect(() => createHypertableSql({ table: "X", column: "t", spacePartition: { column: "d", partitions: 2.5 } })).toThrow(
+      /positive integer/,
+    );
+    expect(() => createHypertableSql({ table: "X", column: "t", spacePartition: { column: "a-b", partitions: 4 } })).toThrow(
+      /Invalid/,
+    );
+  });
 });
 
 describe("createContinuousAggregateSql", () => {

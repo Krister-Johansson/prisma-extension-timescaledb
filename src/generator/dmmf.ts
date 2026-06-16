@@ -119,6 +119,7 @@ function buildHypertable(
   const table = dbTable(model);
   const retention = buildRetention(annotations, model.name);
   const compression = buildCompression(annotations, model);
+  const spacePartition = buildSpacePartition(ann, model, ctx);
   const relations = buildRelations(model, byName);
 
   return {
@@ -130,6 +131,7 @@ function buildHypertable(
     ...(Object.keys(columns).length > 0 ? { columns } : {}),
     ...(retention ? { retention } : {}),
     ...(compression ? { compression } : {}),
+    ...(spacePartition ? { spacePartition } : {}),
     ...(relations.length > 0 ? { relations } : {}),
   };
 }
@@ -250,6 +252,49 @@ function buildCompression(
 /** Split a comma-separated annotation list (segmentBy / orderBy) into trimmed, non-empty entries. */
 function splitList(value: string): string[] {
   return value.split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+/**
+ * Parse the optional hash space dimension off the hypertable annotation: `partitionColumn` (a scalar
+ * field, resolved to its @map DB column) + `partitions` (a positive integer). Both are required
+ * together; omitted means a time-only hypertable.
+ */
+function buildSpacePartition(
+  ann: ReturnType<typeof parseAnnotations>[number],
+  model: DMMF.Model,
+  ctx: string,
+): { column: string; partitions: number } | undefined {
+  const partitionColumn = optionalString(ann.args, "partitionColumn", ctx);
+  const partitionsRaw = optionalString(ann.args, "partitions", ctx);
+  if (partitionColumn === undefined && partitionsRaw === undefined) return undefined;
+  if (partitionColumn === undefined || partitionsRaw === undefined) {
+    throw new Error(`${ctx}: partitionColumn and partitions must be set together (hash space dimension).`);
+  }
+  const field = findScalarField(model, partitionColumn);
+  if (!field) {
+    throw new Error(`${ctx}: partitionColumn "${partitionColumn}" is not a scalar field on the model.`);
+  }
+  // TimescaleDB requires every PK / unique index to include all partitioning columns, so a
+  // partitionColumn outside them fails at `migrate` ("cannot create a unique index without the
+  // column …"). Reject it at generation time with a clear error instead. Field names below are
+  // Prisma names, matching `partitionColumn`.
+  const keyFieldSets: (readonly string[])[] = [
+    ...(model.primaryKey?.fields ? [model.primaryKey.fields] : []),
+    ...model.fields.filter((f) => f.isId).map((f) => [f.name]), // single-field @id
+    ...model.uniqueIndexes.map((u) => u.fields),
+    ...model.fields.filter((f) => f.isUnique).map((f) => [f.name]), // single-field @unique
+  ];
+  const missingFrom = keyFieldSets.find((fields) => !fields.includes(partitionColumn));
+  if (missingFrom) {
+    throw new Error(
+      `${ctx}: partitionColumn "${partitionColumn}" must be included in every primary key / unique constraint (TimescaleDB requires all partitioning columns in unique indexes); it is missing from [${missingFrom.join(", ")}].`,
+    );
+  }
+  const partitions = Number(partitionsRaw);
+  if (!Number.isInteger(partitions) || partitions < 1) {
+    throw new Error(`${ctx}: partitions must be a positive integer (got ${JSON.stringify(partitionsRaw)}).`);
+  }
+  return { column: dbCol(field), partitions };
 }
 
 /** Build a CaggConfig from a `@timescale.continuousAggregate` view + its field annotations

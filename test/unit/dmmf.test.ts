@@ -521,6 +521,72 @@ model SensorReading {
   });
 });
 
+describe("extractTimescaleSchema — space partitioning", () => {
+  it("parses partitionColumn + partitions into a spacePartition config (mapped @map column)", async () => {
+    const result = await extract(`
+/// @timescale.hypertable(column: "time", chunkInterval: "1 day", partitionColumn: "deviceId", partitions: 4)
+model SensorReading {
+  time     DateTime
+  deviceId Int      @map("device_id")
+  @@id([deviceId, time])
+}
+`);
+    expect(result.hypertables[0]).toMatchObject({ spacePartition: { column: "device_id", partitions: 4 } });
+  });
+
+  it("requires partitionColumn and partitions together", async () => {
+    await expect(
+      extract(`
+/// @timescale.hypertable(column: "time", partitionColumn: "deviceId")
+model SensorReading {
+  time     DateTime
+  deviceId Int
+  @@id([deviceId, time])
+}
+`),
+    ).rejects.toThrow(/must be set together/);
+  });
+
+  it("rejects an unknown partitionColumn", async () => {
+    await expect(
+      extract(`
+/// @timescale.hypertable(column: "time", partitionColumn: "nope", partitions: 4)
+model SensorReading {
+  time     DateTime
+  deviceId Int
+  @@id([deviceId, time])
+}
+`),
+    ).rejects.toThrow(/partitionColumn "nope" is not a scalar field/);
+  });
+
+  it("rejects a non-positive partition count", async () => {
+    await expect(
+      extract(`
+/// @timescale.hypertable(column: "time", partitionColumn: "deviceId", partitions: 0)
+model SensorReading {
+  time     DateTime
+  deviceId Int
+  @@id([deviceId, time])
+}
+`),
+    ).rejects.toThrow(/partitions must be a positive integer/);
+  });
+
+  it("rejects a partitionColumn missing from the primary key (TimescaleDB partitioning requirement)", async () => {
+    await expect(
+      extract(`
+/// @timescale.hypertable(column: "time", partitionColumn: "deviceId", partitions: 4)
+model SensorReading {
+  time     DateTime
+  deviceId Int
+  @@id([time])
+}
+`),
+    ).rejects.toThrow(/must be included in every primary key \/ unique constraint/);
+  });
+});
+
 describe("extractTimescaleSchema — relations", () => {
   it("extracts to-one (owning, with fk) and to-many (inverse) relations", async () => {
     const result = await extract(`

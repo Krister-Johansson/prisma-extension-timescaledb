@@ -607,7 +607,7 @@ database) ships in this repo.
 
 | Annotation | On | Arguments |
 | --- | --- | --- |
-| `@timescale.hypertable` | model | `column` (required), `chunkInterval` (default `"7 days"`) |
+| `@timescale.hypertable` | model | `column` (required), `chunkInterval` (default `"7 days"`); `partitionColumn` + `partitions` (optional) — a hash space dimension |
 | `@timescale.retention` | model (also a hypertable) | `dropAfter` (required) — drop chunks older than this interval |
 | `@timescale.compression` | model (also a hypertable) | `after` (required) — compress chunks older than this; `segmentBy`, `orderBy` (optional) — columnstore tuning (Prisma field names) |
 | `@timescale.continuousAggregate` | view | `source`, `bucket`, `timeColumn` (required); `refresh: { startOffset, endOffset, scheduleInterval }` (optional) |
@@ -620,6 +620,23 @@ database) ships in this repo.
 `month(s)`, `year(s)`, `decade(s)`, or `centur(y|ies)` — validated at compile time *and* runtime
 (`"1 hour"`, `"7 days"`, `"2 years"`). (`quarter` is not an interval unit in PostgreSQL; combined
 forms like `"1 year 2 months"` aren't supported by this single-unit type.)
+
+**Space partitioning** — add `partitionColumn` + `partitions` to `@timescale.hypertable` for a hash
+space dimension (`add_dimension(..., by_hash(column, partitions))`) on top of the time dimension:
+
+```prisma
+/// @timescale.hypertable(column: "time", chunkInterval: "1 day", partitionColumn: "deviceId", partitions: 4)
+model SensorReading {
+  time     DateTime
+  deviceId Int
+
+  @@id([deviceId, time]) // a partitioning column must be part of the table's PK / unique key
+}
+```
+
+`partitionColumn` takes a Prisma field name (mapped to its `@map` column); `partitions` is a positive
+integer. It's transparent to `timeBucket` queries and survives `prisma migrate reset` like everything
+else this package emits.
 
 ---
 
