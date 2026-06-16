@@ -79,6 +79,15 @@ m.disableChunkSkipping("SensorRaeding", "eventId");
 loose.enableChunkSkipping("anything", "eventId"); // ok — string fallback
 loose.disableChunkSkipping("anything", "eventId"); // ok — string fallback
 
+// chunk interval: hypertable model-name checked; interval is the branded template type
+m.setChunkInterval("SensorReading", "6 hours"); // ok
+m.setChunkInterval("DeviceLog", "1 day"); // ok
+// @ts-expect-error - "SensorRead" is not a registered hypertable
+m.setChunkInterval("SensorRead", "1 day");
+// @ts-expect-error - `interval` must be a valid interval (branded template)
+m.setChunkInterval("SensorReading", "1 fortnight");
+loose.setChunkInterval("anything", "1 day"); // ok — string fallback
+
 // --- 2) name extraction from a const registry (model ?? table / model ?? name) ---
 const mapped = {
   hypertables: [{ model: "SensorReading", table: "sensor_readings" }],

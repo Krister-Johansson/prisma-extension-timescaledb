@@ -186,6 +186,15 @@ export interface TimescaleManage<HModels extends string = string, CModels extend
 
   /** Disable chunk skipping on a `column` of a hypertable — `disable_chunk_skipping`. Idempotent (no-op if not enabled). */
   disableChunkSkipping(model: HModels, column: string): Promise<void>;
+
+  /**
+   * Change the chunk (partition) interval of a hypertable's time dimension —
+   * `set_partitioning_interval` (the non-deprecated successor to `set_chunk_time_interval`). Affects
+   * only chunks created AFTER the call; existing chunks keep their interval. Accepts the Prisma model
+   * name (resolved via @@map/@@schema). This is the way to resize a *live* hypertable: re-generating
+   * the schema does not change it, since `create_hypertable` is a no-op once the table exists.
+   */
+  setChunkInterval(model: HModels, interval: Interval): Promise<void>;
 }
 
 // SQLSTATE 55P03 (lock_not_available): TimescaleDB raises this when a manual
@@ -440,6 +449,16 @@ export function makeManage<HModels extends string = string, CModels extends stri
 
     async disableChunkSkipping(model, column) {
       await client.$executeRawUnsafe(chunkSkippingSql(model, column, "disable_chunk_skipping"));
+    },
+
+    async setChunkInterval(model, interval) {
+      const ref = resolveHypertable(model);
+      assertInterval(interval);
+      const rel = relationLiteral(ref.table, ref.schema);
+      // The polymorphic `anyelement` interval resolves from the typed `INTERVAL '...'` literal (a
+      // bind param would be type-ambiguous); no dimension_name => the time dimension. No cast on the
+      // relation (constraint 2).
+      await client.$executeRawUnsafe(`SELECT set_partitioning_interval(${rel}, INTERVAL ${quoteLiteral(interval)})`);
     },
   };
 }
