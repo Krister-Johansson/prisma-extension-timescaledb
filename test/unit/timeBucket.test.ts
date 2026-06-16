@@ -240,4 +240,37 @@ describe("buildTimeBucketQuery", () => {
       buildTimeBucketQuery("SensorReading", "time", { ...base, aggregate: { x: { avg: "temperature", by: "time" } } }),
     ).toThrow(/"by" is only valid on first \/ last/);
   });
+
+  it("timezone buckets in the given zone (validated + quoted, positional 3rd arg)", () => {
+    const { sql } = buildTimeBucketQuery("SensorReading", "time", { ...base, timezone: "Europe/Stockholm" });
+    expect(sql).toContain(`time_bucket($1, "time", 'Europe/Stockholm') AS "bucket"`);
+  });
+
+  it("origin emits a bare ISO literal; offset emits an INTERVAL", () => {
+    const origin = new Date("2026-06-15T12:00:00.000Z");
+    const o = buildTimeBucketQuery("SensorReading", "time", { ...base, origin });
+    expect(o.sql).toContain(`time_bucket($1, "time", origin => '2026-06-15T12:00:00.000Z') AS "bucket"`);
+    const f = buildTimeBucketQuery("SensorReading", "time", { ...base, offset: "6 hours" });
+    expect(f.sql).toContain(`time_bucket($1, "time", "offset" => INTERVAL '6 hours') AS "bucket"`);
+  });
+
+  it("timezone + origin + offset compose (timezone positional, then named args)", () => {
+    const origin = new Date("2026-06-15T00:00:00.000Z");
+    const { sql } = buildTimeBucketQuery("SensorReading", "time", { ...base, timezone: "UTC", origin, offset: "1 hour" });
+    expect(sql).toContain(
+      `time_bucket($1, "time", 'UTC', origin => '2026-06-15T00:00:00.000Z', "offset" => INTERVAL '1 hour') AS "bucket"`,
+    );
+  });
+
+  it("rejects bad timezone, origin+offset without timezone, and gapfill combined with modifiers", () => {
+    expect(() => buildTimeBucketQuery("SensorReading", "time", { ...base, timezone: "no spaces'" })).toThrow(
+      /invalid timezone/,
+    );
+    expect(() =>
+      buildTimeBucketQuery("SensorReading", "time", { ...base, origin: new Date(), offset: "1 hour" }),
+    ).toThrow(/origin and offset together require a timezone/);
+    expect(() =>
+      buildTimeBucketQuery("SensorReading", "time", { ...base, gapfill: true, timezone: "UTC" }),
+    ).toThrow(/gapfill cannot be combined with timezone/);
+  });
 });

@@ -349,6 +349,24 @@ const rows = await prisma.sensorReading.timeBucket({
 - `first` / `last` accept **any** column and the result keeps that column's type. They take no
   `as` / `fill`, and are `null` in empty buckets under `gapfill`.
 
+#### Time zones & bucket alignment (`timezone` / `origin` / `offset`)
+
+```ts
+const rows = await prisma.sensorReading.timeBucket({
+  bucket: "1 day",
+  range: { start, end },
+  timezone: "Europe/Stockholm", // day/week/month buckets align to this zone's calendar (DST-aware)
+  // origin: new Date("2026-01-01T00:00:00Z"), // align buckets to an instant
+  // offset: "6 hours",                        // shift bucket boundaries by an interval
+  aggregate: { avgTemp: { avg: "temperature" } },
+});
+```
+
+- `timezone` requires a **`timestamptz` time column** (`@db.Timestamptz`) — calendar bucketing is
+  undefined for a tz-naive column; without it, `time_bucket` aligns to UTC.
+- `origin` (a `Date`) and `offset` (an interval) shift the bucket boundaries. `origin` + `offset`
+  together require a `timezone`, and none of `timezone` / `origin` / `offset` combine with `gapfill` yet.
+
 ### Reading a continuous aggregate
 
 A continuous aggregate is a Prisma `view`, so reads are ordinary, fully-typed Prisma:
