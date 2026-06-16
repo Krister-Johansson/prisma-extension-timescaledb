@@ -200,4 +200,44 @@ describe("buildTimeBucketQuery", () => {
       }),
     ).toThrow(/invalid fill/);
   });
+
+  it("first / last order by the time column by default; `by` overrides", () => {
+    const { sql } = buildTimeBucketQuery("SensorReading", "time", {
+      ...base,
+      aggregate: {
+        firstTemp: { first: "temperature" },
+        lastTemp: { last: "temperature" },
+        firstByLabel: { first: "temperature", by: "label" },
+      },
+    });
+    expect(sql).toContain(`first("temperature", "time") AS "firstTemp"`);
+    expect(sql).toContain(`last("temperature", "time") AS "lastTemp"`);
+    expect(sql).toContain(`first("temperature", "label") AS "firstByLabel"`);
+  });
+
+  it("first / last resolve @map columns for both value and `by`", () => {
+    const { sql } = buildTimeBucketQuery(
+      "sensor_readings",
+      "ts",
+      { ...base, aggregate: { latest: { last: "temperature", by: "deviceId" } } },
+      { deviceId: "device_id", time: "ts" },
+    );
+    expect(sql).toContain(`last("temperature", "device_id") AS "latest"`);
+  });
+
+  it("first / last reject as and fill; `by` is rejected on other aggregates", () => {
+    expect(() =>
+      buildTimeBucketQuery("SensorReading", "time", { ...base, aggregate: { x: { first: "temperature", as: "bigint" } } }),
+    ).toThrow(/does not support as/);
+    expect(() =>
+      buildTimeBucketQuery("SensorReading", "time", {
+        ...base,
+        gapfill: true,
+        aggregate: { x: { last: "temperature", fill: "locf" } },
+      }),
+    ).toThrow(/does not support fill/);
+    expect(() =>
+      buildTimeBucketQuery("SensorReading", "time", { ...base, aggregate: { x: { avg: "temperature", by: "time" } } }),
+    ).toThrow(/"by" is only valid on first \/ last/);
+  });
 });

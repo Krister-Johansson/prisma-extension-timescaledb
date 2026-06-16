@@ -46,26 +46,37 @@ export type CountAs = "number" | "bigint";
  */
 export type Fill = "locf" | "interpolate";
 
-/** A single aggregate operation: one function applied to one column of `R` (+ optional `as` / `fill`). */
+/**
+ * A single aggregate operation: one function applied to one column of `R` (+ optional `as` / `fill`).
+ * `first`/`last` are different — they return the value of one column ordered by another (`by`,
+ * defaulting to the model's time column), so they accept any column and return its type.
+ */
 export type AggregateOp<R> =
   | { sum: NumericColumn<R>; as?: SumAs; fill?: Fill }
   | { avg: NumericColumn<R>; as?: AvgAs; fill?: Fill }
   | { min: NumericColumn<R>; fill?: Fill }
   | { max: NumericColumn<R>; fill?: Fill }
-  | { count: AnyColumn<R>; as?: CountAs; fill?: Fill };
+  | { count: AnyColumn<R>; as?: CountAs; fill?: Fill }
+  | { first: AnyColumn<R>; by?: AnyColumn<R> }
+  | { last: AnyColumn<R>; by?: AnyColumn<R> };
 
 /** The `aggregate` spec: result-column name -> aggregate operation. */
 export type AggregateInput<R> = Record<string, AggregateOp<R>>;
 
-/** Map an aggregate op to its result-row TS type: a `fill`ed value is a JS `number`; otherwise the
- * `as` selector decides (default `number`). Nullability under `gapfill` is layered on in TimeBucketRow. */
-export type AggOutput<Op> = Op extends { fill: Fill }
-  ? number
-  : Op extends { as: "bigint" }
-    ? bigint
-    : Op extends { as: "string" }
-      ? string
-      : number;
+/** Map an aggregate op to its result-row TS type: `first`/`last` return the value column's type; a
+ * `fill`ed value is a JS `number`; otherwise the `as` selector decides (default `number`).
+ * Nullability under `gapfill` is layered on in TimeBucketRow. */
+export type AggOutput<R, Op> = Op extends { first: infer C extends keyof R }
+  ? R[C]
+  : Op extends { last: infer C extends keyof R }
+    ? R[C]
+    : Op extends { fill: Fill }
+      ? number
+      : Op extends { as: "bigint" }
+        ? bigint
+        : Op extends { as: "string" }
+          ? string
+          : number;
 
 /** Arguments to `timeBucket`. `R` is the model's scalar row, `W` its where input. */
 export interface TimeBucketArgs<R, W = unknown> {
@@ -96,7 +107,7 @@ type GapNull<A> = A extends { gapfill: true } ? null : never;
 export type TimeBucketRow<R, A extends TimeBucketArgs<R, unknown>> = Prettify<
   { bucket: Date } & { [K in Extract<GroupByOf<A>, keyof R>]: R[K] } & {
     // -readonly: `const A` marks the aggregate keys readonly; the result row shouldn't be.
-    -readonly [K in keyof A["aggregate"]]: AggOutput<A["aggregate"][K]> | GapNull<A>;
+    -readonly [K in keyof A["aggregate"]]: AggOutput<R, A["aggregate"][K]> | GapNull<A>;
   }
 >;
 
@@ -228,11 +239,25 @@ export function buildTimeBucketQuery(
   }
   for (const [resultName, op] of aggregateEntries) {
     assertSafeIdent(resultName, "aggregate result column");
-    // Split the optional `as` / `fill` selectors from the single function entry ({ sum: "x", as: "bigint" }).
-    const { as: outputAs, fill, ...fnPart } = op;
+    // Split the optional `as` / `fill` / `by` selectors from the single function entry ({ sum: "x", as: "bigint" }).
+    const { as: outputAs, fill, by, ...fnPart } = op;
     const entry = Object.entries(fnPart)[0];
     if (!entry) throw new Error(`timeBucket: aggregate "${resultName}" must specify a function.`);
     const [fn, column] = entry;
+    const src = quoteIdent(col(column));
+    const alias = quoteIdent(resultName);
+
+    // first/last: the value of `column` ordered by `by` (default: the model's time column). They
+    // return the value column's own type, so they take no `as`/`fill`.
+    if (fn === "first" || fn === "last") {
+      if (outputAs !== undefined) throw new Error(`timeBucket: "${fn}" on "${resultName}" does not support as.`);
+      if (fill !== undefined) throw new Error(`timeBucket: "${fn}" on "${resultName}" does not support fill.`);
+      const orderBy = by !== undefined ? quoteIdent(col(by)) : time;
+      select.push(`${fn}(${src}, ${orderBy}) AS ${alias}`);
+      continue;
+    }
+    if (by !== undefined) throw new Error(`timeBucket: "by" is only valid on first / last (on "${resultName}").`);
+
     const allowedAs = AGG_AS[fn];
     if (!allowedAs) {
       throw new Error(`timeBucket: unsupported aggregate function "${fn}" for "${resultName}".`);
@@ -242,8 +267,6 @@ export function buildTimeBucketQuery(
         `timeBucket: as: ${JSON.stringify(outputAs)} is not valid for "${fn}" on "${resultName}" (allowed: ${[...allowedAs].join(", ")}).`,
       );
     }
-    const src = quoteIdent(col(column));
-    const alias = quoteIdent(resultName);
     // `aggregateExpr` applies `fill` (gapfill-only locf/interpolate) or the `as` cast.
     select.push(`${aggregateExpr(fn, src, outputAs, fill, gapfill, resultName)} AS ${alias}`);
   }

@@ -325,6 +325,29 @@ const rows = await prisma.sensorReading.timeBucket({
   [`as`](#exact-aggregate-results-as-bigint--string) (a carried/interpolated value is a JS `number`,
   not an exact bigint/decimal).
 
+#### Earliest / latest value (`first` / `last`)
+
+`first` / `last` return the value of one column at the **earliest / latest time** in each bucket
+(TimescaleDB `first(value, time)` / `last(value, time)`) — e.g. the open/close price per hour:
+
+```ts
+const rows = await prisma.sensorReading.timeBucket({
+  bucket: "1 hour",
+  range: { start, end },
+  groupBy: ["deviceId"],
+  aggregate: {
+    open:  { first: "temperature" }, // value at the earliest time in the bucket
+    close: { last: "temperature" },  // value at the latest time
+    tag:   { last: "label" },        // any column type — keeps the column's type
+  },
+});
+// rows: Array<{ bucket: Date; deviceId: number; open: number; close: number; tag: string }>
+```
+
+- Ordered by the model's **time column by default**; pass `by: "<field>"` to order by another column.
+- `first` / `last` accept **any** column and the result keeps that column's type. They take no
+  `as` / `fill`, and are `null` in empty buckets under `gapfill`.
+
 ### Reading a continuous aggregate
 
 A continuous aggregate is a Prisma `view`, so reads are ordinary, fully-typed Prisma:

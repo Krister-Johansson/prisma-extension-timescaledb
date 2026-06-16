@@ -104,7 +104,37 @@ type _gf = Expect<
 const nogf = timeBucket({ bucket: "1 hour", range: { start, end }, aggregate: { raw: { avg: "temperature" } } });
 type _nogf = Expect<Equal<(typeof nogf)[number], { bucket: Date; raw: number }>>;
 
+// --- first / last: result type is the value column's type (default ordered by time) ---
+const fl = timeBucket({
+  bucket: "1 hour",
+  range: { start, end },
+  aggregate: {
+    firstTemp: { first: "temperature" }, // number
+    lastLabel: { last: "label" }, // string
+    firstTime: { first: "time" }, // Date
+    lastTempByDevice: { last: "temperature", by: "deviceId" }, // number, ordered by another column
+  },
+});
+type _fl = Expect<
+  Equal<
+    (typeof fl)[number],
+    { bucket: Date; firstTemp: number; lastLabel: string; firstTime: Date; lastTempByDevice: number }
+  >
+>;
+
+// first / last become nullable under gapfill, keeping their column type
+const flgf = timeBucket({ bucket: "1 hour", range: { start, end }, gapfill: true, aggregate: { lastLabel: { last: "label" } } });
+type _flgf = Expect<Equal<(typeof flgf)[number], { bucket: Date; lastLabel: string | null }>>;
+
 // --- negatives: each must fail to compile ---
+
+// first on a column that doesn't exist
+timeBucket({
+  bucket: "1 hour",
+  range: { start, end },
+  // @ts-expect-error - "nope" is not a column of Row
+  aggregate: { x: { first: "nope" } },
+});
 
 // an invalid fill mode
 timeBucket({
