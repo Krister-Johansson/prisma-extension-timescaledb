@@ -246,6 +246,12 @@ await prisma.$timescale.refreshContinuousAggregate("SensorHourly");             
 await prisma.$timescale.refreshContinuousAggregate("SensorHourly", { start, end }); // window
 ```
 
+If a scheduled refresh policy happens to be running on the same continuous aggregate, a manual
+refresh would otherwise fail with `SQLSTATE 55P03` (*"could not refresh … due to a concurrent
+refresh"*). `refreshContinuousAggregate` retries this transient case with bounded exponential
+backoff (default: up to 8 attempts); if the contention persists beyond that budget, the original
+`55P03` error is rethrown.
+
 ---
 
 ## Without the generator (manual config)
