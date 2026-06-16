@@ -3,6 +3,12 @@
   "version": "0.1.0",
   "description": "Type-safe TimescaleDB / TigerData time-series support for Prisma: reset-safe migrations, hypertables, continuous aggregates, and typed query helpers.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Krister-Johansson/prisma-extension-timescaledb.git"
+  },
+  "homepage": "https://github.com/Krister-Johansson/prisma-extension-timescaledb#readme",
+  "bugs": "https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues",
   "type": "module",
   "sideEffects": false,
   "files": [
