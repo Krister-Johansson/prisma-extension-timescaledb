@@ -123,6 +123,18 @@ describe.skipIf(!DOCKER_OK)("reset-safety (generated migrations)", () => {
         { h: "2026-06-15T11:00:00.000Z", n: 1 }, // 30
       ]);
 
+      // sum/avg over an INTEGER column (deviceId) must come back as JS numbers, not
+      // BigInt/Decimal. deviceId across all 5 rows = [1,1,1,1,2] -> sum 6, avg 1.2.
+      const [agg] = await prisma.sensorReading.timeBucket({
+        bucket: "1 day",
+        range: { start: new Date("2026-06-15T00:00:00Z"), end: new Date("2026-06-16T00:00:00Z") },
+        aggregate: { sumDev: { sum: "deviceId" }, avgDev: { avg: "deviceId" } },
+      });
+      expect(typeof agg.sumDev).toBe("number");
+      expect(typeof agg.avgDev).toBe("number");
+      expect(agg.sumDev).toBe(6);
+      expect(agg.avgDev).toBeCloseTo(1.2);
+
       // Refresh the continuous aggregate, then read it as a normal typed Prisma view.
       await prisma.$timescale.refreshContinuousAggregate("SensorHourly");
       const hourly = await prisma.sensorHourly.findMany({ orderBy: [{ deviceId: "asc" }, { bucket: "asc" }] });
