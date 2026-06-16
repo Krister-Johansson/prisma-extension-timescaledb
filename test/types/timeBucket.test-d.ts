@@ -50,7 +50,61 @@ const rows2 = timeBucket({
 });
 type _inferred2 = Expect<Equal<(typeof rows2)[number], { bucket: Date; total: number }>>;
 
+// --- `as` selector: each aggregate's result type follows its exact-output kind ---
+const exact = timeBucket({
+  bucket: "1 hour",
+  range: { start, end },
+  groupBy: ["deviceId"],
+  aggregate: {
+    bytes: { sum: "temperature", as: "bigint" }, // -> bigint
+    rows: { count: "label", as: "bigint" }, // -> bigint
+    avgStr: { avg: "temperature", as: "string" }, // -> string
+    sumStr: { sum: "temperature", as: "string" }, // -> string
+    plain: { sum: "temperature" }, // -> number (default)
+    explicit: { avg: "temperature", as: "number" }, // -> number
+  },
+});
+type _exact = Expect<
+  Equal<
+    (typeof exact)[number],
+    {
+      bucket: Date;
+      deviceId: number;
+      bytes: bigint;
+      rows: bigint;
+      avgStr: string;
+      sumStr: string;
+      plain: number;
+      explicit: number;
+    }
+  >
+>;
+
 // --- negatives: each must fail to compile ---
+
+// avg cannot be "bigint" (it is fractional)
+timeBucket({
+  bucket: "1 hour",
+  range: { start, end },
+  // @ts-expect-error - avg does not accept as: "bigint"
+  aggregate: { x: { avg: "temperature", as: "bigint" } },
+});
+
+// count cannot be "string" (it is an integer count)
+timeBucket({
+  bucket: "1 hour",
+  range: { start, end },
+  // @ts-expect-error - count does not accept as: "string"
+  aggregate: { x: { count: "label", as: "string" } },
+});
+
+// an unknown `as` value
+timeBucket({
+  bucket: "1 hour",
+  range: { start, end },
+  // @ts-expect-error - "float" is not a valid `as`
+  aggregate: { x: { sum: "temperature", as: "float" } },
+});
 
 // avg on a column that doesn't exist
 timeBucket({

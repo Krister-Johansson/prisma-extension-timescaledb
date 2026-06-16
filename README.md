@@ -228,6 +228,36 @@ Aggregate columns are checked against the model's scalar fields **at compile tim
 (avg/sum/min/max require numeric columns), and the result row type is inferred from
 `groupBy` + `aggregate`. Supported functions: `avg`, `sum`, `min`, `max`, `count`.
 
+#### Exact aggregate results (`as: "bigint" | "string"`)
+
+By default every aggregate comes back as a JS `number` — `sum`/`avg` are computed as
+`double precision`, so a magnitude past `2^53` loses precision. Opt an individual aggregate
+into an exact type with `as`:
+
+```ts
+const rows = await prisma.sensorReading.timeBucket({
+  bucket: "1 hour",
+  range: { start, end },
+  aggregate: {
+    total:   { sum: "deviceId", as: "bigint" },    // → bigint  (exact integer)
+    samples: { count: "deviceId", as: "bigint" },  // → bigint  (no overflow past ~2.1B rows)
+    exact:   { avg: "temperature", as: "string" }, // → string  (exact decimal, e.g. "22.5000…")
+    fast:    { sum: "temperature" },               // → number  (default, unchanged)
+  },
+});
+// rows: Array<{ bucket: Date; total: bigint; samples: bigint; exact: string; fast: number }>
+```
+
+- `as: "bigint"` → Postgres `::bigint`, a native JS `bigint`. Exact for integer sums/counts, and
+  avoids the overflow the default `count` (`::int`) hits past ~2.1B rows in a single bucket. Not
+  available on `avg` (it's fractional).
+- `as: "string"` → Postgres `::text`, an exact decimal `string` (JSON-safe). Use for `avg` or
+  large fractional sums. Not available on `count`.
+- `as: "number"` (default) → JS `number`.
+
+The result-row type follows `as` per aggregate, and the disallowed combinations (`avg` + `bigint`,
+`count` + `string`) are compile errors.
+
 ### Reading a continuous aggregate
 
 A continuous aggregate is a Prisma `view`, so reads are ordinary, fully-typed Prisma:
@@ -373,10 +403,11 @@ database) ships in this repo.
   `lte`, `gt`, `gte`, `contains`, `startsWith`, `endsWith` + `mode: "insensitive"`), `null`
   checks, and `AND`/`OR`/`NOT`. **Relation filters** (`some`/`none`/`every`) and nested
   `not: { ... }` are not supported (they can't be a single-table query) and throw a clear error.
-- **`timeBucket` numeric precision:** results come back as JS `number`s — `count` is cast to
-  `int`, and `sum`/`avg` to `double precision` so integer-column aggregates aren't returned as
-  `BigInt`/`Decimal`. Caveat: `sum`/`avg` are therefore float64, so a `sum` beyond 2^53 loses
-  exactness. (Continuous-aggregate columns use the type you declare on the `view` model.)
+- **`timeBucket` numeric precision:** aggregates **default** to JS `number` (`count` → `int`,
+  `sum`/`avg` → `double precision`), so a default `sum` beyond 2^53 is float64-rounded. For exact
+  results, opt an aggregate into [`as: "bigint"`](#exact-aggregate-results-as-bigint--string)
+  (native `bigint`) or `as: "string"` (exact decimal text). (Continuous-aggregate columns use the
+  type you declare on the `view` model.)
 - Continuous aggregates must be declared as Prisma `view`s with `@@unique` (not `@@id`).
 
 ---

@@ -30,6 +30,43 @@ describe("buildTimeBucketQuery", () => {
     expect(sql).toContain(`max("deviceId") AS "hi"`); // min/max keep the column type
   });
 
+  it("emits exact casts per the `as` selector (bigint -> ::bigint, string -> ::text)", () => {
+    const { sql } = buildTimeBucketQuery("SensorReading", "time", {
+      ...base,
+      aggregate: {
+        total: { sum: "deviceId", as: "bigint" },
+        rows: { count: "deviceId", as: "bigint" },
+        avgStr: { avg: "deviceId", as: "string" },
+        sumStr: { sum: "deviceId", as: "string" },
+        plain: { sum: "deviceId" }, // default -> double precision
+      },
+    });
+    expect(sql).toContain(`sum("deviceId")::bigint AS "total"`);
+    expect(sql).toContain(`count("deviceId")::bigint AS "rows"`); // no ::int overflow past 2^31 rows
+    expect(sql).toContain(`avg("deviceId")::text AS "avgStr"`);
+    expect(sql).toContain(`sum("deviceId")::text AS "sumStr"`);
+    expect(sql).toContain(`sum("deviceId")::double precision AS "plain"`);
+  });
+
+  it("resolves @map columns under an `as` cast", () => {
+    const { sql } = buildTimeBucketQuery(
+      "sensor_readings",
+      "ts",
+      { ...base, aggregate: { total: { sum: "deviceId", as: "bigint" } } },
+      { deviceId: "device_id", time: "ts" },
+    );
+    expect(sql).toContain(`sum("device_id")::bigint AS "total"`);
+  });
+
+  it("rejects fn + as combinations the types forbid (defensive, for non-TS callers)", () => {
+    const make = (agg: Record<string, Record<string, string>>) => () =>
+      buildTimeBucketQuery("SensorReading", "time", { ...base, aggregate: agg });
+    expect(make({ x: { avg: "deviceId", as: "bigint" } })).toThrow(/not valid for "avg"/); // avg is fractional
+    expect(make({ x: { count: "deviceId", as: "string" } })).toThrow(/not valid for "count"/); // count is an integer
+    expect(make({ x: { min: "deviceId", as: "bigint" } })).toThrow(/not valid for "min"/); // min/max have no `as`
+    expect(make({ x: { sum: "deviceId", as: "float" } })).toThrow(/not valid for "sum"/); // unknown `as` value
+  });
+
   it("appends equality filters as bound params", () => {
     const { sql, params } = buildTimeBucketQuery("SensorReading", "time", { ...base, where: { deviceId: 1 } });
     expect(sql).toContain(`AND ("deviceId" = $4)`);

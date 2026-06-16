@@ -135,6 +135,27 @@ describe.skipIf(!DOCKER_OK)("reset-safety (generated migrations)", () => {
       expect(agg.sumDev).toBe(6);
       expect(agg.avgDev).toBeCloseTo(1.2);
 
+      // Exact-output `as` selector (README limitation #2): integer aggregates as a native
+      // `bigint` (exact past 2^53), fractional as an exact decimal `string`, default `number`.
+      const [exact] = await prisma.sensorReading.timeBucket({
+        bucket: "1 day",
+        range: { start: new Date("2026-06-15T00:00:00Z"), end: new Date("2026-06-16T00:00:00Z") },
+        aggregate: {
+          sumBig: { sum: "deviceId", as: "bigint" },
+          rowsBig: { count: "deviceId", as: "bigint" },
+          avgStr: { avg: "deviceId", as: "string" },
+          sumNum: { sum: "deviceId" },
+        },
+      });
+      expect(typeof exact.sumBig).toBe("bigint");
+      expect(exact.sumBig).toBe(6n);
+      expect(typeof exact.rowsBig).toBe("bigint");
+      expect(exact.rowsBig).toBe(5n); // count of all 5 rows
+      expect(typeof exact.avgStr).toBe("string");
+      expect(Number(exact.avgStr)).toBeCloseTo(1.2); // exact decimal text, e.g. "1.2000000000000000"
+      expect(typeof exact.sumNum).toBe("number");
+      expect(exact.sumNum).toBe(6);
+
       // Refresh the continuous aggregate, then read it as a normal typed Prisma view.
       await prisma.$timescale.refreshContinuousAggregate("SensorHourly");
       const hourly = await prisma.sensorHourly.findMany({ orderBy: [{ deviceId: "asc" }, { bucket: "asc" }] });

@@ -22,16 +22,38 @@ type NumericColumn<R> = { [K in keyof R]-?: NonNullable<R[K]> extends number ? K
 /** Any scalar column name of `R` (valid target for count / groupBy). */
 type AnyColumn<R> = Extract<keyof R, string>;
 
-/** A single aggregate operation: one function applied to one column of `R`. */
+/**
+ * Exact-output selector for an aggregate result column. By default results come back as a JS
+ * `number` (sum/avg are cast to `double precision`, so magnitudes past 2^53 lose precision).
+ * Opt into an exact type per aggregate:
+ *  - `"bigint"` -> a native JS `bigint` (Postgres `::bigint`): exact integers, and avoids the
+ *    `count` overflow that the default `::int` hits past ~2.1B rows in a single bucket.
+ *  - `"string"` -> the exact decimal as a JS `string` (Postgres `::text`): exact for `avg` and
+ *    large fractional sums, JSON-safe, and free of any Prisma-internal type coupling.
+ * Restricted per function: `avg` can't be `"bigint"` (it is fractional); `count` can't be
+ * `"string"` (it is an integer count).
+ */
+export type SumAs = "number" | "bigint" | "string";
+export type AvgAs = "number" | "string";
+export type CountAs = "number" | "bigint";
+
+/** A single aggregate operation: one function applied to one column of `R` (+ optional `as`). */
 export type AggregateOp<R> =
-  | { avg: NumericColumn<R> }
-  | { sum: NumericColumn<R> }
+  | { sum: NumericColumn<R>; as?: SumAs }
+  | { avg: NumericColumn<R>; as?: AvgAs }
   | { min: NumericColumn<R> }
   | { max: NumericColumn<R> }
-  | { count: AnyColumn<R> };
+  | { count: AnyColumn<R>; as?: CountAs };
 
 /** The `aggregate` spec: result-column name -> aggregate operation. */
 export type AggregateInput<R> = Record<string, AggregateOp<R>>;
+
+/** Map an aggregate op's `as` selector to its result-row TS type (default `number`). */
+export type AggOutput<Op> = Op extends { as: "bigint" }
+  ? bigint
+  : Op extends { as: "string" }
+    ? string
+    : number;
 
 /** Arguments to `timeBucket`. `R` is the model's scalar row, `W` its where input. */
 export interface TimeBucketArgs<R, W = unknown> {
@@ -49,11 +71,11 @@ export interface TimeBucketArgs<R, W = unknown> {
 
 type GroupByOf<A> = A extends { groupBy: ReadonlyArray<infer G> } ? G : never;
 
-/** The inferred result row: bucket + selected group-by columns + each aggregate (as number). */
+/** The inferred result row: bucket + selected group-by columns + each aggregate (typed by `as`). */
 export type TimeBucketRow<R, A extends TimeBucketArgs<R, unknown>> = Prettify<
   { bucket: Date } & { [K in Extract<GroupByOf<A>, keyof R>]: R[K] } & {
     // -readonly: `const A` marks the aggregate keys readonly; the result row shouldn't be.
-    -readonly [K in keyof A["aggregate"]]: number;
+    -readonly [K in keyof A["aggregate"]]: AggOutput<A["aggregate"][K]>;
   }
 >;
 
@@ -67,7 +89,33 @@ export interface TimeBucketMethod {
 
 // --- runtime SQL builder ---------------------------------------------------
 
-const AGG_FNS = new Set(["avg", "sum", "min", "max", "count"]);
+// Valid `as` output per aggregate function — mirrors the per-function TS unions, and doubles
+// as the set of valid function names. The runtime checks against this so a TypeScript bypass
+// (an `any` cast or dynamically-built args) can't slip through a combination the types forbid
+// — e.g. `avg` + `bigint` (which would silently round) or `count` + `string`.
+const AGG_AS: Record<string, ReadonlySet<string>> = {
+  sum: new Set(["number", "bigint", "string"]),
+  avg: new Set(["number", "string"]),
+  min: new Set(["number"]),
+  max: new Set(["number"]),
+  count: new Set(["number", "bigint"]),
+};
+
+/**
+ * SQL cast that controls the JS type Prisma returns for an aggregate — the cast IS the type
+ * selector (verified against Prisma 7 + @prisma/adapter-pg):
+ *   `::bigint` -> JS `bigint` (exact integers)   `::text` -> JS `string` (exact decimal)
+ * Default (`"number"` / unset): `count` -> `::int`, `sum`/`avg` -> `::double precision`
+ * (JS `number`, loses precision past 2^53), `min`/`max` -> native (already a number for the
+ * numeric column types those accept). Callers are validated against AGG_AS first.
+ */
+function castFor(fn: string, outputAs: string | undefined): string {
+  if (outputAs === "bigint") return "::bigint";
+  if (outputAs === "string") return "::text";
+  if (fn === "count") return "::int";
+  if (fn === "sum" || fn === "avg") return "::double precision";
+  return ""; // min/max keep the column type
+}
 
 /** Loose runtime view of the args (the precise types live in TimeBucketMethod). */
 export interface TimeBucketRuntimeArgs {
@@ -122,27 +170,24 @@ export function buildTimeBucketQuery(
   }
   for (const [resultName, op] of aggregateEntries) {
     assertSafeIdent(resultName, "aggregate result column");
-    const entry = Object.entries(op)[0];
+    // Split the optional `as` selector from the single function entry ({ sum: "x", as: "bigint" }).
+    const { as: outputAs, ...fnPart } = op;
+    const entry = Object.entries(fnPart)[0];
     if (!entry) throw new Error(`timeBucket: aggregate "${resultName}" must specify a function.`);
     const [fn, column] = entry;
-    if (!AGG_FNS.has(fn)) {
+    const allowedAs = AGG_AS[fn];
+    if (!allowedAs) {
       throw new Error(`timeBucket: unsupported aggregate function "${fn}" for "${resultName}".`);
+    }
+    if (outputAs !== undefined && !allowedAs.has(outputAs)) {
+      throw new Error(
+        `timeBucket: as: ${JSON.stringify(outputAs)} is not valid for "${fn}" on "${resultName}" (allowed: ${[...allowedAs].join(", ")}).`,
+      );
     }
     const src = quoteIdent(col(column));
     const alias = quoteIdent(resultName);
-    // Cast so results come back as JS numbers (matching the typed `number` result), instead
-    // of Prisma's BigInt/Decimal for integer-column aggregates:
-    //   count -> ::int        (Postgres count is bigint)
-    //   sum/avg -> ::float8    (sum of int is bigint; avg of int is numeric)
-    // min/max already return the column's own (numeric) type. NB: float8 means sums beyond
-    // 2^53 lose exactness — acceptable for the `number` contract.
-    if (fn === "count") {
-      select.push(`count(${src})::int AS ${alias}`);
-    } else if (fn === "sum" || fn === "avg") {
-      select.push(`${fn}(${src})::double precision AS ${alias}`);
-    } else {
-      select.push(`${fn}(${src}) AS ${alias}`);
-    }
+    // The cast picks the JS return type: default `number`, or exact `bigint`/`string` via `as`.
+    select.push(`${fn}(${src})${castFor(fn, outputAs)} AS ${alias}`);
   }
 
   let where = `${time} >= $2 AND ${time} < $3`;
