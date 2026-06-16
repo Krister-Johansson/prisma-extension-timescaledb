@@ -134,4 +134,11 @@ export function timescaledb<const C extends TimescaleConfig = TimescaleConfig>(c
 }
 
 export type { TimeBucketArgs, TimeBucketRow, AggregateInput } from "./timeBucket.js";
-export type { TimescaleManage, RefreshRange } from "./manage.js";
+export type {
+  TimescaleManage,
+  RefreshRange,
+  TimescaleJob,
+  JobStats,
+  JobError,
+  AlterJobOptions,
+} from "./manage.js";

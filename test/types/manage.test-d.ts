@@ -2,7 +2,7 @@
 // A name argument is constrained to the registered model names, so a typo fails to compile.
 import { timescaledb } from "../../src/index.js";
 import type { CaggModelNames, HypertableModelNames, NamesOrString } from "../../src/client/index.js";
-import type { TimescaleManage } from "../../src/client/manage.js";
+import type { TimescaleManage, TimescaleJob, JobStats, JobError } from "../../src/client/manage.js";
 
 type Equal<X, Y> = (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2 ? true : false;
 type Expect<T extends true> = T;
@@ -87,6 +87,27 @@ m.setChunkInterval("SensorRead", "1 day");
 // @ts-expect-error - `interval` must be a valid interval (branded template)
 m.setChunkInterval("SensorReading", "1 fortnight");
 loose.setChunkInterval("anything", "1 day"); // ok — string fallback
+
+// jobs: introspection takes a hypertable OR cagg model (or nothing); control takes a numeric job id
+const _jobs: Promise<TimescaleJob[]> = m.listJobs();
+m.listJobs("SensorReading"); // ok (hypertable)
+m.listJobs("SensorHourly"); // ok (cagg)
+const _stats: Promise<JobStats[]> = m.jobStats("DeviceLog");
+const _errs: Promise<JobError[]> = m.jobErrors();
+void _jobs;
+void _stats;
+void _errs;
+// @ts-expect-error - "Nope" is not a registered model
+m.listJobs("Nope");
+m.alterJob(1000, { scheduled: false }); // ok
+m.alterJob(1000, { scheduleInterval: "6 hours", config: { drop_after: "60 days" } }); // ok
+// @ts-expect-error - scheduleInterval must be a valid interval (branded template)
+m.alterJob(1000, { scheduleInterval: "1 fortnight" });
+// @ts-expect-error - a job id is a number, not a string
+m.deleteJob("1000");
+m.runJob(1002); // ok
+loose.listJobs("anything"); // ok — string fallback
+loose.alterJob(1, { scheduled: true }); // ok
 
 // --- 2) name extraction from a const registry (model ?? table / model ?? name) ---
 const mapped = {

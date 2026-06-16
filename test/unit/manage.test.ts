@@ -406,3 +406,137 @@ describe("makeManage chunk interval", () => {
     await expect(makeManage(fakeClient().client).setChunkInterval("bad name", "1 day")).rejects.toThrow(/Invalid/);
   });
 });
+
+describe("makeManage job introspection", () => {
+  const jobRow = {
+    job_id: 1000,
+    proc_name: "policy_retention",
+    hypertable_name: "Sensor",
+    schedule_interval: "1 day",
+    scheduled: true,
+    config: { drop_after: "30 days" },
+    next_start: new Date("2030-01-01T00:00:00Z"),
+  };
+
+  it("listJobs() reads the jobs view (no filter) and maps rows to camelCase", async () => {
+    const { client, queries } = fakeClient([jobRow]);
+    const jobs = await makeManage(client).listJobs();
+    expect(queries).toHaveLength(1);
+    expect(queries[0]!.sql).toContain("FROM timescaledb_information.jobs");
+    expect(queries[0]!.sql).toContain("schedule_interval::text AS schedule_interval");
+    expect(queries[0]!.sql).not.toContain("WHERE");
+    expect(queries[0]!.sql.endsWith("ORDER BY job_id")).toBe(true);
+    expect(queries[0]!.params).toEqual([]);
+    expect(jobs[0]).toEqual({
+      jobId: 1000,
+      procName: "policy_retention",
+      hypertableName: "Sensor",
+      scheduleInterval: "1 day",
+      scheduled: true,
+      config: { drop_after: "30 days" },
+      nextStart: new Date("2030-01-01T00:00:00Z"),
+    });
+  });
+
+  it("listJobs(model) filters by hypertable_name as a bound param", async () => {
+    const { client, queries } = fakeClient([]);
+    await makeManage(client).listJobs("SensorReading");
+    expect(queries[0]!.sql).toContain("WHERE hypertable_name = $1");
+    expect(queries[0]!.params).toEqual(["SensorReading"]);
+  });
+
+  it("resolves a model's @@map table + @@schema for the filter (two params)", async () => {
+    const { client, queries } = fakeClient([]);
+    const hypertableByModel = new Map([["SensorReading", { table: "sensor_readings", schema: "metrics" }]]);
+    await makeManage(client, new Map(), { hypertableByModel }).listJobs("SensorReading");
+    expect(queries[0]!.sql).toContain("WHERE hypertable_name = $1 AND hypertable_schema = $2");
+    expect(queries[0]!.params).toEqual(["sensor_readings", "metrics"]);
+  });
+
+  it("a continuous-aggregate model resolves to its view name (cagg jobs key on the view)", async () => {
+    const { client, queries } = fakeClient([]);
+    const viewByModel = new Map([["SensorHourly", { name: "sensor_hourly" }]]);
+    await makeManage(client, viewByModel).listJobs("SensorHourly");
+    expect(queries[0]!.params).toEqual(["sensor_hourly"]);
+  });
+
+  it("jobStats() coalesces null counts to 0n and returns bigint totals", async () => {
+    const { client, queries } = fakeClient([
+      { job_id: 1000, total_runs: 5n, total_successes: 4n, total_failures: 1n },
+      { job_id: 1001, total_runs: null, total_successes: null, total_failures: null },
+    ]);
+    const stats = await makeManage(client).jobStats();
+    expect(queries[0]!.sql).toContain("FROM timescaledb_information.job_stats");
+    expect(queries[0]!.sql).toContain("COALESCE(total_runs, 0)::bigint AS total_runs");
+    expect(stats[0]!.totalRuns).toBe(5n);
+    expect(stats[1]!.totalRuns).toBe(0n);
+    expect(stats[1]!.totalFailures).toBe(0n);
+  });
+
+  it("jobErrors() reads job_errors directly; jobErrors(model) joins to jobs for the filter", async () => {
+    const { client, queries } = fakeClient([]);
+    const m = makeManage(client);
+    await m.jobErrors();
+    expect(queries[0]!.sql).toContain("FROM timescaledb_information.job_errors e");
+    expect(queries[0]!.sql).not.toContain("JOIN");
+    await m.jobErrors("SensorReading");
+    expect(queries[1]!.sql).toContain("JOIN timescaledb_information.jobs j ON j.job_id = e.job_id");
+    expect(queries[1]!.sql).toContain("WHERE j.hypertable_name = $1");
+    expect(queries[1]!.params).toEqual(["SensorReading"]);
+  });
+
+  it("jobErrors(model) adds the @@schema clause and maps the @@map table", async () => {
+    const { client, queries } = fakeClient([]);
+    const hypertableByModel = new Map([["SensorReading", { table: "sensor_readings", schema: "metrics" }]]);
+    await makeManage(client, new Map(), { hypertableByModel }).jobErrors("SensorReading");
+    expect(queries[0]!.sql).toContain("WHERE j.hypertable_name = $1 AND j.hypertable_schema = $2");
+    expect(queries[0]!.params).toEqual(["sensor_readings", "metrics"]);
+  });
+});
+
+describe("makeManage job control", () => {
+  it("alterJob pause emits scheduled => FALSE with if_exists", async () => {
+    const { client, calls } = fakeClient();
+    await makeManage(client).alterJob(1000, { scheduled: false });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.sql).toBe("SELECT alter_job(1000, scheduled => FALSE, if_exists => TRUE)");
+    expect(calls[0]!.params).toEqual([]);
+  });
+
+  it("alterJob builds interval/int literals and binds nextStart + config (jsonb)", async () => {
+    const { client, calls } = fakeClient();
+    const next = new Date("2030-01-01T00:00:00Z");
+    await makeManage(client).alterJob(1000, {
+      scheduleInterval: "6 hours",
+      maxRetries: 3,
+      nextStart: next,
+      config: { drop_after: "60 days" },
+    });
+    expect(calls[0]!.sql).toBe(
+      "SELECT alter_job(1000, schedule_interval => INTERVAL '6 hours', max_retries => 3, next_start => $1, config => $2::jsonb, if_exists => TRUE)",
+    );
+    expect(calls[0]!.params).toEqual([next, '{"drop_after":"60 days"}']);
+  });
+
+  it("alterJob rejects an empty option set, a bad job id, a bad interval, and a bad maxRetries", async () => {
+    const m = makeManage(fakeClient().client);
+    await expect(m.alterJob(1000, {})).rejects.toThrow(/at least one option/);
+    await expect(m.alterJob(-1, { scheduled: false })).rejects.toThrow(/Invalid job id/);
+    await expect(m.alterJob(1.5, { scheduled: false })).rejects.toThrow(/Invalid job id/);
+    await expect(m.alterJob(1000, { scheduleInterval: "1 fortnight" as never })).rejects.toThrow(/Invalid interval/);
+    await expect(m.alterJob(1000, { maxRetries: -1 })).rejects.toThrow(/non-negative integer/);
+  });
+
+  it("deleteJob and runJob emit the right SQL (run_job via CALL)", async () => {
+    const { client, calls } = fakeClient();
+    const m = makeManage(client);
+    await m.deleteJob(1000);
+    expect(calls[0]!.sql).toBe("SELECT delete_job(1000)");
+    await m.runJob(1002);
+    expect(calls[1]!.sql).toBe("CALL run_job(1002)");
+  });
+
+  it("runJob rejects a non-integer job id", async () => {
+    await expect(makeManage(fakeClient().client).runJob(1.5)).rejects.toThrow(/Invalid job id/);
+  });
+});

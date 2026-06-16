@@ -97,6 +97,72 @@ export interface ManageOptions {
   sleep?: (ms: number) => Promise<void>;
 }
 
+/** A background job / policy row from `timescaledb_information.jobs`. */
+export interface TimescaleJob {
+  /** Numeric job id — the handle passed to alterJob / deleteJob / runJob. */
+  jobId: number;
+  /** Procedure name, e.g. `policy_retention`, `policy_compression`, `policy_refresh_continuous_aggregate`, or a custom action. */
+  procName: string;
+  /** Hypertable or continuous-aggregate (view) name the job targets; null for jobs not tied to a relation. */
+  hypertableName: string | null;
+  /** Run cadence (`schedule_interval`) as text, e.g. "1 day"; null for event-only jobs. */
+  scheduleInterval: string | null;
+  /** Whether the scheduler runs it (false = paused). */
+  scheduled: boolean;
+  /** The job's JSONB config (policy parameters), already parsed. */
+  config: unknown;
+  /** Next scheduled start; null if unscheduled. */
+  nextStart: Date | null;
+}
+
+/** Per-job run statistics from `timescaledb_information.job_stats`. */
+export interface JobStats {
+  jobId: number;
+  hypertableName: string | null;
+  lastRunStartedAt: Date | null;
+  lastSuccessfulFinish: Date | null;
+  /** `Success` | `Failed` | … ; null before the first tracked run. */
+  lastRunStatus: string | null;
+  /** `Scheduled` | `Running` | `Paused` | … */
+  jobStatus: string | null;
+  /** Duration of the last run, as text; null before the first run. */
+  lastRunDuration: string | null;
+  nextStart: Date | null;
+  totalRuns: bigint;
+  totalSuccesses: bigint;
+  totalFailures: bigint;
+}
+
+/** A recorded job failure from `timescaledb_information.job_errors`. */
+export interface JobError {
+  jobId: number;
+  procName: string | null;
+  startTime: Date | null;
+  finishTime: Date | null;
+  /** Postgres SQLSTATE of the failure. */
+  sqlerrcode: string | null;
+  /** Error message text (`err_message`). */
+  message: string | null;
+}
+
+/** Options for `alterJob` — only the provided fields change; at least one is required. */
+export interface AlterJobOptions {
+  /** New run cadence (`schedule_interval`). */
+  scheduleInterval?: Interval;
+  /** Max time a single run may take (`max_runtime`). */
+  maxRuntime?: Interval;
+  /** Retry attempts on failure (`max_retries`). */
+  maxRetries?: number;
+  /** Wait between retries (`retry_period`). */
+  retryPeriod?: Interval;
+  /** Pause (`false`) or resume (`true`) the job. */
+  scheduled?: boolean;
+  /** Force the next start time (e.g. to run soon). To run immediately and synchronously, use `runJob`. */
+  nextStart?: Date;
+  /** Replace the job's JSONB config. */
+  config?: unknown;
+}
+
 /**
  * The `$timescale` management namespace. The type parameters are the registered model-name
  * unions taken from the config/registry, so a name argument is checked at compile time — a
@@ -195,6 +261,33 @@ export interface TimescaleManage<HModels extends string = string, CModels extend
    * the schema does not change it, since `create_hypertable` is a no-op once the table exists.
    */
   setChunkInterval(model: HModels, interval: Interval): Promise<void>;
+
+  /**
+   * List background jobs / policies — `timescaledb_information.jobs`. Pass a model name (hypertable
+   * or continuous aggregate) to filter to that relation's jobs; omit for all. Surfaces the policies
+   * this package creates (retention, compression, cagg refresh) plus any custom jobs, with their ids.
+   */
+  listJobs(model?: HModels | CModels): Promise<TimescaleJob[]>;
+
+  /** Per-job run statistics — last/next run, status, and success/failure counts (`job_stats`). Optionally filtered by model. */
+  jobStats(model?: HModels | CModels): Promise<JobStats[]>;
+
+  /** Recent job failures — SQLSTATE + message (`job_errors`), newest first. Optionally filtered by model. */
+  jobErrors(model?: HModels | CModels): Promise<JobError[]>;
+
+  /**
+   * Change a job's schedule or config — `alter_job`. Identify the job by its numeric id (from
+   * `listJobs`). `{ scheduled: false }` pauses a policy, `{ scheduled: true }` resumes it,
+   * `scheduleInterval` / `nextStart` reschedule, and `config` retunes it. No-op if the job no longer
+   * exists (`if_exists`). At least one option must be provided.
+   */
+  alterJob(jobId: number, options: AlterJobOptions): Promise<void>;
+
+  /** Delete a job by id — `delete_job`. (Policy jobs are better removed via their dedicated remove* method.) */
+  deleteJob(jobId: number): Promise<void>;
+
+  /** Run a job now, synchronously, regardless of its schedule — `run_job`. */
+  runJob(jobId: number): Promise<void>;
 }
 
 // SQLSTATE 55P03 (lock_not_available): TimescaleDB raises this when a manual
@@ -280,6 +373,36 @@ export function makeManage<HModels extends string = string, CModels extends stri
     assertSafeIdent(dbColumn, "chunk-skipping column");
     const rel = relationLiteral(ref.table, ref.schema);
     return `DO $$ BEGIN SET LOCAL timescaledb.enable_chunk_skipping = on; PERFORM ${fn}(${rel}, ${quoteLiteral(dbColumn)}, if_not_exists => TRUE); END $$`;
+  };
+
+  /** Validate a job id and render it as a SQL integer literal (it is a number, so inlining is injection-safe). */
+  const jobIdLiteral = (jobId: number): string => {
+    if (!Number.isInteger(jobId) || jobId < 0) {
+      throw new Error(`Invalid job id ${JSON.stringify(jobId)}: expected a non-negative integer.`);
+    }
+    return String(jobId);
+  };
+
+  /** Resolve a model name to the DB relation name the jobs views key on: a hypertable's table, or a cagg's view name. */
+  const resolveRelationName = (model: string): { name: string; schema?: string } => {
+    const ht = hypertableByModel.get(model);
+    if (ht) return { name: ht.table, ...(ht.schema !== undefined ? { schema: ht.schema } : {}) };
+    const cagg = viewByModel.get(model);
+    if (cagg) return { name: cagg.name, ...(cagg.schema !== undefined ? { schema: cagg.schema } : {}) };
+    return { name: model };
+  };
+
+  /** Build a `hypertable_name`/`hypertable_schema` filter (bound params) for the jobs views; empty when no model. */
+  const jobFilter = (model: string | undefined, prefix = ""): { where: string; params: unknown[] } => {
+    if (model === undefined) return { where: "", params: [] };
+    const rel = resolveRelationName(model);
+    const params: unknown[] = [rel.name];
+    let where = `WHERE ${prefix}hypertable_name = $1`;
+    if (rel.schema !== undefined) {
+      params.push(rel.schema);
+      where += ` AND ${prefix}hypertable_schema = $2`;
+    }
+    return { where, params };
   };
 
   return {
@@ -459,6 +582,176 @@ export function makeManage<HModels extends string = string, CModels extends stri
       // bind param would be type-ambiguous); no dimension_name => the time dimension. No cast on the
       // relation (constraint 2).
       await client.$executeRawUnsafe(`SELECT set_partitioning_interval(${rel}, INTERVAL ${quoteLiteral(interval)})`);
+    },
+
+    async listJobs(model) {
+      const { where, params } = jobFilter(model);
+      const rows = await client.$queryRawUnsafe<
+        {
+          job_id: number;
+          proc_name: string;
+          hypertable_name: string | null;
+          schedule_interval: string | null;
+          scheduled: boolean;
+          config: unknown;
+          next_start: Date | null;
+        }[]
+      >(
+        [
+          "SELECT job_id, proc_name, hypertable_name, schedule_interval::text AS schedule_interval, scheduled, config, next_start",
+          "FROM timescaledb_information.jobs",
+          where,
+          "ORDER BY job_id",
+        ]
+          .filter(Boolean)
+          .join(" "),
+        ...params,
+      );
+      return rows.map((r) => ({
+        jobId: Number(r.job_id),
+        procName: r.proc_name,
+        hypertableName: r.hypertable_name,
+        scheduleInterval: r.schedule_interval,
+        scheduled: r.scheduled,
+        config: r.config,
+        nextStart: r.next_start,
+      }));
+    },
+
+    async jobStats(model) {
+      const { where, params } = jobFilter(model);
+      const rows = await client.$queryRawUnsafe<
+        {
+          job_id: number;
+          hypertable_name: string | null;
+          last_run_started_at: Date | null;
+          last_successful_finish: Date | null;
+          last_run_status: string | null;
+          job_status: string | null;
+          last_run_duration: string | null;
+          next_start: Date | null;
+          total_runs: bigint | null;
+          total_successes: bigint | null;
+          total_failures: bigint | null;
+        }[]
+      >(
+        [
+          "SELECT job_id, hypertable_name, last_run_started_at, last_successful_finish, last_run_status,",
+          "job_status, last_run_duration::text AS last_run_duration, next_start,",
+          "COALESCE(total_runs, 0)::bigint AS total_runs,",
+          "COALESCE(total_successes, 0)::bigint AS total_successes,",
+          "COALESCE(total_failures, 0)::bigint AS total_failures",
+          "FROM timescaledb_information.job_stats",
+          where,
+          "ORDER BY job_id",
+        ]
+          .filter(Boolean)
+          .join(" "),
+        ...params,
+      );
+      return rows.map((r) => ({
+        jobId: Number(r.job_id),
+        hypertableName: r.hypertable_name,
+        lastRunStartedAt: r.last_run_started_at,
+        lastSuccessfulFinish: r.last_successful_finish,
+        lastRunStatus: r.last_run_status,
+        jobStatus: r.job_status,
+        lastRunDuration: r.last_run_duration,
+        nextStart: r.next_start,
+        totalRuns: r.total_runs ?? 0n,
+        totalSuccesses: r.total_successes ?? 0n,
+        totalFailures: r.total_failures ?? 0n,
+      }));
+    },
+
+    async jobErrors(model) {
+      // job_errors has no hypertable_name column, so a model filter joins to the jobs view by job_id.
+      const rel = model === undefined ? undefined : resolveRelationName(model);
+      const params: unknown[] = [];
+      let from = "timescaledb_information.job_errors e";
+      let where = "";
+      if (rel) {
+        from += " JOIN timescaledb_information.jobs j ON j.job_id = e.job_id";
+        params.push(rel.name);
+        where = "WHERE j.hypertable_name = $1";
+        if (rel.schema !== undefined) {
+          params.push(rel.schema);
+          where += " AND j.hypertable_schema = $2";
+        }
+      }
+      const rows = await client.$queryRawUnsafe<
+        {
+          job_id: number;
+          proc_name: string | null;
+          start_time: Date | null;
+          finish_time: Date | null;
+          sqlerrcode: string | null;
+          err_message: string | null;
+        }[]
+      >(
+        [
+          "SELECT e.job_id, e.proc_name, e.start_time, e.finish_time, e.sqlerrcode, e.err_message",
+          `FROM ${from}`,
+          where,
+          "ORDER BY e.start_time DESC NULLS LAST",
+        ]
+          .filter(Boolean)
+          .join(" "),
+        ...params,
+      );
+      return rows.map((r) => ({
+        jobId: Number(r.job_id),
+        procName: r.proc_name,
+        startTime: r.start_time,
+        finishTime: r.finish_time,
+        sqlerrcode: r.sqlerrcode,
+        message: r.err_message,
+      }));
+    },
+
+    async alterJob(jobId, options) {
+      const id = jobIdLiteral(jobId);
+      const args: string[] = [];
+      const params: unknown[] = [];
+      const interval = (key: string, value: Interval | undefined): void => {
+        if (value === undefined) return;
+        assertInterval(value);
+        args.push(`${key} => INTERVAL ${quoteLiteral(value)}`);
+      };
+      interval("schedule_interval", options.scheduleInterval);
+      interval("max_runtime", options.maxRuntime);
+      interval("retry_period", options.retryPeriod);
+      if (options.maxRetries !== undefined) {
+        if (!Number.isInteger(options.maxRetries) || options.maxRetries < 0) {
+          throw new Error(
+            `alterJob: maxRetries must be a non-negative integer (got ${JSON.stringify(options.maxRetries)}).`,
+          );
+        }
+        args.push(`max_retries => ${options.maxRetries}`);
+      }
+      if (options.scheduled !== undefined) args.push(`scheduled => ${options.scheduled ? "TRUE" : "FALSE"}`);
+      if (options.nextStart !== undefined) {
+        params.push(options.nextStart);
+        args.push(`next_start => $${params.length}`);
+      }
+      if (options.config !== undefined) {
+        params.push(JSON.stringify(options.config));
+        args.push(`config => $${params.length}::jsonb`);
+      }
+      if (args.length === 0) {
+        throw new Error("alterJob: specify at least one option to change.");
+      }
+      // if_exists => TRUE makes altering an already-removed job a no-op instead of an error.
+      await client.$executeRawUnsafe(`SELECT alter_job(${id}, ${args.join(", ")}, if_exists => TRUE)`, ...params);
+    },
+
+    async deleteJob(jobId) {
+      await client.$executeRawUnsafe(`SELECT delete_job(${jobIdLiteral(jobId)})`);
+    },
+
+    async runJob(jobId) {
+      // run_job is a PROCEDURE — CALL it; it runs the job synchronously on this connection.
+      await client.$executeRawUnsafe(`CALL run_job(${jobIdLiteral(jobId)})`);
     },
   };
 }
