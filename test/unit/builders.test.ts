@@ -3,6 +3,7 @@ import { createExtensionSql } from "../../src/core/extension.js";
 import { createHypertableSql } from "../../src/core/hypertable.js";
 import { createContinuousAggregateSql } from "../../src/core/continuousAggregate.js";
 import { createRetentionPolicySql } from "../../src/core/retention.js";
+import { createCompressionPolicySql } from "../../src/core/compression.js";
 import type { CaggConfig } from "../../src/core/types.js";
 
 describe("createExtensionSql", () => {
@@ -166,5 +167,82 @@ describe("createRetentionPolicySql", () => {
     expect(() => createRetentionPolicySql({ table: "X", dropAfter: "1 fortnight" as never })).toThrow(
       /Invalid interval/,
     );
+  });
+});
+
+describe("createCompressionPolicySql", () => {
+  const sql = createCompressionPolicySql({
+    table: "SensorReading",
+    after: "7 days",
+    segmentBy: ["deviceId"],
+    orderBy: [{ column: "time", direction: "desc" }],
+  });
+
+  it("enables the columnstore then adds a reset-safe columnstore policy (CALL, not SELECT)", () => {
+    expect(sql.up).toBe(`ALTER TABLE "SensorReading" SET (
+  timescaledb.enable_columnstore = true,
+  timescaledb.segmentby = '"deviceId"',
+  timescaledb.orderby = '"time" DESC'
+);
+CALL add_columnstore_policy('"SensorReading"', after => INTERVAL '7 days', if_not_exists => TRUE);`);
+    expect(sql.down).toBe(`CALL remove_columnstore_policy('"SensorReading"', if_exists => TRUE);`);
+  });
+
+  it("contains NO ::regclass cast; passes the policy relation as a quoted string literal (constraint 2)", () => {
+    expect(sql.up).not.toContain("::regclass");
+    expect(sql.up).toContain(`'"SensorReading"'`);
+  });
+
+  it("is idempotent up and down (if_not_exists / if_exists)", () => {
+    expect(sql.up).toContain("if_not_exists => TRUE");
+    expect(sql.down).toContain("if_exists => TRUE");
+  });
+
+  it("quotes multi-column segmentBy / orderBy identifiers to preserve case, with ASC/DESC/NULLS", () => {
+    const q = createCompressionPolicySql({
+      table: "T",
+      after: "1 day",
+      segmentBy: ["deviceId", "siteId"],
+      orderBy: [
+        { column: "time", direction: "desc" },
+        { column: "deviceId", direction: "asc", nulls: "last" },
+      ],
+    });
+    expect(q.up).toContain(`timescaledb.segmentby = '"deviceId", "siteId"'`);
+    expect(q.up).toContain(`timescaledb.orderby = '"time" DESC, "deviceId" ASC NULLS LAST'`);
+  });
+
+  it("omits segmentby / orderby when not given (columnstore defaults)", () => {
+    const q = createCompressionPolicySql({ table: "T", after: "1 day" });
+    expect(q.up).toContain("timescaledb.enable_columnstore = true");
+    expect(q.up).not.toContain("segmentby");
+    expect(q.up).not.toContain("orderby");
+  });
+
+  it("schema-qualifies the ALTER target and the policy relation under multiSchema (@@schema)", () => {
+    const q = createCompressionPolicySql({
+      table: "sensor_readings",
+      schema: "metrics",
+      after: "7 days",
+      segmentBy: ["device_id"],
+    });
+    expect(q.up).toContain(`ALTER TABLE "metrics"."sensor_readings" SET (`);
+    expect(q.up).toContain(`CALL add_columnstore_policy('"metrics"."sensor_readings"'`);
+    expect(q.down).toContain(`'"metrics"."sensor_readings"'`);
+  });
+
+  it("rejects bad identifiers and intervals", () => {
+    expect(() => createCompressionPolicySql({ table: "a-b", after: "7 days" })).toThrow(/Invalid/);
+    expect(() => createCompressionPolicySql({ table: "X", after: "1 fortnight" as never })).toThrow(/Invalid interval/);
+    expect(() => createCompressionPolicySql({ table: "X", after: "7 days", segmentBy: ["a-b"] })).toThrow(/Invalid/);
+  });
+
+  it("rejects invalid orderBy direction / nulls in object form (fail fast, no silent coercion)", () => {
+    expect(() =>
+      createCompressionPolicySql({ table: "T", after: "1 day", orderBy: [{ column: "time", direction: "ascending" as never }] }),
+    ).toThrow(/Invalid orderBy direction/);
+    expect(() =>
+      createCompressionPolicySql({ table: "T", after: "1 day", orderBy: [{ column: "time", nulls: "frist" as never }] }),
+    ).toThrow(/Invalid orderBy nulls/);
   });
 });

@@ -12,13 +12,14 @@ Prisma can't model TimescaleDB features in its schema language, and the naive se
 
 - 🧱 **Hypertables & continuous aggregates** from `///` schema annotations
 - 🧹 **Retention policies** — drop old chunks automatically via `@timescale.retention` or `$timescale`
+- 🗜️ **Columnstore compression** — compress old chunks automatically via `@timescale.compression` or `$timescale` (TimescaleDB hypercore)
 - ♻️ **Reset-safe migrations** — survive `prisma migrate reset` (proven twice, on real TimescaleDB)
 - 🔎 **Typed `timeBucket(...)` queries** with result-row inference and compile-time column checks
 - 🛟 **Generator-optional** — the client extension works from a manual config too, so a Prisma
   internal-API change can't fully break you
 
-> **Scope:** hypertables, continuous aggregates, retention policies, reset-safe migrations, typed
-> query helpers. Vector / BM25 / hypercore are out of scope for now.
+> **Scope:** hypertables, continuous aggregates, retention & compression policies, reset-safe
+> migrations, typed query helpers. Vector / BM25 are out of scope for now.
 
 ---
 
@@ -30,6 +31,7 @@ Prisma can't model TimescaleDB features in its schema language, and the naive se
 - [Setup in detail](#setup-in-detail)
 - [Runtime usage](#runtime-usage)
 - [Data retention (`@timescale.retention`)](#data-retention-timescaleretention)
+- [Data compression (`@timescale.compression`)](#data-compression-timescalecompression)
 - [Without the generator](#without-the-generator-manual-config)
 - [Renamed tables/columns (`@@map` / `@map`)](#renamed-tablescolumns-map--map)
 - [Shadow database](#shadow-database)
@@ -46,6 +48,8 @@ Prisma can't model TimescaleDB features in its schema language, and the naive se
 - **TimescaleDB-capable PostgreSQL** for both your database and the Prisma **shadow database**
   (see [Shadow database](#shadow-database)). Locally, the
   [`timescale/timescaledb`](https://hub.docker.com/r/timescale/timescaledb) image works.
+  [Compression](#data-compression-timescalecompression) additionally needs **TimescaleDB ≥ 2.18**
+  (the columnstore API).
 - A Prisma **driver adapter** at runtime (e.g. `@prisma/adapter-pg`).
 
 ## Install
@@ -354,6 +358,69 @@ await prisma.$timescale.removeRetentionPolicy("SensorReading");
 
 ---
 
+## Data compression (`@timescale.compression`)
+
+Compress old chunks automatically with TimescaleDB's **columnstore** (hypercore). Annotate the
+hypertable model and the generator emits a **reset-safe** policy into the managed migration:
+
+```prisma
+/// @timescale.hypertable(column: "time", chunkInterval: "1 day")
+/// @timescale.compression(after: "7 days", segmentBy: "deviceId", orderBy: "time DESC")
+model SensorReading {
+  time        DateTime
+  deviceId    Int
+  temperature Float
+
+  @@id([deviceId, time])
+}
+```
+
+- `after` (required) is an [interval](#annotation-reference): chunks older than it are converted to
+  the columnstore on TimescaleDB's schedule.
+- `segmentBy` (optional) — the column(s) the columnstore groups rows by; the **main tuning knob**
+  (queries that filter/group by these stay fast, and compression ratios improve). One Prisma field
+  name, or several comma-separated.
+- `orderBy` (optional) — ordering *within* each segment, e.g. `"time DESC"` (comma-separate for
+  several, each `field [ASC|DESC] [NULLS FIRST|LAST]`).
+
+`segmentBy` and `orderBy` take **Prisma field names** and are mapped to the underlying `@map`
+columns. The policy survives `prisma migrate reset` like everything else this package emits.
+
+Under the hood the generator emits the two statements TimescaleDB needs — enable the columnstore,
+then add the policy (`add_columnstore_policy` is a procedure, hence `CALL`):
+
+```sql
+ALTER TABLE "SensorReading" SET (
+  timescaledb.enable_columnstore = true,
+  timescaledb.segmentby = '"deviceId"',
+  timescaledb.orderby = '"time" DESC'
+);
+CALL add_columnstore_policy('"SensorReading"', after => INTERVAL '7 days', if_not_exists => TRUE);
+```
+
+You can also manage policies at runtime — and this is the path to use with the
+[manual config](#without-the-generator-manual-config) (no annotation):
+
+```ts
+await prisma.$timescale.addCompressionPolicy("SensorReading", {
+  after: "7 days",
+  segmentBy: "deviceId",            // or ["deviceId", "siteId"]
+  orderBy: "time DESC",             // or [{ column: "time", direction: "desc" }]
+});
+await prisma.$timescale.removeCompressionPolicy("SensorReading");
+```
+
+> **Requires TimescaleDB ≥ 2.18** — the columnstore API (`enable_columnstore` /
+> `add_columnstore_policy`). On older versions use the legacy `compress` API by hand.
+
+> **Changing `segmentBy` / `orderBy` / `after`:** like retention, TimescaleDB won't *update* an
+> existing policy in place — `add_columnstore_policy(… if_not_exists => TRUE)` keeps the old one, and
+> changed segment/order settings apply only to **future** compressions. To change them,
+> `removeCompressionPolicy(...)` first (or change the annotation and reset). `removeCompressionPolicy`
+> stops the policy but leaves the columnstore enabled — disabling it fails once chunks are compressed.
+
+---
+
 ## Without the generator (manual config)
 
 The client extension works **without** the generator — pass the config directly:
@@ -368,7 +435,7 @@ const prisma = new PrismaClient({ adapter }).$extends(
 
 The SQL builders are also exported from `prisma-extension-timescaledb/core` for hand-written
 migrations: `createExtensionSql`, `createHypertableSql`, `createContinuousAggregateSql`,
-`createRetentionPolicySql`.
+`createRetentionPolicySql`, `createCompressionPolicySql`.
 
 ---
 
@@ -446,6 +513,7 @@ database) ships in this repo.
 | --- | --- | --- |
 | `@timescale.hypertable` | model | `column` (required), `chunkInterval` (default `"7 days"`) |
 | `@timescale.retention` | model (also a hypertable) | `dropAfter` (required) — drop chunks older than this interval |
+| `@timescale.compression` | model (also a hypertable) | `after` (required) — compress chunks older than this; `segmentBy`, `orderBy` (optional) — columnstore tuning (Prisma field names) |
 | `@timescale.continuousAggregate` | view | `source`, `bucket`, `timeColumn` (required); `refresh: { startOffset, endOffset, scheduleInterval }` (optional) |
 | `@timescale.bucket` | view field | — (exactly one per aggregate) |
 | `@timescale.groupBy` | view field | — |

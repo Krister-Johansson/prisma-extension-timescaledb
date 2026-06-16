@@ -153,6 +153,39 @@ model SensorReading {
     // Retention is emitted after the create_hypertable it depends on.
     expect(objects.indexOf("create_hypertable")).toBeLessThan(objects.indexOf("add_retention_policy"));
   });
+
+  it("emits the compression policy (enable columnstore + CALL add_columnstore_policy) after its hypertable", async () => {
+    const dmmf = await getDMMF({
+      datamodel: `
+generator client {
+  provider = "prisma-client"
+  output = "../generated/prisma"
+  previewFeatures = ["views"]
+}
+datasource db {
+  provider = "postgresql"
+}
+
+/// @timescale.hypertable(column: "time", chunkInterval: "1 day")
+/// @timescale.compression(after: "7 days", segmentBy: "deviceId", orderBy: "time DESC")
+model SensorReading {
+  time     DateTime
+  deviceId Int
+  @@id([deviceId, time])
+}
+`,
+    });
+    const objects = emitMigrations(extractTimescaleSchema(dmmf))[`${OBJECTS_MIGRATION}/migration.sql`]!;
+    expect(objects).toContain("timescaledb.enable_columnstore = true");
+    expect(objects).toContain(`timescaledb.segmentby = '"deviceId"'`);
+    expect(objects).toContain(`timescaledb.orderby = '"time" DESC'`);
+    expect(objects).toContain(
+      `CALL add_columnstore_policy('"SensorReading"', after => INTERVAL '7 days', if_not_exists => TRUE);`,
+    );
+    expect(objects).not.toContain("::regclass");
+    // Compression is emitted after the create_hypertable it depends on.
+    expect(objects.indexOf("create_hypertable")).toBeLessThan(objects.indexOf("add_columnstore_policy"));
+  });
 });
 
 describe("emitTypes", () => {

@@ -1,6 +1,8 @@
 // The $timescale management namespace (SPEC §4.3).
 import { assertSafeIdent, qualifiedIdent, quoteLiteral, relationLiteral } from "../core/sql.js";
 import { assertInterval, type Interval } from "../core/interval.js";
+import { columnstoreReloptions, parseOrderByTerm } from "../core/compression.js";
+import type { CompressionOrderBy } from "../core/types.js";
 
 /** Resolved DB identity of a continuous aggregate (name + optional @@schema). */
 export interface CaggRef {
@@ -8,16 +10,36 @@ export interface CaggRef {
   schema?: string;
 }
 
-/** Resolved DB identity of a hypertable (relation + optional @@schema). */
+/** Resolved DB identity of a hypertable (relation + optional @@schema + @map column map). */
 export interface HypertableRef {
   table: string;
   schema?: string;
+  /** Prisma field name -> DB column, to map `segmentBy`/`orderBy` in addCompressionPolicy (@map). */
+  columns?: Record<string, string>;
 }
 
 /** Options for a data-retention policy. */
 export interface RetentionOptions {
   /** Drop chunks whose data is older than this interval (TimescaleDB `drop_after`). */
   dropAfter: Interval;
+}
+
+/** One ordering term for `addCompressionPolicy`'s `orderBy` (a Prisma field name + direction). */
+export interface CompressionOrderByInput {
+  /** Prisma field name to order by (mapped to its @map DB column). */
+  column: string;
+  direction?: "asc" | "desc";
+  nulls?: "first" | "last";
+}
+
+/** Options for a columnstore-compression policy. */
+export interface CompressionOptions {
+  /** Convert chunks whose data is older than this interval to the columnstore. */
+  after: Interval;
+  /** Column(s) to segment by — Prisma field name(s), mapped to DB columns. A comma-separated string or an array. */
+  segmentBy?: string | readonly string[];
+  /** Segment-internal ordering — `"time DESC"`, a comma list, an array of terms, or structured objects. */
+  orderBy?: string | readonly (string | CompressionOrderByInput)[];
 }
 
 /** Minimal raw-capable client surface we rely on (PrismaClient provides these). */
@@ -75,6 +97,22 @@ export interface TimescaleManage<HModels extends string = string, CModels extend
 
   /** Remove the data-retention policy from a hypertable (no-op if there is none). */
   removeRetentionPolicy(model: HModels): Promise<void>;
+
+  /**
+   * Add a columnstore-compression policy to a hypertable — enables the columnstore (with the given
+   * `segmentBy`/`orderBy`) and schedules conversion of chunks older than `after` to the columnstore.
+   * Accepts the Prisma model name (resolved via @@map/@@schema) and Prisma field names for
+   * `segmentBy`/`orderBy` (mapped to DB columns). Idempotent. Requires TimescaleDB >= 2.18. NB:
+   * TimescaleDB will NOT update an existing policy whose `after` differs, and changed
+   * `segmentBy`/`orderBy` apply only to future compressions — remove the policy first to change them.
+   */
+  addCompressionPolicy(model: HModels, options: CompressionOptions): Promise<void>;
+
+  /**
+   * Remove the columnstore-compression policy from a hypertable (no-op if there is none). Leaves
+   * the columnstore itself enabled — disabling it fails once any chunk has been compressed.
+   */
+  removeCompressionPolicy(model: HModels): Promise<void>;
 }
 
 // SQLSTATE 55P03 (lock_not_available): TimescaleDB raises this when a manual
@@ -95,6 +133,23 @@ function isConcurrentRefreshError(err: unknown): boolean {
 }
 
 const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Normalize a `segmentBy` input (comma-separated string or array) to trimmed, non-empty field names. */
+function normalizeSegmentBy(input: string | readonly string[] | undefined): string[] | undefined {
+  if (input == null) return undefined;
+  const fields = (typeof input === "string" ? input.split(",") : input).map((s) => s.trim()).filter(Boolean);
+  return fields.length > 0 ? fields : undefined;
+}
+
+/** Normalize an `orderBy` input (comma string, or array of `"col DESC"` strings / structured terms) to terms. */
+function normalizeOrderBy(
+  input: string | readonly (string | CompressionOrderBy)[] | undefined,
+): CompressionOrderBy[] | undefined {
+  if (input == null) return undefined;
+  const entries = typeof input === "string" ? input.split(",").map((s) => s.trim()).filter(Boolean) : input;
+  const terms = entries.map((e) => (typeof e === "string" ? parseOrderByTerm(e) : e));
+  return terms.length > 0 ? terms : undefined;
+}
 
 /** @param viewByModel Prisma view model name -> { DB view name, schema } (for @@map/@@schema). */
 export function makeManage<HModels extends string = string, CModels extends string = string>(
@@ -160,6 +215,30 @@ export function makeManage<HModels extends string = string, CModels extends stri
       const ref = resolveHypertable(model);
       const rel = relationLiteral(ref.table, ref.schema);
       await client.$executeRawUnsafe(`SELECT remove_retention_policy(${rel}, if_exists => TRUE)`);
+    },
+
+    async addCompressionPolicy(model, opts) {
+      const ref = resolveHypertable(model);
+      assertInterval(opts.after);
+      const columns = ref.columns ?? {};
+      const mapCol = (field: string): string => columns[field] ?? field;
+      const segmentBy = normalizeSegmentBy(opts.segmentBy)?.map(mapCol);
+      const orderBy = normalizeOrderBy(opts.orderBy)?.map((o) => ({ ...o, column: mapCol(o.column) }));
+      // columnstoreReloptions validates + quotes the (mapped) column identifiers.
+      const reloptions = columnstoreReloptions(segmentBy, orderBy);
+      const rel = relationLiteral(ref.table, ref.schema);
+      const alterTarget = qualifiedIdent(ref.table, ref.schema);
+      // Two statements: add_columnstore_policy errors unless the columnstore is enabled first.
+      await client.$executeRawUnsafe(`ALTER TABLE ${alterTarget} SET (${reloptions.join(", ")})`);
+      await client.$executeRawUnsafe(
+        `CALL add_columnstore_policy(${rel}, after => INTERVAL ${quoteLiteral(opts.after)}, if_not_exists => TRUE)`,
+      );
+    },
+
+    async removeCompressionPolicy(model) {
+      const ref = resolveHypertable(model);
+      const rel = relationLiteral(ref.table, ref.schema);
+      await client.$executeRawUnsafe(`CALL remove_columnstore_policy(${rel}, if_exists => TRUE)`);
     },
   };
 }

@@ -11,6 +11,7 @@ import { createExtensionSql } from "../core/extension.js";
 import { createHypertableSql } from "../core/hypertable.js";
 import { createContinuousAggregateSql } from "../core/continuousAggregate.js";
 import { createRetentionPolicySql } from "../core/retention.js";
+import { createCompressionPolicySql } from "../core/compression.js";
 
 export const EXTENSION_MIGRATION = "00000000000000_timescaledb_extension";
 export const OBJECTS_MIGRATION = "99999999999999_timescaledb_objects";
@@ -44,6 +45,17 @@ ${createExtensionSql().up}
         dropAfter: h.retention.dropAfter,
       }).up;
       parts.push(`-- Retention policy: ${h.table}\n${sql}`);
+    }
+    if (h.compression) {
+      const c = h.compression;
+      const sql = createCompressionPolicySql({
+        table: h.table,
+        ...(h.schema !== undefined ? { schema: h.schema } : {}),
+        after: c.after,
+        ...(c.segmentBy ? { segmentBy: c.segmentBy } : {}),
+        ...(c.orderBy ? { orderBy: c.orderBy } : {}),
+      }).up;
+      parts.push(`-- Compression (columnstore) policy: ${h.table}\n${sql}`);
     }
   }
   for (const c of caggs) {

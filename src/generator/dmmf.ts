@@ -6,6 +6,8 @@ import type {
   AggregateSpec,
   CaggConfig,
   CaggGroupBy,
+  CompressionConfig,
+  CompressionOrderBy,
   HypertableConfig,
   RefreshPolicy,
   RelationConfig,
@@ -13,6 +15,7 @@ import type {
 } from "../core/types.js";
 import type { Interval } from "../core/interval.js";
 import { assertInterval } from "../core/interval.js";
+import { parseOrderByTerm } from "../core/compression.js";
 import {
   findAnnotation,
   optionalObject,
@@ -42,11 +45,15 @@ export function extractTimescaleSchema(dmmf: DMMF.Document): TimescaleSchema {
     const annotations = parseAnnotations(model.documentation);
     if (findAnnotation(annotations, "hypertable")) {
       hypertables.push(buildHypertable(model, annotations, byName));
-    } else if (findAnnotation(annotations, "retention")) {
-      // Retention attaches to a hypertable's chunks; it is meaningless on a plain model.
-      throw new Error(
-        `@timescale.retention on model "${model.name}": only valid together with @timescale.hypertable.`,
-      );
+    } else {
+      // Retention / compression attach to a hypertable's chunks; meaningless on a plain model.
+      for (const dependent of ["retention", "compression"] as const) {
+        if (findAnnotation(annotations, dependent)) {
+          throw new Error(
+            `@timescale.${dependent} on model "${model.name}": only valid together with @timescale.hypertable.`,
+          );
+        }
+      }
     }
     if (findAnnotation(annotations, "continuousAggregate")) {
       continuousAggregates.push(buildCagg(model, annotations, byName));
@@ -93,6 +100,7 @@ function buildHypertable(
   const columns = columnMap(model);
   const table = dbTable(model);
   const retention = buildRetention(annotations, model.name);
+  const compression = buildCompression(annotations, model);
   const relations = buildRelations(model, byName);
 
   return {
@@ -103,6 +111,7 @@ function buildHypertable(
     ...(chunkInterval !== undefined ? { chunkInterval: chunkInterval as Interval } : {}),
     ...(Object.keys(columns).length > 0 ? { columns } : {}),
     ...(retention ? { retention } : {}),
+    ...(compression ? { compression } : {}),
     ...(relations.length > 0 ? { relations } : {}),
   };
 }
@@ -174,6 +183,54 @@ function buildRetention(
   const dropAfter = requireString(ann.args, "dropAfter", ctx);
   assertInterval(dropAfter);
   return { dropAfter: dropAfter as Interval };
+}
+
+/**
+ * Parse the optional `@timescale.compression(after, segmentBy?, orderBy?)` annotation on a
+ * hypertable model. Validates the `after` interval and resolves the (comma-separated) segmentBy /
+ * orderBy Prisma field names to DB columns (@map), preserving any ASC/DESC/NULLS in orderBy.
+ */
+function buildCompression(
+  annotations: ReturnType<typeof parseAnnotations>,
+  model: DMMF.Model,
+): CompressionConfig | undefined {
+  const ann = findAnnotation(annotations, "compression");
+  if (!ann) return undefined;
+  const ctx = `@timescale.compression on model "${model.name}"`;
+  const after = requireString(ann.args, "after", ctx);
+  assertInterval(after);
+
+  const config: { after: Interval; segmentBy?: string[]; orderBy?: CompressionOrderBy[] } = {
+    after: after as Interval,
+  };
+
+  const segmentByRaw = optionalString(ann.args, "segmentBy", ctx);
+  if (segmentByRaw !== undefined) {
+    const segmentBy = splitList(segmentByRaw).map((name) => {
+      const field = findScalarField(model, name);
+      if (!field) throw new Error(`${ctx}: segmentBy column "${name}" is not a scalar field on the model.`);
+      return dbCol(field);
+    });
+    if (segmentBy.length > 0) config.segmentBy = segmentBy;
+  }
+
+  const orderByRaw = optionalString(ann.args, "orderBy", ctx);
+  if (orderByRaw !== undefined) {
+    const orderBy = splitList(orderByRaw).map((term) => {
+      const parsed = parseOrderByTerm(term);
+      const field = findScalarField(model, parsed.column);
+      if (!field) throw new Error(`${ctx}: orderBy column "${parsed.column}" is not a scalar field on the model.`);
+      return { ...parsed, column: dbCol(field) };
+    });
+    if (orderBy.length > 0) config.orderBy = orderBy;
+  }
+
+  return config;
+}
+
+/** Split a comma-separated annotation list (segmentBy / orderBy) into trimmed, non-empty entries. */
+function splitList(value: string): string[] {
+  return value.split(",").map((s) => s.trim()).filter(Boolean);
 }
 
 /** Build a CaggConfig from a `@timescale.continuousAggregate` view + its field annotations

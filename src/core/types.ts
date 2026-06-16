@@ -13,6 +13,30 @@ export interface RetentionConfig {
   dropAfter: Interval;
 }
 
+/** One ordering term for the columnstore `orderby` setting (segment-internal ordering). */
+export interface CompressionOrderBy {
+  /** Column to order by, as it exists in the DB (the @map name, or field name). */
+  column: string;
+  /** Sort direction; omitted lets TimescaleDB default (ascending). */
+  direction?: "asc" | "desc";
+  /** NULLS placement; omitted lets PostgreSQL default for the direction. */
+  nulls?: "first" | "last";
+}
+
+/**
+ * Optional columnstore-compression policy attached to a hypertable (TimescaleDB hypercore).
+ * Enables the columnstore and schedules conversion of chunks older than `after`. Requires
+ * TimescaleDB >= 2.18 (the `add_columnstore_policy` API).
+ */
+export interface CompressionConfig {
+  /** Convert chunks whose data is older than this interval to the columnstore (`add_columnstore_policy(after => ...)`). */
+  after: Interval;
+  /** Columns to segment the columnstore by (`timescaledb.segmentby`), as DB names. Omitted = TimescaleDB default. */
+  segmentBy?: readonly string[];
+  /** Segment-internal ordering (`timescaledb.orderby`), DB column names. Omitted = TimescaleDB default. */
+  orderBy?: readonly CompressionOrderBy[];
+}
+
 /**
  * A relation from a hypertable to another model, used to support relation filters
  * (`some`/`none`/`every`/`is`/`isNot`) in `timeBucket` where via EXISTS subqueries. All names
@@ -58,6 +82,8 @@ export interface HypertableConfig {
   columns?: Record<string, string>;
   /** Optional data-retention policy (`@timescale.retention`); omitted means no policy. */
   retention?: RetentionConfig;
+  /** Optional columnstore-compression policy (`@timescale.compression`); omitted means no policy. */
+  compression?: CompressionConfig;
   /** Relations to other models, for relation filters in `timeBucket` where (EXISTS subqueries). */
   relations?: readonly RelationConfig[];
 }
