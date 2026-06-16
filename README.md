@@ -307,7 +307,13 @@ timescaledb({
 });
 ```
 
-> Multi-schema (`@@schema`) is not yet supported — see [Limitations](#limitations-v01).
+### Multiple schemas (`@@schema`)
+
+Multi-schema is supported too. Models annotated with `@@schema("metrics")` (with the
+`multiSchema` preview feature) have their hypertables and continuous aggregates created in,
+and queried from, the right schema — the generator and runtime schema-qualify every relation
+(`"metrics"."sensor_readings"`). No extra configuration needed beyond the standard Prisma
+multiSchema setup.
 
 ---
 
@@ -361,9 +367,6 @@ database) ships in this repo.
   `lte`, `gt`, `gte`, `contains`, `startsWith`, `endsWith` + `mode: "insensitive"`), `null`
   checks, and `AND`/`OR`/`NOT`. **Relation filters** (`some`/`none`/`every`) and nested
   `not: { ... }` are not supported (they can't be a single-table query) and throw a clear error.
-- **`@@schema` (multiSchema)** is not yet handled — relations aren't schema-qualified, so
-  models must live in the default schema. (`@@map`/`@map` table & column renaming **is**
-  supported — see [Renamed tables/columns](#renamed-tablescolumns-map--map) below.)
 - **`timeBucket` numeric precision:** results come back as JS `number`s — `count` is cast to
   `int`, and `sum`/`avg` to `double precision` so integer-column aggregates aren't returned as
   `BigInt`/`Decimal`. Caveat: `sum`/`avg` are therefore float64, so a `sum` beyond 2^53 loses

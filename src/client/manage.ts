@@ -1,5 +1,11 @@
 // The $timescale management namespace (SPEC §4.3).
-import { assertSafeIdent, quoteIdent } from "../core/sql.js";
+import { assertSafeIdent, qualifiedIdent } from "../core/sql.js";
+
+/** Resolved DB identity of a continuous aggregate (name + optional @@schema). */
+export interface CaggRef {
+  name: string;
+  schema?: string;
+}
 
 /** Minimal raw-capable client surface we rely on (PrismaClient provides these). */
 export interface RawClient {
@@ -22,12 +28,16 @@ export interface TimescaleManage {
   refreshContinuousAggregate(name: string, range?: RefreshRange): Promise<void>;
 }
 
-/** @param viewByModel Prisma view model name -> DB view name (for @@map resolution). */
-export function makeManage(client: RawClient, viewByModel: ReadonlyMap<string, string> = new Map()): TimescaleManage {
+/** @param viewByModel Prisma view model name -> { DB view name, schema } (for @@map/@@schema). */
+export function makeManage(
+  client: RawClient,
+  viewByModel: ReadonlyMap<string, CaggRef> = new Map(),
+): TimescaleManage {
   return {
     async refreshContinuousAggregate(name, range) {
-      const view = viewByModel.get(name) ?? name;
-      assertSafeIdent(view, "continuous aggregate name");
+      const ref = viewByModel.get(name) ?? { name };
+      assertSafeIdent(ref.name, "continuous aggregate name");
+      if (ref.schema !== undefined) assertSafeIdent(ref.schema, "continuous aggregate schema");
       // Open bounds (full refresh) must be a literal NULL, not a bound param: Postgres
       // can't infer the type of a NULL parameter for the function's "any" window args.
       const params: unknown[] = [];
@@ -36,7 +46,8 @@ export function makeManage(client: RawClient, viewByModel: ReadonlyMap<string, s
         params.push(value);
         return `$${params.length}`;
       };
-      const sql = `CALL refresh_continuous_aggregate('${quoteIdent(view)}', ${bound(range?.start)}, ${bound(range?.end)})`;
+      const target = qualifiedIdent(ref.name, ref.schema);
+      const sql = `CALL refresh_continuous_aggregate('${target}', ${bound(range?.start)}, ${bound(range?.end)})`;
       await client.$executeRawUnsafe(sql, ...params);
     },
   };

@@ -23,16 +23,26 @@ export function quoteLiteral(value: string): string {
 }
 
 /**
+ * Quote a (optionally schema-qualified) relation/identifier for use in DDL/queries.
+ * `qualifiedIdent("sensor_readings", "metrics")` -> `"metrics"."sensor_readings"`;
+ * with no schema -> `"sensor_readings"`.
+ */
+export function qualifiedIdent(name: string, schema?: string): string {
+  return schema ? `${quoteIdent(schema)}.${quoteIdent(name)}` : quoteIdent(name);
+}
+
+/**
  * Render a relation as a quoted *string literal* for TimescaleDB functions that take the
  * relation by name (e.g. create_hypertable, add_continuous_aggregate_policy,
- * refresh_continuous_aggregate). `SensorReading` -> `'"SensorReading"'`.
+ * refresh_continuous_aggregate). `SensorReading` -> `'"SensorReading"'`;
+ * with a schema -> `'"metrics"."sensor_readings"'`.
  *
  * CLAUDE.md constraint 2: NEVER cast (`::regclass` / `::name`) — pass the quoted string
  * literal. Mixed-case names must keep their inner quotes or Postgres case-folds them
  * (the `refresh_continuous_aggregate('sensorhourly')` failure surfaced in the spike).
  */
-export function relationLiteral(name: string): string {
-  return quoteLiteral(quoteIdent(name));
+export function relationLiteral(name: string, schema?: string): string {
+  return quoteLiteral(qualifiedIdent(name, schema));
 }
 
 /**

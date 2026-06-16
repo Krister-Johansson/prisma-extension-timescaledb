@@ -77,6 +77,7 @@ function buildHypertable(model: DMMF.Model, annotations: ReturnType<typeof parse
   return {
     ...(model.name !== table ? { model: model.name } : {}),
     table,
+    ...(model.schema ? { schema: model.schema } : {}),
     column: dbCol(field),
     ...(chunkInterval !== undefined ? { chunkInterval: chunkInterval as Interval } : {}),
     ...(Object.keys(columns).length > 0 ? { columns } : {}),
@@ -164,7 +165,9 @@ function buildCagg(
   return {
     ...(view.name !== viewName ? { model: view.name } : {}),
     name: viewName,
+    ...(view.schema ? { schema: view.schema } : {}),
     source: dbTable(sourceModel),
+    ...(sourceModel.schema ? { sourceSchema: sourceModel.schema } : {}),
     bucket: bucket as Interval,
     timeColumn: dbCol(timeField),
     bucketColumn,

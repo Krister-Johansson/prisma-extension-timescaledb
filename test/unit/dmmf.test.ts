@@ -215,6 +215,49 @@ ${body}
   });
 });
 
+describe("extractTimescaleSchema — @@schema (multiSchema)", () => {
+  it("resolves @@schema to schema / sourceSchema on the configs", async () => {
+    const dmmf = await getDMMF({
+      datamodel: `
+generator client {
+  provider = "prisma-client"
+  output = "../generated/prisma"
+  previewFeatures = ["views", "multiSchema"]
+}
+datasource db {
+  provider = "postgresql"
+  schemas  = ["public", "metrics"]
+}
+
+/// @timescale.hypertable(column: "time", chunkInterval: "1 day")
+model SensorReading {
+  time        DateTime
+  deviceId    Int
+  temperature Float
+  @@id([deviceId, time])
+  @@schema("metrics")
+}
+
+/// @timescale.continuousAggregate(source: "SensorReading", bucket: "1 hour", timeColumn: "time")
+view SensorHourly {
+  bucket  DateTime /// @timescale.bucket
+  avgTemp Float    /// @timescale.aggregate(fn: "avg", column: "temperature")
+  @@unique([bucket])
+  @@schema("metrics")
+}
+`,
+    });
+    const result = extractTimescaleSchema(dmmf);
+    expect(result.hypertables[0]).toMatchObject({ table: "SensorReading", schema: "metrics" });
+    expect(result.continuousAggregates[0]).toMatchObject({
+      name: "SensorHourly",
+      schema: "metrics",
+      source: "SensorReading",
+      sourceSchema: "metrics",
+    });
+  });
+});
+
 describe("extractTimescaleSchema — @@map / @map", () => {
   it("resolves table/column names to DB names and records the column map", async () => {
     const result = await extract(`

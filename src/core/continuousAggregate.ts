@@ -1,7 +1,7 @@
 // Continuous aggregate SQL builder (SPEC §2.3 / CLAUDE.md constraints 3, 4).
 import type { CaggConfig, MigrationSql } from "./types.js";
 import { assertInterval } from "./interval.js";
-import { assertSafeIdent, quoteIdent, quoteLiteral, relationLiteral } from "./sql.js";
+import { assertSafeIdent, qualifiedIdent, quoteIdent, quoteLiteral, relationLiteral } from "./sql.js";
 
 const AGG_FNS = new Set(["avg", "sum", "min", "max", "count"]);
 
@@ -14,13 +14,15 @@ const AGG_FNS = new Set(["avg", "sum", "min", "max", "count"]);
  * - `down` uses `DROP MATERIALIZED VIEW IF EXISTS` — never plain `DROP VIEW` (constraint 4).
  */
 export function createContinuousAggregateSql(config: CaggConfig): MigrationSql {
-  const { name, source, bucket, timeColumn, bucketColumn, aggregates, refresh } = config;
+  const { name, source, schema, sourceSchema, bucket, timeColumn, bucketColumn, aggregates, refresh } = config;
   const groupBy = config.groupBy ?? [];
 
   assertSafeIdent(name, "continuous aggregate name");
   assertSafeIdent(source, "continuous aggregate source");
   assertSafeIdent(timeColumn, "time column");
   assertSafeIdent(bucketColumn, "bucket column");
+  if (schema !== undefined) assertSafeIdent(schema, "continuous aggregate schema");
+  if (sourceSchema !== undefined) assertSafeIdent(sourceSchema, "source schema");
   assertInterval(bucket);
   groupBy.forEach((g) => {
     assertSafeIdent(g.source, "groupBy source column");
@@ -49,11 +51,11 @@ export function createContinuousAggregateSql(config: CaggConfig): MigrationSql {
 
   const groupByCols = [bucketColumn, ...groupBy.map((g) => g.output)].map(quoteIdent).join(", ");
 
-  let up = `CREATE MATERIALIZED VIEW IF NOT EXISTS ${quoteIdent(name)}
+  let up = `CREATE MATERIALIZED VIEW IF NOT EXISTS ${qualifiedIdent(name, schema)}
   WITH (timescaledb.continuous) AS
 SELECT
   ${selectLines.join(",\n  ")}
-FROM ${quoteIdent(source)}
+FROM ${qualifiedIdent(source, sourceSchema)}
 GROUP BY ${groupByCols}
 WITH NO DATA;`;
 
@@ -63,7 +65,7 @@ WITH NO DATA;`;
     assertInterval(refresh.scheduleInterval);
     up += `
 
-SELECT add_continuous_aggregate_policy(${relationLiteral(name)},
+SELECT add_continuous_aggregate_policy(${relationLiteral(name, schema)},
   start_offset      => INTERVAL ${quoteLiteral(refresh.startOffset)},
   end_offset        => INTERVAL ${quoteLiteral(refresh.endOffset)},
   schedule_interval => INTERVAL ${quoteLiteral(refresh.scheduleInterval)},
@@ -72,7 +74,7 @@ SELECT add_continuous_aggregate_policy(${relationLiteral(name)},
   }
 
   // Constraint 4: a cagg appears in the views catalog but DROP VIEW errors on it.
-  const down = `DROP MATERIALIZED VIEW IF EXISTS ${quoteIdent(name)};`;
+  const down = `DROP MATERIALIZED VIEW IF EXISTS ${qualifiedIdent(name, schema)};`;
 
   return { up, down };
 }

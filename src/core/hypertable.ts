@@ -18,15 +18,16 @@ const DEFAULT_CHUNK_INTERVAL = "7 days";
  * separate "un-hypertable" step (SPEC §2.2).
  */
 export function createHypertableSql(config: HypertableConfig): MigrationSql {
-  const { table, column } = config;
+  const { table, column, schema } = config;
   const chunkInterval = config.chunkInterval ?? DEFAULT_CHUNK_INTERVAL;
 
   assertSafeIdent(table, "hypertable table");
   assertSafeIdent(column, "hypertable time column");
+  if (schema !== undefined) assertSafeIdent(schema, "hypertable schema");
   assertInterval(chunkInterval);
 
   const up = `SELECT create_hypertable(
-  ${relationLiteral(table)},
+  ${relationLiteral(table, schema)},
   by_range(${quoteLiteral(column)}, INTERVAL ${quoteLiteral(chunkInterval)}),
   if_not_exists => TRUE,
   migrate_data  => TRUE

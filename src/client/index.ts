@@ -33,15 +33,25 @@ interface UnsafeRawClient extends RawClient {
  * const prisma = new PrismaClient().$extends(timescaledb(registry));
  */
 export function timescaledb(config: TimescaleConfig = {}) {
-  // Key by Prisma model name (ctx.$name); values hold the resolved DB table + column map.
-  const hypertableByModel = new Map<string, { table: string; column: string; columns: Record<string, string> }>();
+  // Key by Prisma model name (ctx.$name); values hold the resolved DB table + schema + column map.
+  const hypertableByModel = new Map<
+    string,
+    { table: string; schema?: string; column: string; columns: Record<string, string> }
+  >();
   for (const h of config.hypertables ?? []) {
-    hypertableByModel.set(h.model ?? h.table, { table: h.table, column: h.column, columns: { ...(h.columns ?? {}) } });
+    hypertableByModel.set(h.model ?? h.table, {
+      table: h.table,
+      // !== undefined (not truthy): keep an explicitly-set schema so an invalid value like ""
+      // reaches identifier validation instead of being silently dropped to an unqualified target.
+      ...(h.schema !== undefined ? { schema: h.schema } : {}),
+      column: h.column,
+      columns: { ...(h.columns ?? {}) },
+    });
   }
-  // Prisma view model name -> DB view name, for refreshContinuousAggregate.
-  const caggViewByModel = new Map<string, string>();
+  // Prisma view model name -> DB view name + schema, for refreshContinuousAggregate.
+  const caggViewByModel = new Map<string, { name: string; schema?: string }>();
   for (const c of config.continuousAggregates ?? []) {
-    caggViewByModel.set(c.model ?? c.name, c.name);
+    caggViewByModel.set(c.model ?? c.name, { name: c.name, ...(c.schema !== undefined ? { schema: c.schema } : {}) });
   }
 
   const timeBucket = async function (this: unknown, args: TimeBucketRuntimeArgs) {
@@ -57,7 +67,7 @@ export function timescaledb(config: TimescaleConfig = {}) {
       );
     }
     assertInterval(args.bucket);
-    const { sql, params } = buildTimeBucketQuery(ht.table, ht.column, args, ht.columns);
+    const { sql, params } = buildTimeBucketQuery(ht.table, ht.column, args, ht.columns, ht.schema);
     return (ctx.$parent as UnsafeRawClient).$queryRawUnsafe(sql, ...params);
   } as unknown as TimeBucketMethod;
 

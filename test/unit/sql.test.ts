@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assertSafeIdent, quoteIdent, quoteLiteral, relationLiteral } from "../../src/core/sql.js";
+import { assertSafeIdent, qualifiedIdent, quoteIdent, quoteLiteral, relationLiteral } from "../../src/core/sql.js";
 
 describe("sql helpers", () => {
   it("quotes identifiers and preserves case", () => {
@@ -18,6 +18,12 @@ describe("sql helpers", () => {
 
   it("renders a relation as a quoted string literal (no casts)", () => {
     expect(relationLiteral("SensorReading")).toBe(`'"SensorReading"'`);
+  });
+
+  it("qualifiedIdent / relationLiteral schema-qualify when a schema is given", () => {
+    expect(qualifiedIdent("sensor_readings")).toBe(`"sensor_readings"`);
+    expect(qualifiedIdent("sensor_readings", "metrics")).toBe(`"metrics"."sensor_readings"`);
+    expect(relationLiteral("sensor_hourly", "metrics")).toBe(`'"metrics"."sensor_hourly"'`);
   });
 
   it("rejects unsafe identifiers", () => {
