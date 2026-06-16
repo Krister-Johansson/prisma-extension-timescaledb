@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { whereToSql, type WhereCtx } from "../../src/client/where.js";
+import { whereToSql, type RuntimeRelation, type WhereCtx } from "../../src/client/where.js";
 
 function harness() {
   const params: unknown[] = [];
@@ -9,6 +9,30 @@ function harness() {
       params.push(v);
       return `$${params.length}`;
     },
+  };
+  return { ctx, params };
+}
+
+function relHarness() {
+  const params: unknown[] = [];
+  const device: RuntimeRelation = {
+    table: `"public"."Device"`,
+    list: false,
+    on: [{ related: "id", outer: "deviceId" }],
+    fk: ["deviceId"],
+  };
+  const tags: RuntimeRelation = { table: `"public"."Tag"`, list: true, on: [{ related: "readingId", outer: "id" }] };
+  const relations = new Map<string, RuntimeRelation>([
+    ["device", device],
+    ["tags", tags],
+  ]);
+  const ctx: WhereCtx = {
+    col: (f) => `"${f}"`,
+    push: (v) => {
+      params.push(v);
+      return `$${params.length}`;
+    },
+    rel: { outerTable: `"public"."Reading"`, get: (f) => relations.get(f) },
   };
   return { ctx, params };
 }
@@ -125,5 +149,77 @@ describe("whereToSql", () => {
       /unsupported where operator "some"/,
     );
     expect(() => whereToSql({ deviceId: { not: [1, 2] } }, harness().ctx)).toThrow(/cannot be an array/);
+  });
+});
+
+describe("whereToSql relation filters (EXISTS)", () => {
+  const exists = (negate: boolean, table: string, join: string, inner: string) =>
+    `${negate ? "NOT " : ""}EXISTS (SELECT 1 FROM ${table} AS "_rel" WHERE ${join} AND (${inner}))`;
+  const dev = `"_rel"."id" = "public"."Reading"."deviceId"`;
+  const tag = `"_rel"."readingId" = "public"."Reading"."id"`;
+
+  it("to-one is / isNot / shorthand build EXISTS / NOT EXISTS", () => {
+    const a = relHarness();
+    expect(whereToSql({ device: { is: { active: true } } }, a.ctx)).toBe(
+      exists(false, `"public"."Device"`, dev, `"_rel"."active" = $1`),
+    );
+    expect(a.params).toEqual([true]);
+    expect(whereToSql({ device: { isNot: { active: true } } }, relHarness().ctx)).toBe(
+      exists(true, `"public"."Device"`, dev, `"_rel"."active" = $1`),
+    );
+    // shorthand (no is/isNot) == is
+    expect(whereToSql({ device: { active: true } }, relHarness().ctx)).toBe(
+      exists(false, `"public"."Device"`, dev, `"_rel"."active" = $1`),
+    );
+  });
+
+  it("to-one is/isNot null use the FK column", () => {
+    expect(whereToSql({ device: { is: null } }, relHarness().ctx)).toBe(`"public"."Reading"."deviceId" IS NULL`);
+    expect(whereToSql({ device: { isNot: null } }, relHarness().ctx)).toBe(`"public"."Reading"."deviceId" IS NOT NULL`);
+  });
+
+  it("to-many some / none / every (every negates the inner)", () => {
+    const a = relHarness();
+    expect(whereToSql({ tags: { some: { label: "x" } } }, a.ctx)).toBe(
+      exists(false, `"public"."Tag"`, tag, `"_rel"."label" = $1`),
+    );
+    expect(a.params).toEqual(["x"]);
+    expect(whereToSql({ tags: { none: { label: "x" } } }, relHarness().ctx)).toBe(
+      exists(true, `"public"."Tag"`, tag, `"_rel"."label" = $1`),
+    );
+    expect(whereToSql({ tags: { every: { label: "x" } } }, relHarness().ctx)).toBe(
+      exists(true, `"public"."Tag"`, tag, `NOT ("_rel"."label" = $1)`),
+    );
+  });
+
+  it("empty inner becomes TRUE (some {} = has any; every {} = all)", () => {
+    expect(whereToSql({ tags: { some: {} } }, relHarness().ctx)).toBe(exists(false, `"public"."Tag"`, tag, "TRUE"));
+    expect(whereToSql({ tags: { every: {} } }, relHarness().ctx)).toBe(
+      exists(true, `"public"."Tag"`, tag, `NOT (TRUE)`),
+    );
+  });
+
+  it("reuses scalar machinery (incl. nested not) inside the related filter", () => {
+    const a = relHarness();
+    expect(whereToSql({ tags: { some: { label: { not: { in: ["x", "y"] } } } } }, a.ctx)).toBe(
+      exists(false, `"public"."Tag"`, tag, `NOT ("_rel"."label" IN ($1, $2))`),
+    );
+    expect(a.params).toEqual(["x", "y"]);
+  });
+
+  it("relation filters compose with AND/OR and scalar filters", () => {
+    const a = relHarness();
+    expect(whereToSql({ deviceId: { gt: 0 }, tags: { some: { label: "x" } } }, a.ctx)).toBe(
+      `"deviceId" > $1 AND ${exists(false, `"public"."Tag"`, tag, `"_rel"."label" = $2`)}`,
+    );
+    expect(a.params).toEqual([0, "x"]);
+  });
+
+  it("throws on a bad list operator and on a nested relation filter (one level only)", () => {
+    expect(() => whereToSql({ tags: { has: {} } }, relHarness().ctx)).toThrow(/unsupported list relation filter "has"/);
+    // a relation filter inside the related where is not supported (the inner has no relations)
+    expect(() => whereToSql({ device: { is: { tags: { some: {} } } } }, relHarness().ctx)).toThrow(
+      /unsupported where operator "some"/,
+    );
   });
 });

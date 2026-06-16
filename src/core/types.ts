@@ -13,6 +13,28 @@ export interface RetentionConfig {
   dropAfter: Interval;
 }
 
+/**
+ * A relation from a hypertable to another model, used to support relation filters
+ * (`some`/`none`/`every`/`is`/`isNot`) in `timeBucket` where via EXISTS subqueries. All names
+ * are DB names (post-@@map / @@schema).
+ */
+export interface RelationConfig {
+  /** Prisma relation field name on the hypertable (the `where` key), e.g. "device". */
+  field: string;
+  /** Related model's DB table name. */
+  table: string;
+  /** Related model's `@@schema` (multiSchema); omitted for the default schema. */
+  schema?: string;
+  /** `true` for a to-many relation (`some`/`none`/`every`); `false` for to-one (`is`/`isNot`). */
+  list: boolean;
+  /** Join condition pairs — `related.<related> = hypertable.<outer>` (DB column names). */
+  on: readonly { related: string; outer: string }[];
+  /** Related Prisma field name -> DB column, for resolving the inner filter (@map). */
+  columns?: Record<string, string>;
+  /** For an optional to-one relation: the hypertable's FK column(s) (DB names), for `is`/`isNot: null`. */
+  fk?: readonly string[];
+}
+
 /** Hypertable conversion config (SPEC §1.1 / §2.2). All names are DB names (post-@@map). */
 export interface HypertableConfig {
   /**
@@ -36,6 +58,8 @@ export interface HypertableConfig {
   columns?: Record<string, string>;
   /** Optional data-retention policy (`@timescale.retention`); omitted means no policy. */
   retention?: RetentionConfig;
+  /** Relations to other models, for relation filters in `timeBucket` where (EXISTS subqueries). */
+  relations?: readonly RelationConfig[];
 }
 
 /** A single aggregate column in a continuous aggregate (SPEC §1.2). DB names. */

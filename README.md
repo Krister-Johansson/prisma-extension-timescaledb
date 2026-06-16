@@ -230,6 +230,31 @@ Aggregate columns are checked against the model's scalar fields **at compile tim
 (avg/sum/min/max require numeric columns), and the result row type is inferred from
 `groupBy` + `aggregate`. Supported functions: `avg`, `sum`, `min`, `max`, `count`.
 
+#### Relation filters (`some` / `none` / `every` / `is` / `isNot`)
+
+Filter a hypertable by a **related** model's fields. The generator reads your schema's relations
+and the runtime compiles them to `EXISTS` subqueries:
+
+```ts
+const rows = await prisma.sensorReading.timeBucket({
+  bucket: "1 hour",
+  range: { start, end },
+  where: {
+    device: { is: { active: true } },     // to-one: the related device is active
+    tags:   { some: { label: "prod" } },  // to-many: has ≥1 matching tag
+    alerts: { every: { resolved: true } },// to-many: all resolved (vacuously true if none)
+    owner:  { isNot: null },              // relation exists
+  },
+  aggregate: { n: { count: "deviceId" } },
+});
+```
+
+Results match Prisma's `findMany` exactly, including `every`'s vacuous truth and NULL handling
+(`is`/`isNot: null` test relation existence). Composite foreign keys are supported. Limitations:
+relations must be visible to the generator (or supplied via the
+[manual config](#without-the-generator-manual-config)), and a relation filter **nested inside
+another relation's** filter is one level only (deeper nesting throws).
+
 #### Exact aggregate results (`as: "bigint" | "string"`)
 
 By default every aggregate comes back as a JS `number` — `sum`/`avg` are computed as
@@ -449,12 +474,12 @@ forms like `"1 year 2 months"` aren't supported by this single-unit type.)
 
 ## Limitations (v0.1)
 
-- **`timeBucket` `where`** supports scalar operators (`equals`, `not` — including nested
-  `not: { ... }`, e.g. `{ deviceId: { not: { in: [1, 2] } } }` — `in`, `notIn`, `lt`, `lte`, `gt`,
-  `gte`, `contains`, `startsWith`, `endsWith` + `mode: "insensitive"`), `null` checks, and
-  `AND`/`OR`/`NOT`. Negation matches Prisma's `findMany` semantics, including **NULL exclusion**
-  under `not` (SQL three-valued logic). **Relation filters** (`some`/`none`/`every`/`is`) are not
-  supported — they can't be a single-table query — and throw a clear error.
+- **`timeBucket` `where`** mirrors Prisma's `findMany` where: scalar operators (`equals`, `not`
+  incl. nested `not: { ... }`, `in`, `notIn`, `lt`, `lte`, `gt`, `gte`, `contains`, `startsWith`,
+  `endsWith` + `mode: "insensitive"`), `null` checks, `AND`/`OR`/`NOT`, and **relation filters**
+  (`some`/`none`/`every`/`is`/`isNot`) via `EXISTS` subqueries — including `every`'s vacuous truth
+  and NULL semantics (verified against Prisma). The one gap: a relation filter **nested inside
+  another relation's** inner where (one level is supported) throws a clear error.
 - **`timeBucket` numeric precision:** aggregates **default** to JS `number` (`count` → `int`,
   `sum`/`avg` → `double precision`), so a default `sum` beyond 2^53 is float64-rounded. For exact
   results, opt an aggregate into [`as: "bigint"`](#exact-aggregate-results-as-bigint--string)
