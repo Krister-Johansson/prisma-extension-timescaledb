@@ -303,3 +303,39 @@ describe("makeManage chunk + size helpers", () => {
     await expect(makeManage(fakeClient().client).hypertableSize("bad name")).rejects.toThrow(/Invalid/);
   });
 });
+
+describe("makeManage continuous-aggregate policies", () => {
+  const policy = { startOffset: "1 month", endOffset: "1 hour", scheduleInterval: "1 hour" } as const;
+
+  it("addContinuousAggregatePolicy emits add_continuous_aggregate_policy with interval offsets", async () => {
+    const { client, calls } = fakeClient();
+    await makeManage(client).addContinuousAggregatePolicy("SensorHourly", policy);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.sql).toBe(
+      `SELECT add_continuous_aggregate_policy('"SensorHourly"', start_offset => INTERVAL '1 month', end_offset => INTERVAL '1 hour', schedule_interval => INTERVAL '1 hour', if_not_exists => TRUE)`,
+    );
+  });
+
+  it("resolves the cagg model to its @@map / @@schema view name", async () => {
+    const { client, calls } = fakeClient();
+    const viewByModel = new Map([["SensorHourly", { name: "sensor_hourly", schema: "metrics" }]]);
+    await makeManage(client, viewByModel).addContinuousAggregatePolicy("SensorHourly", policy);
+    expect(calls[0]!.sql).toContain(`add_continuous_aggregate_policy('"metrics"."sensor_hourly"'`);
+  });
+
+  it("removeContinuousAggregatePolicy emits an idempotent remove", async () => {
+    const { client, calls } = fakeClient();
+    await makeManage(client).removeContinuousAggregatePolicy("SensorHourly");
+    expect(calls[0]!.sql).toBe(`SELECT remove_continuous_aggregate_policy('"SensorHourly"', if_not_exists => TRUE)`);
+  });
+
+  it("rejects an invalid offset interval and an unsafe cagg name", async () => {
+    await expect(
+      makeManage(fakeClient().client).addContinuousAggregatePolicy("SensorHourly", {
+        ...policy,
+        startOffset: "1 fortnight" as never,
+      }),
+    ).rejects.toThrow(/Invalid interval/);
+    await expect(makeManage(fakeClient().client).removeContinuousAggregatePolicy("bad name")).rejects.toThrow(/Invalid/);
+  });
+});
