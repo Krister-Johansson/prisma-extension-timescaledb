@@ -214,7 +214,7 @@ const rows = await prisma.sensorReading.timeBucket({
   range: { start, end },          // both bounds required
   where: {                        // Prisma where operators + AND/OR/NOT
     deviceId: { in: [1, 2] },
-    temperature: { gte: 20, lt: 35 },
+    temperature: { gte: 20, lt: 35, not: { equals: 25 } }, // nested `not` is supported
   },
   groupBy: ["deviceId"],
   aggregate: {
@@ -449,10 +449,12 @@ forms like `"1 year 2 months"` aren't supported by this single-unit type.)
 
 ## Limitations (v0.1)
 
-- **`timeBucket` `where`** supports scalar operators (`equals`, `not`, `in`, `notIn`, `lt`,
-  `lte`, `gt`, `gte`, `contains`, `startsWith`, `endsWith` + `mode: "insensitive"`), `null`
-  checks, and `AND`/`OR`/`NOT`. **Relation filters** (`some`/`none`/`every`) and nested
-  `not: { ... }` are not supported (they can't be a single-table query) and throw a clear error.
+- **`timeBucket` `where`** supports scalar operators (`equals`, `not` — including nested
+  `not: { ... }`, e.g. `{ deviceId: { not: { in: [1, 2] } } }` — `in`, `notIn`, `lt`, `lte`, `gt`,
+  `gte`, `contains`, `startsWith`, `endsWith` + `mode: "insensitive"`), `null` checks, and
+  `AND`/`OR`/`NOT`. Negation matches Prisma's `findMany` semantics, including **NULL exclusion**
+  under `not` (SQL three-valued logic). **Relation filters** (`some`/`none`/`every`/`is`) are not
+  supported — they can't be a single-table query — and throw a clear error.
 - **`timeBucket` numeric precision:** aggregates **default** to JS `number` (`count` → `int`,
   `sum`/`avg` → `double precision`), so a default `sum` beyond 2^53 is float64-rounded. For exact
   results, opt an aggregate into [`as: "bigint"`](#exact-aggregate-results-as-bigint--string)
