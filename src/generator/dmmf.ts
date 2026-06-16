@@ -120,6 +120,7 @@ function buildHypertable(
   const retention = buildRetention(annotations, model.name);
   const compression = buildCompression(annotations, model);
   const spacePartition = buildSpacePartition(ann, model, ctx);
+  const chunkSkipping = buildChunkSkipping(ann, model, ctx, column, compression);
   const relations = buildRelations(model, byName);
 
   return {
@@ -132,6 +133,7 @@ function buildHypertable(
     ...(retention ? { retention } : {}),
     ...(compression ? { compression } : {}),
     ...(spacePartition ? { spacePartition } : {}),
+    ...(chunkSkipping ? { chunkSkipping } : {}),
     ...(relations.length > 0 ? { relations } : {}),
   };
 }
@@ -295,6 +297,43 @@ function buildSpacePartition(
     throw new Error(`${ctx}: partitions must be a positive integer (got ${JSON.stringify(partitionsRaw)}).`);
   }
   return { column: dbCol(field), partitions };
+}
+
+/**
+ * Parse the optional `chunkSkipping` arg (a comma-separated list of Prisma field names) off the
+ * hypertable annotation into DB column names. Each must be a scalar field and is rejected if it is
+ * the time/partitioning column (that dimension already prunes chunks) or a compression `segmentBy`
+ * column (enabling chunk skipping there returns wrong query results — verified empirically).
+ */
+function buildChunkSkipping(
+  ann: ReturnType<typeof parseAnnotations>[number],
+  model: DMMF.Model,
+  ctx: string,
+  timeColumn: string,
+  compression: CompressionConfig | undefined,
+): string[] | undefined {
+  const raw = optionalString(ann.args, "chunkSkipping", ctx);
+  if (raw === undefined) return undefined;
+  const segmentBy = new Set(compression?.segmentBy ?? []); // DB names
+  const columns = splitList(raw).map((name) => {
+    const field = findScalarField(model, name);
+    if (!field) {
+      throw new Error(`${ctx}: chunkSkipping column "${name}" is not a scalar field on the model.`);
+    }
+    if (name === timeColumn) {
+      throw new Error(
+        `${ctx}: chunkSkipping column "${name}" is the time/partitioning column; that dimension already prunes chunks.`,
+      );
+    }
+    const db = dbCol(field);
+    if (segmentBy.has(db)) {
+      throw new Error(
+        `${ctx}: chunkSkipping column "${name}" is also a compression segmentBy column; skipping on a segmentBy column returns wrong results — drop it from one of the two.`,
+      );
+    }
+    return db;
+  });
+  return columns.length > 0 ? columns : undefined;
 }
 
 /** Build a CaggConfig from a `@timescale.continuousAggregate` view + its field annotations

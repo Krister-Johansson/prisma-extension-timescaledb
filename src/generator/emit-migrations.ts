@@ -12,6 +12,7 @@ import { createHypertableSql } from "../core/hypertable.js";
 import { createContinuousAggregateSql } from "../core/continuousAggregate.js";
 import { createRetentionPolicySql } from "../core/retention.js";
 import { createCompressionPolicySql } from "../core/compression.js";
+import { createChunkSkippingSql } from "../core/chunkSkipping.js";
 
 export const EXTENSION_MIGRATION = "00000000000000_timescaledb_extension";
 export const OBJECTS_MIGRATION = "99999999999999_timescaledb_objects";
@@ -56,6 +57,15 @@ ${createExtensionSql().up}
         ...(c.orderBy ? { orderBy: c.orderBy } : {}),
       }).up;
       parts.push(`-- Compression (columnstore) policy: ${h.table}\n${sql}`);
+    }
+    if (h.chunkSkipping && h.chunkSkipping.length > 0) {
+      // After compression: chunk skipping records its range stats when chunks compress.
+      const sql = createChunkSkippingSql({
+        table: h.table,
+        ...(h.schema !== undefined ? { schema: h.schema } : {}),
+        columns: h.chunkSkipping,
+      }).up;
+      parts.push(`-- Chunk skipping: ${h.table}\n${sql}`);
     }
   }
   for (const c of caggs) {

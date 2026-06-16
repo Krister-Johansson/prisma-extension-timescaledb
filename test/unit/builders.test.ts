@@ -4,6 +4,7 @@ import { createHypertableSql } from "../../src/core/hypertable.js";
 import { createContinuousAggregateSql } from "../../src/core/continuousAggregate.js";
 import { createRetentionPolicySql } from "../../src/core/retention.js";
 import { createCompressionPolicySql } from "../../src/core/compression.js";
+import { createChunkSkippingSql } from "../../src/core/chunkSkipping.js";
 import type { CaggConfig } from "../../src/core/types.js";
 
 describe("createExtensionSql", () => {
@@ -280,5 +281,51 @@ CALL add_columnstore_policy('"SensorReading"', after => INTERVAL '7 days', if_no
     expect(() =>
       createCompressionPolicySql({ table: "T", after: "1 day", orderBy: [{ column: "time", nulls: "frist" as never }] }),
     ).toThrow(/Invalid orderBy nulls/);
+  });
+});
+
+describe("createChunkSkippingSql", () => {
+  const sql = createChunkSkippingSql({ table: "SensorReading", columns: ["eventId"] });
+
+  it("wraps enable_chunk_skipping in a DO block that first turns the GUC on (SET LOCAL)", () => {
+    // The GUC `timescaledb.enable_chunk_skipping` must be on for the function to be callable;
+    // doing it as `SET LOCAL` inside one DO block keeps it self-contained and works whether or
+    // not Prisma wraps the migration in a transaction (verified empirically against 2.27.2).
+    expect(sql.up).toBe(`DO $$ BEGIN
+  SET LOCAL timescaledb.enable_chunk_skipping = on;
+  PERFORM enable_chunk_skipping('"SensorReading"', 'eventId', if_not_exists => TRUE);
+END $$;`);
+  });
+
+  it("is idempotent (if_not_exists) and passes the relation as a quoted string literal (no cast)", () => {
+    expect(sql.up).toContain("if_not_exists => TRUE");
+    expect(sql.up).toContain(`'"SensorReading"'`);
+    expect(sql.up).not.toContain("::regclass");
+    expect(sql.up).not.toContain("::name");
+  });
+
+  it("enables every requested column with one shared SET LOCAL", () => {
+    const { up } = createChunkSkippingSql({ table: "SensorReading", columns: ["eventId", "sensorId"] });
+    expect(up.match(/SET LOCAL/g)).toHaveLength(1);
+    expect(up).toContain(`PERFORM enable_chunk_skipping('"SensorReading"', 'eventId', if_not_exists => TRUE);`);
+    expect(up).toContain(`PERFORM enable_chunk_skipping('"SensorReading"', 'sensorId', if_not_exists => TRUE);`);
+    // the GUC must be set before any enable call inside the block
+    expect(up.indexOf("SET LOCAL")).toBeLessThan(up.indexOf("PERFORM enable_chunk_skipping"));
+  });
+
+  it("schema-qualifies the relation under multiSchema (@@schema)", () => {
+    const { up } = createChunkSkippingSql({ table: "sensor_readings", schema: "metrics", columns: ["event_id"] });
+    expect(up).toContain(`PERFORM enable_chunk_skipping('"metrics"."sensor_readings"', 'event_id', if_not_exists => TRUE);`);
+  });
+
+  it("down does not try to disable (Prisma's table drop handles it)", () => {
+    expect(sql.down).toMatch(/dropping "SensorReading"/);
+  });
+
+  it("rejects bad identifiers and an empty column list", () => {
+    expect(() => createChunkSkippingSql({ table: "a-b", columns: ["x"] })).toThrow(/Invalid/);
+    expect(() => createChunkSkippingSql({ table: "X", schema: "a-b", columns: ["x"] })).toThrow(/Invalid/);
+    expect(() => createChunkSkippingSql({ table: "X", columns: ["a-b"] })).toThrow(/Invalid/);
+    expect(() => createChunkSkippingSql({ table: "X", columns: [] })).toThrow(/at least one/);
   });
 });

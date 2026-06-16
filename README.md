@@ -32,6 +32,7 @@ Prisma can't model TimescaleDB features in its schema language, and the naive se
 - [Runtime usage](#runtime-usage)
 - [Data retention (`@timescale.retention`)](#data-retention-timescaleretention)
 - [Data compression (`@timescale.compression`)](#data-compression-timescalecompression)
+- [Chunk skipping (`@timescale.hypertable(chunkSkipping)`)](#chunk-skipping-timescalehypertablechunkskipping)
 - [Without the generator](#without-the-generator-manual-config)
 - [Renamed tables/columns (`@@map` / `@map`)](#renamed-tablescolumns-map--map)
 - [Shadow database](#shadow-database)
@@ -526,6 +527,65 @@ await prisma.$timescale.removeCompressionPolicy("SensorReading");
 
 ---
 
+## Chunk skipping (`@timescale.hypertable(chunkSkipping)`)
+
+For a **compressed** hypertable, chunk skipping records per-chunk **min/max range stats** for a
+secondary (non-time) column, so the planner can exclude whole chunks that can't match a filter on
+that column — a big win for queries like `WHERE deviceId = …` or `WHERE eventId BETWEEN …` on data
+that correlates with time. Add `chunkSkipping` (one Prisma field name, or several comma-separated)
+to the hypertable annotation:
+
+```prisma
+/// @timescale.hypertable(column: "time", chunkInterval: "1 day", chunkSkipping: "eventId")
+/// @timescale.compression(after: "7 days", segmentBy: "deviceId")
+model SensorReading {
+  time        DateTime
+  deviceId    Int
+  eventId     BigInt
+  temperature Float
+
+  @@id([deviceId, time])
+}
+```
+
+The generator emits a **reset-safe** block into the managed migration. The
+`timescaledb.enable_chunk_skipping` GUC must be on for the function to be callable, so it's set
+(`SET LOCAL`) inside one self-contained `DO` block:
+
+```sql
+DO $$ BEGIN
+  SET LOCAL timescaledb.enable_chunk_skipping = on;
+  PERFORM enable_chunk_skipping('"SensorReading"', 'eventId', if_not_exists => TRUE);
+END $$;
+```
+
+You can also toggle it at runtime — the path to use with the
+[manual config](#without-the-generator-manual-config) (the column is a Prisma field name, mapped to
+its `@map` column):
+
+```ts
+await prisma.$timescale.enableChunkSkipping("SensorReading", "eventId");
+await prisma.$timescale.disableChunkSkipping("SensorReading", "eventId");
+```
+
+> [!IMPORTANT]
+> Three things to know — chunk skipping is otherwise a silent no-op:
+> - **Turn the GUC on at query time too.** The planner only skips chunks when
+>   `timescaledb.enable_chunk_skipping` is on for the *querying* session — enabling the column (above)
+>   isn't enough. Set it as a persistent default on the database (run once, e.g. in a manual
+>   migration): `ALTER DATABASE your_db SET timescaledb.enable_chunk_skipping = on;`, or per
+>   connection via the libpq option `…?options=-c%20timescaledb.enable_chunk_skipping%3Don`. This
+>   package doesn't emit the `ALTER DATABASE` automatically — it's a database-wide setting and may
+>   need elevated privileges (e.g. on managed/Tiger Cloud).
+> - **Range stats only exist on compressed chunks.** Pair it with
+>   [`@timescale.compression`](#data-compression-timescalecompression); uncompressed chunks are always
+>   scanned.
+> - **Not the `segmentBy` or time column.** `segmentBy` already gives per-segment min/max, and
+>   enabling skipping there returns **wrong (empty) results** — the generator rejects it, as it does
+>   the time/partitioning column.
+
+---
+
 ## Without the generator (manual config)
 
 The client extension works **without** the generator — pass the config directly:
@@ -540,7 +600,7 @@ const prisma = new PrismaClient({ adapter }).$extends(
 
 The SQL builders are also exported from `prisma-extension-timescaledb/core` for hand-written
 migrations: `createExtensionSql`, `createHypertableSql`, `createContinuousAggregateSql`,
-`createRetentionPolicySql`, `createCompressionPolicySql`.
+`createRetentionPolicySql`, `createCompressionPolicySql`, `createChunkSkippingSql`.
 
 ---
 
@@ -616,7 +676,7 @@ database) ships in this repo.
 
 | Annotation | On | Arguments |
 | --- | --- | --- |
-| `@timescale.hypertable` | model | `column` (required), `chunkInterval` (default `"7 days"`); `partitionColumn` + `partitions` (optional) — a hash space dimension |
+| `@timescale.hypertable` | model | `column` (required), `chunkInterval` (default `"7 days"`); `partitionColumn` + `partitions` (optional) — a hash space dimension; `chunkSkipping` (optional) — secondary column(s) to [enable chunk skipping](#chunk-skipping-timescalehypertablechunkskipping) on |
 | `@timescale.retention` | model (also a hypertable) | `dropAfter` (required) — drop chunks older than this interval |
 | `@timescale.compression` | model (also a hypertable) | `after` (required) — compress chunks older than this; `segmentBy`, `orderBy` (optional) — columnstore tuning (Prisma field names) |
 | `@timescale.continuousAggregate` | view | `source`, `bucket`, `timeColumn` (required); `refresh: { startOffset, endOffset, scheduleInterval }` (optional) |
@@ -646,6 +706,12 @@ model SensorReading {
 `partitionColumn` takes a Prisma field name (mapped to its `@map` column); `partitions` is a positive
 integer. It's transparent to `timeBucket` queries and survives `prisma migrate reset` like everything
 else this package emits.
+
+**Chunk skipping** — add `chunkSkipping` (a Prisma field name, or several comma-separated) to
+`@timescale.hypertable` to record per-chunk min/max range stats on a secondary column so the planner
+can exclude non-matching **compressed** chunks. Remember to turn `timescaledb.enable_chunk_skipping`
+on at query time — see [Chunk skipping](#chunk-skipping-timescalehypertablechunkskipping) for the
+full story and caveats.
 
 ---
 
