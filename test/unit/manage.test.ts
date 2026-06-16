@@ -162,3 +162,64 @@ describe("makeManage retention policies", () => {
     await expect(makeManage(client).addRetentionPolicy("bad name", { dropAfter: "1 day" })).rejects.toThrow(/Invalid/);
   });
 });
+
+describe("makeManage compression policies", () => {
+  it("addCompressionPolicy enables the columnstore then adds the policy (two statements)", async () => {
+    const { client, calls } = fakeClient();
+    await makeManage(client).addCompressionPolicy("SensorReading", {
+      after: "7 days",
+      segmentBy: "deviceId",
+      orderBy: "time DESC",
+    });
+    expect(calls).toHaveLength(2);
+    expect(calls[0]!.sql).toBe(
+      `ALTER TABLE "SensorReading" SET (timescaledb.enable_columnstore = true, timescaledb.segmentby = '"deviceId"', timescaledb.orderby = '"time" DESC')`,
+    );
+    expect(calls[1]!.sql).toBe(
+      `CALL add_columnstore_policy('"SensorReading"', after => INTERVAL '7 days', if_not_exists => TRUE)`,
+    );
+  });
+
+  it("accepts array segmentBy + structured orderBy and maps Prisma field names via @map / @@schema", async () => {
+    const { client, calls } = fakeClient();
+    const hypertableByModel = new Map([
+      ["SensorReading", { table: "sensor_readings", schema: "metrics", columns: { deviceId: "device_id", time: "ts" } }],
+    ]);
+    await makeManage(client, new Map(), { hypertableByModel }).addCompressionPolicy("SensorReading", {
+      after: "7 days",
+      segmentBy: ["deviceId"],
+      orderBy: [{ column: "time", direction: "desc", nulls: "last" }],
+    });
+    expect(calls[0]!.sql).toBe(
+      `ALTER TABLE "metrics"."sensor_readings" SET (timescaledb.enable_columnstore = true, timescaledb.segmentby = '"device_id"', timescaledb.orderby = '"ts" DESC NULLS LAST')`,
+    );
+    expect(calls[1]!.sql).toBe(
+      `CALL add_columnstore_policy('"metrics"."sensor_readings"', after => INTERVAL '7 days', if_not_exists => TRUE)`,
+    );
+  });
+
+  it("omits segmentby / orderby when not provided (enable columnstore only)", async () => {
+    const { client, calls } = fakeClient();
+    await makeManage(client).addCompressionPolicy("SensorReading", { after: "30 days" });
+    expect(calls[0]!.sql).toBe(`ALTER TABLE "SensorReading" SET (timescaledb.enable_columnstore = true)`);
+  });
+
+  it("removeCompressionPolicy emits an idempotent CALL remove", async () => {
+    const { client, calls } = fakeClient();
+    await makeManage(client).removeCompressionPolicy("SensorReading");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.sql).toBe(`CALL remove_columnstore_policy('"SensorReading"', if_exists => TRUE)`);
+  });
+
+  it("rejects an invalid after interval", async () => {
+    const { client } = fakeClient();
+    await expect(
+      makeManage(client).addCompressionPolicy("SensorReading", { after: "1 fortnight" as never }),
+    ).rejects.toThrow(/Invalid interval/);
+  });
+
+  it("rejects an unsafe model/relation name", async () => {
+    const { client } = fakeClient();
+    await expect(makeManage(client).addCompressionPolicy("bad name", { after: "1 day" })).rejects.toThrow(/Invalid/);
+  });
+});

@@ -4,6 +4,8 @@ export type {
   MigrationSql,
   HypertableConfig,
   RetentionConfig,
+  CompressionConfig,
+  CompressionOrderBy,
   RelationConfig,
   CaggConfig,
   AggregateSpec,
@@ -15,4 +17,5 @@ export { createExtensionSql } from "./extension.js";
 export { createHypertableSql } from "./hypertable.js";
 export { createContinuousAggregateSql } from "./continuousAggregate.js";
 export { createRetentionPolicySql, type RetentionPolicyConfig } from "./retention.js";
+export { createCompressionPolicySql, type CompressionPolicyConfig } from "./compression.js";
 export { quoteIdent, quoteLiteral, qualifiedIdent, relationLiteral, assertSafeIdent } from "./sql.js";

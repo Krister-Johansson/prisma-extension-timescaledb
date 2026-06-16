@@ -361,6 +361,149 @@ model SensorReading {
   });
 });
 
+describe("extractTimescaleSchema — compression", () => {
+  it("parses @timescale.compression(after, segmentBy, orderBy) on a hypertable", async () => {
+    const result = await extract(`
+/// @timescale.hypertable(column: "time", chunkInterval: "1 day")
+/// @timescale.compression(after: "7 days", segmentBy: "deviceId", orderBy: "time DESC")
+model SensorReading {
+  time     DateTime
+  deviceId Int
+  @@id([deviceId, time])
+}
+`);
+    expect(result.hypertables).toEqual([
+      {
+        table: "SensorReading",
+        column: "time",
+        chunkInterval: "1 day",
+        compression: {
+          after: "7 days",
+          segmentBy: ["deviceId"],
+          orderBy: [{ column: "time", direction: "desc" }],
+        },
+      },
+    ]);
+  });
+
+  it("supports multi-column segmentBy / orderBy (with NULLS) and maps @map names", async () => {
+    const result = await extract(`
+/// @timescale.hypertable(column: "time", chunkInterval: "1 day")
+/// @timescale.compression(after: "7 days", segmentBy: "deviceId, siteId", orderBy: "time DESC, deviceId ASC NULLS LAST")
+model SensorReading {
+  time     DateTime @map("ts")
+  deviceId Int      @map("device_id")
+  siteId   Int
+  @@id([deviceId, time])
+  @@map("sensor_readings")
+}
+`);
+    expect(result.hypertables[0]?.compression).toEqual({
+      after: "7 days",
+      segmentBy: ["device_id", "siteId"],
+      orderBy: [
+        { column: "ts", direction: "desc" },
+        { column: "device_id", direction: "asc", nulls: "last" },
+      ],
+    });
+  });
+
+  it("omits segmentBy / orderBy when only `after` is given", async () => {
+    const result = await extract(`
+/// @timescale.hypertable(column: "time")
+/// @timescale.compression(after: "30 days")
+model SensorReading {
+  time     DateTime
+  deviceId Int
+  @@id([deviceId, time])
+}
+`);
+    expect(result.hypertables[0]?.compression).toEqual({ after: "30 days" });
+  });
+
+  it("rejects @timescale.compression without @timescale.hypertable", async () => {
+    await expect(
+      extract(`
+/// @timescale.compression(after: "7 days")
+model Plain {
+  id   Int      @id
+  time DateTime
+}
+`),
+    ).rejects.toThrow(/only valid together with @timescale.hypertable/);
+  });
+
+  it("requires the after argument", async () => {
+    await expect(
+      extract(`
+/// @timescale.hypertable(column: "time")
+/// @timescale.compression(segmentBy: "deviceId")
+model SensorReading {
+  time     DateTime
+  deviceId Int
+  @@id([deviceId, time])
+}
+`),
+    ).rejects.toThrow(/missing or non-string argument "after"/);
+  });
+
+  it("rejects an unknown segmentBy column", async () => {
+    await expect(
+      extract(`
+/// @timescale.hypertable(column: "time")
+/// @timescale.compression(after: "7 days", segmentBy: "nope")
+model SensorReading {
+  time     DateTime
+  deviceId Int
+  @@id([deviceId, time])
+}
+`),
+    ).rejects.toThrow(/segmentBy column "nope" is not a scalar field/);
+  });
+
+  it("rejects an unknown orderBy column", async () => {
+    await expect(
+      extract(`
+/// @timescale.hypertable(column: "time")
+/// @timescale.compression(after: "7 days", orderBy: "nope DESC")
+model SensorReading {
+  time     DateTime
+  deviceId Int
+  @@id([deviceId, time])
+}
+`),
+    ).rejects.toThrow(/orderBy column "nope" is not a scalar field/);
+  });
+
+  it("rejects a malformed orderBy direction token", async () => {
+    await expect(
+      extract(`
+/// @timescale.hypertable(column: "time")
+/// @timescale.compression(after: "7 days", orderBy: "time SLOWLY")
+model SensorReading {
+  time     DateTime
+  deviceId Int
+  @@id([deviceId, time])
+}
+`),
+    ).rejects.toThrow(/Invalid orderBy term/);
+  });
+
+  it("rejects an invalid after interval", async () => {
+    await expect(
+      extract(`
+/// @timescale.hypertable(column: "time")
+/// @timescale.compression(after: "1 fortnight")
+model SensorReading {
+  time     DateTime
+  deviceId Int
+  @@id([deviceId, time])
+}
+`),
+    ).rejects.toThrow(/Invalid interval/);
+  });
+});
+
 describe("extractTimescaleSchema — relations", () => {
   it("extracts to-one (owning, with fk) and to-many (inverse) relations", async () => {
     const result = await extract(`

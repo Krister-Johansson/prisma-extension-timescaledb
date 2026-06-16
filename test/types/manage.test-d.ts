@@ -14,6 +14,10 @@ m.addRetentionPolicy("SensorReading", { dropAfter: "1 day" }); // ok
 m.addRetentionPolicy("DeviceLog", { dropAfter: "1 day" }); // ok
 m.removeRetentionPolicy("SensorReading"); // ok
 m.refreshContinuousAggregate("SensorHourly"); // ok
+m.addCompressionPolicy("SensorReading", { after: "7 days" }); // ok
+m.addCompressionPolicy("DeviceLog", { after: "7 days", segmentBy: "x", orderBy: "x DESC" }); // ok
+m.addCompressionPolicy("SensorReading", { after: "7 days", segmentBy: ["a"], orderBy: [{ column: "a", direction: "desc" }] }); // ok
+m.removeCompressionPolicy("SensorReading"); // ok
 
 // @ts-expect-error - "SensorRead" is not a registered hypertable
 m.addRetentionPolicy("SensorRead", { dropAfter: "1 day" });
@@ -21,11 +25,19 @@ m.addRetentionPolicy("SensorRead", { dropAfter: "1 day" });
 m.removeRetentionPolicy("SensorRaeding");
 // @ts-expect-error - "SensorHrly" is not a registered continuous aggregate
 m.refreshContinuousAggregate("SensorHrly");
+// @ts-expect-error - "SensorRead" is not a registered hypertable
+m.addCompressionPolicy("SensorRead", { after: "7 days" });
+// @ts-expect-error - typo on the compression remove
+m.removeCompressionPolicy("SensorRaeding");
+// @ts-expect-error - `after` must be a valid interval (branded template)
+m.addCompressionPolicy("SensorReading", { after: "7 fortnights" });
 
 // The default (no type args) stays `string` for the manual / non-literal path.
 declare const loose: TimescaleManage;
 loose.addRetentionPolicy("anything", { dropAfter: "1 day" }); // ok — string fallback
 loose.refreshContinuousAggregate("anything"); // ok
+loose.addCompressionPolicy("anything", { after: "1 day" }); // ok — string fallback
+loose.removeCompressionPolicy("anything"); // ok
 
 // --- 2) name extraction from a const registry (model ?? table / model ?? name) ---
 const mapped = {
