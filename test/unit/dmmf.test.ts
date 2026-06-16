@@ -113,7 +113,13 @@ model M {
 
   it("column has a non-time type", async () => {
     await expect(extract(htModel(`@timescale.hypertable(column: "label")`))).rejects.toThrow(
-      /must be a DateTime or integer field/,
+      /must be a DateTime field/,
+    );
+  });
+
+  it("rejects an integer time column up front (not supported yet — would fail at migrate)", async () => {
+    await expect(extract(htModel(`@timescale.hypertable(column: "id")`))).rejects.toThrow(
+      /has type Int; the partitioning column must be a DateTime field \(integer time columns are not supported yet\)/,
     );
   });
 
@@ -201,7 +207,18 @@ ${body}
         view(`@timescale.continuousAggregate(source: "SensorReading", bucket: "1 hour", timeColumn: "label")`,
           `  bucket  DateTime /// @timescale.bucket\n  avgTemp Float /// @timescale.aggregate(fn: "avg", column: "temperature")\n  @@unique([bucket])`),
       ),
-    ).rejects.toThrow(/timeColumn "label" has type String; it must be a DateTime or integer field/);
+    ).rejects.toThrow(/timeColumn "label" has type String; it must be a DateTime field/);
+  });
+
+  it("rejects an integer timeColumn up front (DateTime-only contract for caggs too)", async () => {
+    await expect(
+      extract(
+        view(`@timescale.continuousAggregate(source: "SensorReading", bucket: "1 hour", timeColumn: "deviceId")`,
+          `  bucket  DateTime /// @timescale.bucket\n  avgTemp Float /// @timescale.aggregate(fn: "avg", column: "temperature")\n  @@unique([bucket])`),
+      ),
+    ).rejects.toThrow(
+      /timeColumn "deviceId" has type Int; it must be a DateTime field \(integer time columns are not supported yet\)/,
+    );
   });
 
   it("source is a known model but not a hypertable", async () => {

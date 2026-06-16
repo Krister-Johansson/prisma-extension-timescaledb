@@ -24,8 +24,9 @@ model SensorReading {
 }
 ```
 
-- `column` (required): the time partitioning column. Must be a `DateTime` (or integer
-  time) field on the model. The generator validates this against the DMMF.
+- `column` (required): the time partitioning column. Must be a `DateTime` field on the model
+  (integer time columns are not supported yet — the generator emits interval-based SQL). The
+  generator validates this against the DMMF.
 - `chunkInterval` (optional, default `"7 days"`): chunk size.
 
 Prisma still owns the `CREATE TABLE`. The generator only appends the hypertable

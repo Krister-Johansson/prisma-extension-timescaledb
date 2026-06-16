@@ -43,16 +43,18 @@ export type Interval = `${number} ${Unit}`;
 // (mirrors the `${number} ${Unit}` template type).
 const INTERVAL_RE = new RegExp(`^\\d+(?:\\.\\d+)? (?:${UNITS.join("|")})$`);
 
-/** Return true if `value` is a well-formed interval literal. */
+/** Return true if `value` is a well-formed interval literal with a positive amount. */
 export function isInterval(value: string): value is Interval {
-  return INTERVAL_RE.test(value);
+  // Shape must match AND the amount must be positive: "0 days" / "0.0 seconds" are well-formed but
+  // meaningless as a chunk size / policy threshold / bucket width (TimescaleDB rejects them anyway).
+  return INTERVAL_RE.test(value) && Number.parseFloat(value) > 0;
 }
 
 /** Assert `value` is a well-formed interval literal, narrowing its type. */
 export function assertInterval(value: string): asserts value is Interval {
   if (!isInterval(value)) {
     throw new Error(
-      `Invalid interval ${JSON.stringify(value)}: expected "<amount> <unit>" where unit is one of ${UNITS.join(", ")} (e.g. "1 hour", "7 days").`,
+      `Invalid interval ${JSON.stringify(value)}: expected "<amount> <unit>" with a positive amount, where unit is one of ${UNITS.join(", ")} (e.g. "1 hour", "7 days").`,
     );
   }
 }
