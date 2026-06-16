@@ -272,5 +272,12 @@ describe("buildTimeBucketQuery", () => {
     expect(() =>
       buildTimeBucketQuery("SensorReading", "time", { ...base, gapfill: true, timezone: "UTC" }),
     ).toThrow(/gapfill cannot be combined with timezone/);
+    // non-string / invalid values from non-TS callers fail with a clear error, not a raw Type/RangeError
+    expect(() => buildTimeBucketQuery("SensorReading", "time", { ...base, timezone: true as never })).toThrow(
+      /invalid timezone/,
+    );
+    expect(() => buildTimeBucketQuery("SensorReading", "time", { ...base, origin: new Date("nope") })).toThrow(
+      /must be a valid Date/,
+    );
   });
 });

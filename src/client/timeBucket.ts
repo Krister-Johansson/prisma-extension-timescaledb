@@ -201,11 +201,18 @@ function bucketExpression(time: string, args: TimeBucketRuntimeArgs): string {
   }
   const extra: string[] = [];
   if (timezone !== undefined) {
-    if (!TZ_RE.test(timezone)) throw new Error(`timeBucket: invalid timezone ${JSON.stringify(timezone)}.`);
+    // typeof check first: a non-string (null/true from a non-TS caller) would coerce through
+    // TZ_RE.test and then crash in quoteLiteral with a raw TypeError.
+    if (typeof timezone !== "string" || !TZ_RE.test(timezone)) {
+      throw new Error(`timeBucket: invalid timezone ${JSON.stringify(timezone)}.`);
+    }
     extra.push(quoteLiteral(timezone)); // positional 3rd arg — must precede the named args
   }
   if (origin !== undefined) {
-    if (!(origin instanceof Date)) throw new Error("timeBucket: `origin` must be a Date.");
+    // Reject Invalid Date too (it passes `instanceof Date` but throws a raw RangeError at toISOString()).
+    if (!(origin instanceof Date) || Number.isNaN(origin.getTime())) {
+      throw new Error("timeBucket: `origin` must be a valid Date.");
+    }
     extra.push(`origin => ${quoteLiteral(origin.toISOString())}`);
   }
   if (offset !== undefined) {
