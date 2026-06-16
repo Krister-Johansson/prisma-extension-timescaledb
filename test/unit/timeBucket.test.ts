@@ -30,6 +30,43 @@ describe("buildTimeBucketQuery", () => {
     expect(sql).toContain(`max("deviceId") AS "hi"`); // min/max keep the column type
   });
 
+  it("emits exact casts per the `as` selector (bigint -> ::bigint, string -> ::text)", () => {
+    const { sql } = buildTimeBucketQuery("SensorReading", "time", {
+      ...base,
+      aggregate: {
+        total: { sum: "deviceId", as: "bigint" },
+        rows: { count: "deviceId", as: "bigint" },
+        avgStr: { avg: "deviceId", as: "string" },
+        sumStr: { sum: "deviceId", as: "string" },
+        plain: { sum: "deviceId" }, // default -> double precision
+      },
+    });
+    expect(sql).toContain(`sum("deviceId")::bigint AS "total"`);
+    expect(sql).toContain(`count("deviceId")::bigint AS "rows"`); // no ::int overflow past 2^31 rows
+    expect(sql).toContain(`avg("deviceId")::text AS "avgStr"`);
+    expect(sql).toContain(`sum("deviceId")::text AS "sumStr"`);
+    expect(sql).toContain(`sum("deviceId")::double precision AS "plain"`);
+  });
+
+  it("resolves @map columns under an `as` cast", () => {
+    const { sql } = buildTimeBucketQuery(
+      "sensor_readings",
+      "ts",
+      { ...base, aggregate: { total: { sum: "deviceId", as: "bigint" } } },
+      { deviceId: "device_id", time: "ts" },
+    );
+    expect(sql).toContain(`sum("device_id")::bigint AS "total"`);
+  });
+
+  it("rejects an invalid `as` value", () => {
+    expect(() =>
+      buildTimeBucketQuery("SensorReading", "time", {
+        ...base,
+        aggregate: { x: { sum: "deviceId", as: "float" } },
+      }),
+    ).toThrow(/invalid "as"/);
+  });
+
   it("appends equality filters as bound params", () => {
     const { sql, params } = buildTimeBucketQuery("SensorReading", "time", { ...base, where: { deviceId: 1 } });
     expect(sql).toContain(`AND ("deviceId" = $4)`);
