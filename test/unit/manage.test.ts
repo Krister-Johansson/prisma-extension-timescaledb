@@ -45,8 +45,15 @@ describe("makeManage.refreshContinuousAggregate", () => {
 
   it("resolves the Prisma view model name to its @@map DB view name", async () => {
     const { client, calls } = fakeClient();
-    const viewByModel = new Map([["SensorHourly", "sensor_hourly"]]);
+    const viewByModel = new Map([["SensorHourly", { name: "sensor_hourly" }]]);
     await makeManage(client, viewByModel).refreshContinuousAggregate("SensorHourly");
     expect(calls[0]!.sql).toBe(`CALL refresh_continuous_aggregate('"sensor_hourly"', NULL, NULL)`);
+  });
+
+  it("schema-qualifies the cagg name when a @@schema is configured", async () => {
+    const { client, calls } = fakeClient();
+    const viewByModel = new Map([["SensorHourly", { name: "sensor_hourly", schema: "metrics" }]]);
+    await makeManage(client, viewByModel).refreshContinuousAggregate("SensorHourly");
+    expect(calls[0]!.sql).toBe(`CALL refresh_continuous_aggregate('"metrics"."sensor_hourly"', NULL, NULL)`);
   });
 });

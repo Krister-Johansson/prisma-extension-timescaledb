@@ -73,6 +73,11 @@ describe("buildTimeBucketQuery", () => {
     expect(params).toEqual(["1 hour", range.start, range.end, 1]);
   });
 
+  it("schema-qualifies the table under multiSchema (@@schema)", () => {
+    const { sql } = buildTimeBucketQuery("sensor_readings", "ts", base, {}, "metrics");
+    expect(sql).toContain(`FROM "metrics"."sensor_readings"`);
+  });
+
   it("throws when range bounds are missing", () => {
     expect(() =>
       buildTimeBucketQuery("SensorReading", "time", { bucket: "1 hour", aggregate: base.aggregate } as TimeBucketRuntimeArgs),

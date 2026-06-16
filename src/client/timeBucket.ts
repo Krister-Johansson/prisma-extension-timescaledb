@@ -4,7 +4,7 @@
 import { Prisma } from "@prisma/client/extension";
 import type { Interval } from "../core/interval.js";
 import { assertInterval } from "../core/interval.js";
-import { assertSafeIdent, quoteIdent } from "../core/sql.js";
+import { assertSafeIdent, qualifiedIdent, quoteIdent } from "../core/sql.js";
 import { whereToSql } from "./where.js";
 
 // --- type machinery --------------------------------------------------------
@@ -88,9 +88,11 @@ export function buildTimeBucketQuery(
   timeColumn: string,
   args: TimeBucketRuntimeArgs,
   columns: Record<string, string> = {},
+  schema?: string,
 ): { sql: string; params: unknown[] } {
   assertSafeIdent(table, "model table");
   assertSafeIdent(timeColumn, "time column");
+  if (schema !== undefined) assertSafeIdent(schema, "model schema");
   assertInterval(args.bucket);
   if (!args.range || !(args.range.start instanceof Date) || !(args.range.end instanceof Date)) {
     throw new Error("timeBucket: `range.start` and `range.end` are required Dates.");
@@ -154,6 +156,6 @@ export function buildTimeBucketQuery(
   if (whereSql) where += ` AND (${whereSql})`;
 
   const groupBy = [`"bucket"`, ...groupCols.map((g) => quoteIdent(g))].join(", ");
-  const sql = `SELECT ${select.join(", ")} FROM ${quoteIdent(table)} WHERE ${where} GROUP BY ${groupBy} ORDER BY "bucket"`;
+  const sql = `SELECT ${select.join(", ")} FROM ${qualifiedIdent(table, schema)} WHERE ${where} GROUP BY ${groupBy} ORDER BY "bucket"`;
   return { sql, params };
 }

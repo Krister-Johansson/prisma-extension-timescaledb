@@ -49,6 +49,11 @@ describe("createHypertableSql", () => {
     expect(() => createHypertableSql({ table: "a-b", column: "time" })).toThrow(/Invalid/);
     expect(() => createHypertableSql({ table: "X", column: "t", chunkInterval: "1 fortnight" as never })).toThrow(/Invalid interval/);
   });
+
+  it("schema-qualifies the relation under multiSchema (@@schema)", () => {
+    const { up } = createHypertableSql({ table: "sensor_readings", column: "ts", chunkInterval: "1 day", schema: "metrics" });
+    expect(up).toContain(`'"metrics"."sensor_readings"'`);
+  });
 });
 
 describe("createContinuousAggregateSql", () => {
@@ -118,5 +123,13 @@ SELECT add_continuous_aggregate_policy('"SensorHourly"',
     expect(() =>
       createContinuousAggregateSql({ ...base, aggregates: [{ name: "x", fn: "median" as never, column: "temperature" }] }),
     ).toThrow(/Unsupported aggregate function/);
+  });
+
+  it("schema-qualifies view, source, policy and down under multiSchema (@@schema)", () => {
+    const sql = createContinuousAggregateSql({ ...base, schema: "metrics", sourceSchema: "metrics" });
+    expect(sql.up).toContain(`CREATE MATERIALIZED VIEW IF NOT EXISTS "metrics"."SensorHourly"`);
+    expect(sql.up).toContain(`FROM "metrics"."SensorReading"`);
+    expect(sql.up).toContain(`add_continuous_aggregate_policy('"metrics"."SensorHourly"'`);
+    expect(sql.down).toBe(`DROP MATERIALIZED VIEW IF EXISTS "metrics"."SensorHourly";`);
   });
 });

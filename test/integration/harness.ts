@@ -44,6 +44,10 @@ export interface HarnessOptions {
   models?: string;
   /** Override the Prisma CREATE TABLE migration SQL (must match the schema's DB names). */
   initSql?: string;
+  /** Extra generator preview features (merged with the default ["views"]). */
+  previewFeatures?: string[];
+  /** Datasource schemas (enables multiSchema); when set, adds `schemas = [...]`. */
+  schemas?: string[];
 }
 
 export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> {
@@ -108,7 +112,7 @@ export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> 
 
 function scaffoldProject(dir: string, opts: HarnessOptions): void {
   writeFileSync(join(dir, "prisma.config.ts"), PRISMA_CONFIG);
-  writeFileSync(join(dir, "schema.prisma"), schemaPrisma(opts.models ?? DEFAULT_MODELS));
+  writeFileSync(join(dir, "schema.prisma"), schemaPrisma(opts.models ?? DEFAULT_MODELS, opts));
 
   const migrations = join(dir, "migrations");
   mkdirSync(migrations, { recursive: true });
@@ -134,13 +138,15 @@ export default defineConfig({
 });
 `;
 
-function schemaPrisma(models: string): string {
+function schemaPrisma(models: string, opts: HarnessOptions): string {
   // provider is an absolute path to our built generator binary.
   const provider = GENERATOR_PROVIDER.replace(/\\/g, "/");
+  const previewFeatures = JSON.stringify(["views", ...(opts.previewFeatures ?? [])]);
+  const schemasLine = opts.schemas ? `\n  schemas  = ${JSON.stringify(opts.schemas)}` : "";
   return `generator client {
   provider        = "prisma-client"
   output          = "./client"
-  previewFeatures = ["views"]
+  previewFeatures = ${previewFeatures}
 }
 
 generator timescaledb {
@@ -149,7 +155,7 @@ generator timescaledb {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "postgresql"${schemasLine}
 }
 
 ${models}`;

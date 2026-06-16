@@ -16,6 +16,8 @@ export interface HypertableConfig {
   model?: string;
   /** Table/relation name as it exists in the DB, unquoted (the @@map name, or model name). */
   table: string;
+  /** Database schema (the @@schema name) when using multiSchema; omitted for the default schema. */
+  schema?: string;
   /** Time partitioning column, as it exists in the DB (the @map name, or field name). */
   column: string;
   /** Chunk size; defaults to "7 days" when omitted. */
@@ -62,8 +64,12 @@ export interface CaggConfig {
   model?: string;
   /** View name as it exists in the DB (the @@map name, or model name). */
   name: string;
-  /** Source hypertable model name. */
+  /** The view's database schema (@@schema), when using multiSchema. */
+  schema?: string;
+  /** Source hypertable table name (DB name). */
   source: string;
+  /** The source hypertable's database schema (@@schema); may differ from the view's. */
+  sourceSchema?: string;
   /** time_bucket interval. */
   bucket: Interval;
   /** Source time column the bucket is computed from. */
