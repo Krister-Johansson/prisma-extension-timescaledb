@@ -77,7 +77,7 @@ zero errors. This must be covered by an integration test (`test/integration/`).
 
 ## How to work
 
-The initial milestones are complete; the package is published and maturing. For each new
+The initial milestones are complete; the package is maturing. For each new
 feature: deep-research first (Context7 docs + an empirical probe against a real
 `timescale/timescaledb` container), then TDD across unit, type-level, and Testcontainers
 integration tests. Keep CI green and ship one focused PR per change. When a design decision
