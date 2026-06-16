@@ -4,6 +4,7 @@ export type {
   MigrationSql,
   HypertableConfig,
   RetentionConfig,
+  RelationConfig,
   CaggConfig,
   AggregateSpec,
   RefreshPolicy,

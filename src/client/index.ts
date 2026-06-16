@@ -4,7 +4,7 @@
 // works WITHOUT the generator. The generator's emitted `registry` is assignable to this
 // config shape, so `timescaledb(registry)` is just the generated path.
 import { Prisma } from "@prisma/client/extension";
-import type { CaggConfig, HypertableConfig } from "../core/types.js";
+import type { CaggConfig, HypertableConfig, RelationConfig } from "../core/types.js";
 import { assertInterval } from "../core/interval.js";
 import {
   buildTimeBucketQuery,
@@ -60,7 +60,7 @@ export function timescaledb<const C extends TimescaleConfig = TimescaleConfig>(c
   // Key by Prisma model name (ctx.$name); values hold the resolved DB table + schema + column map.
   const hypertableByModel = new Map<
     string,
-    { table: string; schema?: string; column: string; columns: Record<string, string> }
+    { table: string; schema?: string; column: string; columns: Record<string, string>; relations: readonly RelationConfig[] }
   >();
   for (const h of config.hypertables ?? []) {
     hypertableByModel.set(h.model ?? h.table, {
@@ -70,6 +70,7 @@ export function timescaledb<const C extends TimescaleConfig = TimescaleConfig>(c
       ...(h.schema !== undefined ? { schema: h.schema } : {}),
       column: h.column,
       columns: { ...(h.columns ?? {}) },
+      relations: h.relations ?? [],
     });
   }
   // Prisma view model name -> DB view name + schema, for refreshContinuousAggregate.
@@ -91,7 +92,7 @@ export function timescaledb<const C extends TimescaleConfig = TimescaleConfig>(c
       );
     }
     assertInterval(args.bucket);
-    const { sql, params } = buildTimeBucketQuery(ht.table, ht.column, args, ht.columns, ht.schema);
+    const { sql, params } = buildTimeBucketQuery(ht.table, ht.column, args, ht.columns, ht.schema, ht.relations);
     return (ctx.$parent as UnsafeRawClient).$queryRawUnsafe(sql, ...params);
   } as unknown as TimeBucketMethod;
 

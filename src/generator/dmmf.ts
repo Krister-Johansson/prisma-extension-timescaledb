@@ -2,7 +2,15 @@
 // internal shapes (HypertableConfig / CaggConfig) and never touches `options.dmmf`. A Prisma
 // internal-API change should only require edits in this file.
 import type { DMMF } from "@prisma/generator-helper";
-import type { AggregateSpec, CaggConfig, CaggGroupBy, HypertableConfig, RefreshPolicy, RetentionConfig } from "../core/types.js";
+import type {
+  AggregateSpec,
+  CaggConfig,
+  CaggGroupBy,
+  HypertableConfig,
+  RefreshPolicy,
+  RelationConfig,
+  RetentionConfig,
+} from "../core/types.js";
 import type { Interval } from "../core/interval.js";
 import { assertInterval } from "../core/interval.js";
 import {
@@ -33,7 +41,7 @@ export function extractTimescaleSchema(dmmf: DMMF.Document): TimescaleSchema {
   for (const model of models) {
     const annotations = parseAnnotations(model.documentation);
     if (findAnnotation(annotations, "hypertable")) {
-      hypertables.push(buildHypertable(model, annotations));
+      hypertables.push(buildHypertable(model, annotations, byName));
     } else if (findAnnotation(annotations, "retention")) {
       // Retention attaches to a hypertable's chunks; it is meaningless on a plain model.
       throw new Error(
@@ -59,7 +67,11 @@ export function extractTimescaleSchema(dmmf: DMMF.Document): TimescaleSchema {
   return { hypertables, continuousAggregates };
 }
 
-function buildHypertable(model: DMMF.Model, annotations: ReturnType<typeof parseAnnotations>): HypertableConfig {
+function buildHypertable(
+  model: DMMF.Model,
+  annotations: ReturnType<typeof parseAnnotations>,
+  byName: Map<string, DMMF.Model>,
+): HypertableConfig {
   const ctx = `@timescale.hypertable on model "${model.name}"`;
   const ann = findAnnotation(annotations, "hypertable")!;
   const column = requireString(ann.args, "column", ctx);
@@ -79,6 +91,7 @@ function buildHypertable(model: DMMF.Model, annotations: ReturnType<typeof parse
   const columns = columnMap(model);
   const table = dbTable(model);
   const retention = buildRetention(annotations, model.name);
+  const relations = buildRelations(model, byName);
 
   return {
     ...(model.name !== table ? { model: model.name } : {}),
@@ -88,7 +101,64 @@ function buildHypertable(model: DMMF.Model, annotations: ReturnType<typeof parse
     ...(chunkInterval !== undefined ? { chunkInterval: chunkInterval as Interval } : {}),
     ...(Object.keys(columns).length > 0 ? { columns } : {}),
     ...(retention ? { retention } : {}),
+    ...(relations.length > 0 ? { relations } : {}),
   };
+}
+
+/**
+ * Extract the model's relation fields into RelationConfigs for runtime EXISTS-based filtering.
+ * Resolves join keys for both the owning side (this model holds the FK: relationFromFields ->
+ * relationToFields) and the inverse side (the FK lives on the related model — look up its owning
+ * field by relationName). All field names are resolved to DB column names (@map).
+ */
+function buildRelations(model: DMMF.Model, byName: Map<string, DMMF.Model>): RelationConfig[] {
+  const relations: RelationConfig[] = [];
+  for (const f of model.fields) {
+    if (f.kind !== "object") continue;
+    const related = byName.get(f.type);
+    if (!related) continue;
+
+    let on: { related: string; outer: string }[];
+    let fk: string[] | undefined;
+
+    if (f.relationFromFields && f.relationFromFields.length > 0) {
+      // Owning side: the FK is on THIS model (relationFromFields), referencing relationToFields.
+      const toFields = f.relationToFields ?? [];
+      on = f.relationFromFields.map((fromField, i) => ({
+        related: resolveCol(related, toFields[i] ?? ""),
+        outer: resolveCol(model, fromField),
+      }));
+      fk = f.relationFromFields.map((fromField) => resolveCol(model, fromField));
+    } else {
+      // Inverse side: the FK is on the RELATED model — find its owning field by relationName.
+      const owning = related.fields.find(
+        (g) => g.kind === "object" && g.relationName === f.relationName && (g.relationFromFields?.length ?? 0) > 0,
+      );
+      if (!owning?.relationFromFields || !owning.relationToFields) continue;
+      const toFields = owning.relationToFields;
+      on = owning.relationFromFields.map((fromField, i) => ({
+        related: resolveCol(related, fromField),
+        outer: resolveCol(model, toFields[i] ?? ""),
+      }));
+    }
+
+    const columns = columnMap(related);
+    relations.push({
+      field: f.name,
+      table: dbTable(related),
+      ...(related.schema ? { schema: related.schema } : {}),
+      list: f.isList,
+      on,
+      ...(Object.keys(columns).length > 0 ? { columns } : {}),
+      ...(fk ? { fk } : {}),
+    });
+  }
+  return relations;
+}
+
+/** Resolve a field name on a model to its DB column name (the @map value, or the field name). */
+function resolveCol(model: DMMF.Model, fieldName: string): string {
+  return model.fields.find((f) => f.name === fieldName)?.dbName ?? fieldName;
 }
 
 function buildRetention(

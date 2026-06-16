@@ -1,16 +1,40 @@
 // Translate a Prisma `where` input into a parameterized SQL boolean expression for the
-// single-table timeBucket query. Values are always bound as parameters; column names are
-// resolved + identifier-checked by the caller, so the result is injection-safe.
+// timeBucket query. Values are always bound as parameters; column names are resolved +
+// identifier-checked, so the result is injection-safe.
 //
 // Supported: equals, not (incl. nested `not: { ... }`), in, notIn, lt, lte, gt, gte, contains,
-// startsWith, endsWith (+ mode: "insensitive"), null checks, shorthand equality, and AND / OR / NOT.
-// Unsupported (throws): relation filters (some/none/every) and any operator not in the list above.
+// startsWith, endsWith (+ mode: "insensitive"), null checks, shorthand equality, AND / OR / NOT,
+// and relation filters (some/none/every/is/isNot) via EXISTS subqueries when relation metadata
+// is provided. Unsupported (throws): any operator not in the list above, and nested relation
+// filters (a relation filter inside another relation's inner where).
+import { assertSafeIdent, quoteIdent } from "../core/sql.js";
 
 export interface WhereCtx {
   /** Resolve a Prisma field name to a quoted DB column (e.g. `deviceId` -> `"device_id"`). */
   col: (field: string) => string;
   /** Bind a value as a parameter and return its placeholder (e.g. `$4`). */
   push: (value: unknown) => string;
+  /** Relation-filter support; absent => relation keys fall through to the unsupported-operator error. */
+  rel?: {
+    /** The current (outer) table, already quoted/qualified, for the EXISTS join (e.g. `"public"."Reading"`). */
+    outerTable: string;
+    /** Look up a relation by Prisma field name; undefined if `field` is not a relation. */
+    get: (field: string) => RuntimeRelation | undefined;
+  };
+}
+
+/** Runtime view of a relation, for building EXISTS subqueries. Names are DB names. */
+export interface RuntimeRelation {
+  /** Related table, quoted/qualified (e.g. `"public"."Device"`). */
+  table: string;
+  /** true => to-many (some/none/every); false => to-one (is/isNot). */
+  list: boolean;
+  /** Join pairs: `related.<related> = outer.<outer>` (unquoted DB column names). */
+  on: readonly { related: string; outer: string }[];
+  /** Related Prisma field name -> DB column, for the inner where (@map). */
+  columns?: Record<string, string>;
+  /** Outer FK column(s) (DB names) for `is`/`isNot: null` (optional to-one only). */
+  fk?: readonly string[];
 }
 
 const SUPPORTED = "equals, not, in, notIn, lt, lte, gt, gte, contains, startsWith, endsWith";
@@ -31,11 +55,81 @@ export function whereToSql(where: Record<string, unknown> | undefined, ctx: Wher
       const s = combine(asArray(value), ctx, "AND");
       if (s) clauses.push(`NOT (${s})`);
     } else {
-      const s = fieldClause(key, value, ctx);
+      const relation = ctx.rel?.get(key);
+      const s = relation ? relationClause(key, value, relation, ctx) : fieldClause(key, value, ctx);
       if (s) clauses.push(s);
     }
   }
   return clauses.join(" AND ");
+}
+
+/**
+ * Build the EXISTS / NOT EXISTS clause for a relation filter (some/none/every/is/isNot or a
+ * to-one shorthand). The inner filter is resolved against the related table (aliased `_rel`) by
+ * recursing through whereToSql with a related-column context — so all scalar operators (incl.
+ * nested not) work inside it. Mirrors Prisma's findMany results, including `every`'s vacuous
+ * truth and `isNot`/`none` including the no-related-record case (verified against Prisma).
+ */
+function relationClause(field: string, value: unknown, rel: RuntimeRelation, ctx: WhereCtx): string {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`timeBucket: relation filter on "${field}" must be an object (some/none/every/is/isNot).`);
+  }
+  const filter = value as Record<string, unknown>;
+  const alias = quoteIdent("_rel");
+  const outer = ctx.rel!.outerTable;
+
+  // Inner where resolves against the related table; params are shared; no nested relation filters.
+  const innerCtx: WhereCtx = {
+    push: ctx.push,
+    col: (f) => {
+      const c = rel.columns?.[f] ?? f;
+      assertSafeIdent(c, "relation column");
+      return `${alias}.${quoteIdent(c)}`;
+    },
+  };
+  const join = rel.on.map((p) => `${alias}.${quoteIdent(p.related)} = ${outer}.${quoteIdent(p.outer)}`).join(" AND ");
+  const from = `${rel.table} AS ${alias}`;
+
+  // EXISTS (SELECT 1 FROM related AS _rel WHERE join AND (inner)); inner "" -> TRUE. `every` negates
+  // the inner (NOT EXISTS where a related row fails it). `negate` wraps the whole thing in NOT.
+  const exists = (negate: boolean, negateInner: boolean, inner: unknown): string => {
+    let innerSql = whereToSql(inner as Record<string, unknown> | undefined, innerCtx) || "TRUE";
+    if (negateInner) innerSql = `NOT (${innerSql})`;
+    const sub = `EXISTS (SELECT 1 FROM ${from} WHERE ${join} AND (${innerSql}))`;
+    return negate ? `NOT ${sub}` : sub;
+  };
+  // `is`/`isNot: null` — optional to-one uses the FK column; a relation with no local FK falls
+  // back to existence (is: null => no related row).
+  const nullCheck = (negate: boolean): string => {
+    if (rel.fk && rel.fk.length > 0) {
+      const cond = rel.fk.map((c) => `${outer}.${quoteIdent(c)} IS ${negate ? "NOT NULL" : "NULL"}`).join(" AND ");
+      return rel.fk.length > 1 ? `(${cond})` : cond;
+    }
+    const sub = `EXISTS (SELECT 1 FROM ${from} WHERE ${join})`;
+    return negate ? sub : `NOT ${sub}`;
+  };
+
+  const parts: string[] = [];
+  if (rel.list) {
+    for (const [op, inner] of Object.entries(filter)) {
+      if (inner === undefined) continue;
+      if (op === "some") parts.push(exists(false, false, inner));
+      else if (op === "none") parts.push(exists(true, false, inner));
+      else if (op === "every") parts.push(exists(true, true, inner));
+      else throw new Error(`timeBucket: unsupported list relation filter "${op}" on "${field}" (use some / none / every).`);
+    }
+  } else if ("is" in filter || "isNot" in filter) {
+    for (const [op, inner] of Object.entries(filter)) {
+      if (inner === undefined) continue;
+      if (op === "is") parts.push(inner === null ? nullCheck(false) : exists(false, false, inner));
+      else if (op === "isNot") parts.push(inner === null ? nullCheck(true) : exists(true, false, inner));
+      else throw new Error(`timeBucket: unsupported to-one relation filter "${op}" on "${field}" (use is / isNot).`);
+    }
+  } else {
+    // to-one shorthand: the whole object is the related where (equivalent to `is`).
+    parts.push(exists(false, false, filter));
+  }
+  return parts.length > 1 ? `(${parts.join(" AND ")})` : (parts[0] ?? "");
 }
 
 function combine(wheres: unknown[], ctx: WhereCtx, op: "AND" | "OR"): string {

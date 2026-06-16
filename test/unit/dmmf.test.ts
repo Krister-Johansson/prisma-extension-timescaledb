@@ -360,3 +360,61 @@ model SensorReading {
     ).rejects.toThrow(/Invalid interval/);
   });
 });
+
+describe("extractTimescaleSchema — relations", () => {
+  it("extracts to-one (owning, with fk) and to-many (inverse) relations", async () => {
+    const result = await extract(`
+/// @timescale.hypertable(column: "time", chunkInterval: "1 day")
+model Reading {
+  time     DateTime
+  id       Int     @id
+  deviceId Int?
+  device   Device? @relation(fields: [deviceId], references: [id])
+  tags     Tag[]
+}
+model Device {
+  id       Int       @id
+  active   Boolean
+  readings Reading[]
+}
+model Tag {
+  id        Int     @id
+  label     String
+  readingId Int
+  reading   Reading @relation(fields: [readingId], references: [id])
+}
+`);
+    expect(result.hypertables[0]?.relations).toEqual([
+      { field: "device", table: "Device", list: false, on: [{ related: "id", outer: "deviceId" }], fk: ["deviceId"] },
+      { field: "tags", table: "Tag", list: true, on: [{ related: "readingId", outer: "id" }] },
+    ]);
+  });
+
+  it("resolves @@map / @map on the related model into the join keys + column map", async () => {
+    const result = await extract(`
+/// @timescale.hypertable(column: "time")
+model Reading {
+  time     DateTime
+  id       Int     @id
+  deviceId Int?
+  device   Device? @relation(fields: [deviceId], references: [id])
+}
+model Device {
+  id       Int       @id @map("device_id")
+  active   Boolean   @map("is_active")
+  readings Reading[]
+  @@map("devices")
+}
+`);
+    expect(result.hypertables[0]?.relations).toEqual([
+      {
+        field: "device",
+        table: "devices",
+        list: false,
+        on: [{ related: "device_id", outer: "deviceId" }],
+        columns: { id: "device_id", active: "is_active" },
+        fk: ["deviceId"],
+      },
+    ]);
+  });
+});
