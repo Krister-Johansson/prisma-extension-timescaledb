@@ -138,7 +138,8 @@ export function buildTimeBucketQuery(
   args: TimeBucketRuntimeArgs,
   columns: Record<string, string> = {},
   schema?: string,
-  relations: readonly RelationConfig[] = [],
+  relationsByModel: ReadonlyMap<string, readonly RelationConfig[]> = new Map(),
+  model?: string,
 ): { sql: string; params: unknown[] } {
   assertSafeIdent(table, "model table");
   assertSafeIdent(timeColumn, "time column");
@@ -192,18 +193,29 @@ export function buildTimeBucketQuery(
     select.push(`${fn}(${src})${castFor(fn, outputAs)} AS ${alias}`);
   }
 
-  // Relation-filter lookup (some/none/every/is/isNot -> EXISTS). The related table is
-  // quoted/qualified here; join keys + column maps come from the generated registry.
-  const relByField = new Map<string, RuntimeRelation>();
-  for (const r of relations) {
-    relByField.set(r.field, {
-      table: qualifiedIdent(r.table, r.schema),
-      list: r.list,
-      on: r.on,
-      ...(r.columns ? { columns: r.columns } : {}),
-      ...(r.fk ? { fk: r.fk } : {}),
-    });
+  // Relation-filter lookup (some/none/every/is/isNot -> EXISTS). Precompute every model's
+  // field -> RuntimeRelation map once: the entry model drives the top level, and `relationsOf`
+  // resolves relations reached THROUGH a relation (nested filters) by the related model's name.
+  const relMaps = new Map<string, Map<string, RuntimeRelation>>();
+  for (const [m, rels] of relationsByModel) {
+    const fieldMap = new Map<string, RuntimeRelation>();
+    for (const r of rels) {
+      fieldMap.set(r.field, {
+        table: qualifiedIdent(r.table, r.schema),
+        list: r.list,
+        on: r.on,
+        ...(r.columns ? { columns: r.columns } : {}),
+        ...(r.fk ? { fk: r.fk } : {}),
+        ...(r.targetModel ? { targetModel: r.targetModel } : {}),
+      });
+    }
+    relMaps.set(m, fieldMap);
   }
+  const relationsOf = (m: string): ((f: string) => RuntimeRelation | undefined) | undefined => {
+    const fieldMap = relMaps.get(m);
+    return fieldMap ? (f: string) => fieldMap.get(f) : undefined;
+  };
+  const entryRelations = model !== undefined ? relMaps.get(model) : undefined;
 
   let where = `${time} >= $2 AND ${time} < $3`;
   const whereSql = whereToSql(args.where, {
@@ -212,8 +224,15 @@ export function buildTimeBucketQuery(
       params.push(value);
       return `$${params.length}`;
     },
-    ...(relByField.size > 0
-      ? { rel: { outerTable: qualifiedIdent(table, schema), get: (f: string) => relByField.get(f) } }
+    ...(entryRelations
+      ? {
+          rel: {
+            outerTable: qualifiedIdent(table, schema),
+            get: (f: string) => entryRelations.get(f),
+            depth: 0,
+            relationsOf,
+          },
+        }
       : {}),
   });
   if (whereSql) where += ` AND (${whereSql})`;

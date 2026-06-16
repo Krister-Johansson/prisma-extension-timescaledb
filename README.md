@@ -254,10 +254,17 @@ const rows = await prisma.sensorReading.timeBucket({
 ```
 
 Results match Prisma's `findMany` exactly, including `every`'s vacuous truth and NULL handling
-(`is`/`isNot: null` test relation existence). Composite foreign keys are supported. Limitations:
-relations must be visible to the generator (or supplied via the
-[manual config](#without-the-generator-manual-config)), and a relation filter **nested inside
-another relation's** filter is one level only (deeper nesting throws).
+(`is`/`isNot: null` test relation existence). Composite foreign keys are supported, and relation
+filters **nest through other relations to any depth** — each level compiles to a correlated
+`EXISTS`:
+
+```ts
+// sensor readings whose device also has a reading over 30° (Reading → device → readings)
+where: { device: { is: { readings: { some: { temperature: { gt: 30 } } } } } }
+```
+
+The only requirement is that the models you traverse are visible to the generator (or supplied via
+the [manual config](#without-the-generator-manual-config)).
 
 #### Exact aggregate results (`as: "bigint" | "string"`)
 
@@ -543,11 +550,12 @@ forms like `"1 year 2 months"` aren't supported by this single-unit type.)
 ## Limitations
 
 `timeBucket` `where` now covers Prisma's full scalar + logical operators **and** relation filters
-(`some`/`none`/`every`/`is`/`isNot`) — see [Runtime usage](#runtime-usage). What's left:
+(`some`/`none`/`every`/`is`/`isNot`), including relation filters **nested through other relations to
+any depth** — see [Runtime usage](#runtime-usage). What's left:
 
-- **Relation filters** — a relation filter **nested inside another relation's** filter is one level
-  only (deeper nesting throws), and relations must be visible to the generator (or supplied via the
-  [manual config](#without-the-generator-manual-config)).
+- **Relation filters** — the models you traverse must be visible to the generator (or supplied via
+  the [manual config](#without-the-generator-manual-config)); a relation to a model the generator
+  can't see isn't available for filtering.
 - **`timeBucket` numeric precision:** aggregates **default** to JS `number` (`count` → `int`,
   `sum`/`avg` → `double precision`), so a default `sum` beyond 2^53 is float64-rounded. For exact
   results, opt an aggregate into [`as: "bigint"`](#exact-aggregate-results-as-bigint--string)

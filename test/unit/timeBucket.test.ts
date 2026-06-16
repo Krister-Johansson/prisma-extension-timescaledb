@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildTimeBucketQuery, type TimeBucketRuntimeArgs } from "../../src/client/timeBucket.js";
+import type { RelationConfig } from "../../src/core/types.js";
 
 const range = { start: new Date("2026-06-15T00:00:00Z"), end: new Date("2026-06-16T00:00:00Z") };
 const base: TimeBucketRuntimeArgs = {
@@ -123,5 +124,24 @@ describe("buildTimeBucketQuery", () => {
     expect(() =>
       buildTimeBucketQuery("SensorReading", "time", { bucket: "1 hour", aggregate: base.aggregate } as TimeBucketRuntimeArgs),
     ).toThrow(/range\.start.+range\.end.+required/);
+  });
+
+  it("builds nested relation EXISTS from relationsByModel (multi-level where)", () => {
+    const relationsByModel = new Map<string, readonly RelationConfig[]>([
+      ["Reading", [{ field: "device", targetModel: "Device", table: "Device", list: false, on: [{ related: "id", outer: "deviceId" }], fk: ["deviceId"] }]],
+      ["Device", [{ field: "readings", targetModel: "Reading", table: "Reading", list: true, on: [{ related: "deviceId", outer: "id" }] }]],
+    ]);
+    const { sql } = buildTimeBucketQuery(
+      "Reading",
+      "time",
+      { ...base, where: { device: { is: { readings: { some: { id: 1 } } } } } },
+      {},
+      undefined,
+      relationsByModel,
+      "Reading",
+    );
+    expect(sql).toContain(`EXISTS (SELECT 1 FROM "Device" AS "_rel" WHERE "_rel"."id" = "Reading"."deviceId"`);
+    expect(sql).toContain(`EXISTS (SELECT 1 FROM "Reading" AS "_rel2" WHERE "_rel2"."deviceId" = "_rel"."id"`);
+    expect(sql).not.toContain("::regclass");
   });
 });

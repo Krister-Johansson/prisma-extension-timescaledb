@@ -528,9 +528,15 @@ model Tag {
 }
 `);
     expect(result.hypertables[0]?.relations).toEqual([
-      { field: "device", table: "Device", list: false, on: [{ related: "id", outer: "deviceId" }], fk: ["deviceId"] },
-      { field: "tags", table: "Tag", list: true, on: [{ related: "readingId", outer: "id" }] },
+      { field: "device", targetModel: "Device", table: "Device", list: false, on: [{ related: "id", outer: "deviceId" }], fk: ["deviceId"] },
+      { field: "tags", targetModel: "Tag", table: "Tag", list: true, on: [{ related: "readingId", outer: "id" }] },
     ]);
+    // Non-hypertable models' relations are emitted under relationsByModel (keyed by Prisma name),
+    // so timeBucket where can resolve relation filters nested through them.
+    expect(result.relationsByModel).toEqual({
+      Device: [{ field: "readings", targetModel: "Reading", table: "Reading", list: true, on: [{ related: "deviceId", outer: "id" }] }],
+      Tag: [{ field: "reading", targetModel: "Reading", table: "Reading", list: false, on: [{ related: "id", outer: "readingId" }], fk: ["readingId"] }],
+    });
   });
 
   it("resolves @@map / @map on the related model into the join keys + column map", async () => {
@@ -552,6 +558,7 @@ model Device {
     expect(result.hypertables[0]?.relations).toEqual([
       {
         field: "device",
+        targetModel: "Device",
         table: "devices",
         list: false,
         on: [{ related: "device_id", outer: "deviceId" }],

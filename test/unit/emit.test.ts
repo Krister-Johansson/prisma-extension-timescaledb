@@ -253,4 +253,36 @@ describe("emitTypes", () => {
       "
     `);
   });
+
+  it("emits relationsByModel for related (non-hypertable) models, and it still type-checks as `as const`", async () => {
+    const dmmf = await getDMMF({
+      datamodel: `
+generator client {
+  provider = "prisma-client"
+  output = "../generated/prisma"
+  previewFeatures = ["views"]
+}
+datasource db {
+  provider = "postgresql"
+}
+
+/// @timescale.hypertable(column: "time", chunkInterval: "1 day")
+model Reading {
+  time     DateTime
+  id       Int     @id
+  deviceId Int?
+  device   Device? @relation(fields: [deviceId], references: [id])
+}
+model Device {
+  id       Int       @id
+  active   Boolean
+  readings Reading[]
+}
+`,
+    });
+    const source = emitTypes(extractTimescaleSchema(dmmf))["index.ts"]!;
+    expect(source).toContain(`"relationsByModel"`);
+    expect(source).toContain(`"targetModel": "Reading"`); // Device.readings -> Reading, for nesting
+    expect(typeCheck(source)).toEqual([]);
+  });
 });

@@ -20,6 +20,12 @@ export interface TimescaleConfig {
   // (cagg reads go through the Prisma `view`; refresh takes the name) — reserved for future
   // use (e.g. typed cagg helpers) without a breaking config change.
   continuousAggregates?: readonly CaggConfig[];
+  /**
+   * Relations of related (non-hypertable) models, keyed by Prisma model name. Emitted by the
+   * generator so a `timeBucket` where can nest relation filters THROUGH other relations to any
+   * depth. Absent => relation filters work one level deep only (the pre-generator-bump behavior).
+   */
+  relationsByModel?: Record<string, readonly RelationConfig[]>;
 }
 
 /**
@@ -60,18 +66,28 @@ export function timescaledb<const C extends TimescaleConfig = TimescaleConfig>(c
   // Key by Prisma model name (ctx.$name); values hold the resolved DB table + schema + column map.
   const hypertableByModel = new Map<
     string,
-    { table: string; schema?: string; column: string; columns: Record<string, string>; relations: readonly RelationConfig[] }
+    { table: string; schema?: string; column: string; columns: Record<string, string> }
   >();
+  // Prisma model name -> that model's relations, for relation filters in timeBucket where. The
+  // generator's `relationsByModel` covers related (non-hypertable) models; each hypertable's own
+  // relations come from its config entry. Together they let filters nest through relations to any depth.
+  const relationsByModel = new Map<string, readonly RelationConfig[]>();
+  for (const [name, rels] of Object.entries(config.relationsByModel ?? {})) {
+    relationsByModel.set(name, rels);
+  }
   for (const h of config.hypertables ?? []) {
-    hypertableByModel.set(h.model ?? h.table, {
+    const name = h.model ?? h.table;
+    hypertableByModel.set(name, {
       table: h.table,
       // !== undefined (not truthy): keep an explicitly-set schema so an invalid value like ""
       // reaches identifier validation instead of being silently dropped to an unqualified target.
       ...(h.schema !== undefined ? { schema: h.schema } : {}),
       column: h.column,
       columns: { ...(h.columns ?? {}) },
-      relations: h.relations ?? [],
     });
+    if (h.relations && h.relations.length > 0 && !relationsByModel.has(name)) {
+      relationsByModel.set(name, h.relations);
+    }
   }
   // Prisma view model name -> DB view name + schema, for refreshContinuousAggregate.
   const caggViewByModel = new Map<string, { name: string; schema?: string }>();
@@ -96,7 +112,7 @@ export function timescaledb<const C extends TimescaleConfig = TimescaleConfig>(c
       );
     }
     assertInterval(args.bucket);
-    const { sql, params } = buildTimeBucketQuery(ht.table, ht.column, args, ht.columns, ht.schema, ht.relations);
+    const { sql, params } = buildTimeBucketQuery(ht.table, ht.column, args, ht.columns, ht.schema, relationsByModel, model);
     return (ctx.$parent as UnsafeRawClient).$queryRawUnsafe(sql, ...params);
   } as unknown as TimeBucketMethod;
 
