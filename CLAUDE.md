@@ -1,7 +1,7 @@
 # CLAUDE.md
 
-This file orients you (Claude Code) before you touch anything. Read it fully, then read
-`SPEC.md` and `BUILD_PLAN.md`. Deep background lives in `docs/research.md`.
+This file orients you (Claude Code) before you touch anything. Read it fully, then skim
+`README.md` for the full, current feature surface.
 
 ## What we are building
 
@@ -14,10 +14,11 @@ language, so this package fills the gap with two cooperating parts:
 2. A **Prisma Client Extension** (`Prisma.defineExtension`) that exposes fully-typed
    query and management methods at runtime.
 
-**v0.1 scope is time-series ONLY: hypertables + continuous aggregates + reset-safe
-migrations + typed query helpers.** Vector search, BM25, hypercore/columnstore, and
-retention are explicitly out of scope for v0.1 (retention is a documented stretch goal).
-Do not build them unless `BUILD_PLAN.md` says so.
+**Scope is time-series.** Shipped: hypertables, continuous aggregates, reset-safe migrations,
+typed `timeBucket` query helpers (incl. gap-filling, first/last, timezone/origin/offset),
+retention, columnstore compression, space partitioning, chunk-skipping, and chunk-interval /
+policy management via the `$timescale` namespace. See `README.md` for the full surface. Still
+out of scope: vector search (pgvector / pgvectorscale) and BM25 / full-text search.
 
 ## The non-negotiable constraints (this is the whole point of the package)
 
@@ -57,13 +58,13 @@ violating one, stop and re-read.
 
 A "reset-safe" guarantee means: a fresh DB + `prisma migrate reset` + `prisma migrate
 deploy` reproduces all hypertables and continuous aggregates with zero manual steps and
-zero errors. This must be covered by an integration test (see `BUILD_PLAN.md`).
+zero errors. This must be covered by an integration test (`test/integration/`).
 
 ## Conventions
 
 - Language: TypeScript, `strict: true`, `module`/`moduleResolution`: `NodeNext`.
-- Single package for v0.1 with internal modules `src/core`, `src/generator`,
-  `src/client`. (Do not split into a monorepo yet.)
+- Single package with internal modules `src/core`, `src/generator`, `src/client`.
+  (Not a monorepo.)
 - `@prisma/client` and `prisma` are **peerDependencies** (`>=6.13`), pinned in
   devDependencies for testing. Bundle nothing from Prisma.
 - Dual ESM + CJS publish via `tsup`. Validate output with `@arethetypeswrong/cli`.
@@ -76,7 +77,8 @@ zero errors. This must be covered by an integration test (see `BUILD_PLAN.md`).
 
 ## How to work
 
-Work through `BUILD_PLAN.md` milestone by milestone. After each milestone, run the test
-suite and stop for review before continuing. Do not jump ahead to later milestones or to
-out-of-scope features. When a design decision is ambiguous, prefer the choice that makes
-the reset-safety guarantee easier to test.
+The initial milestones are complete; the package is published and maturing. For each new
+feature: deep-research first (Context7 docs + an empirical probe against a real
+`timescale/timescaledb` container), then TDD across unit, type-level, and Testcontainers
+integration tests. Keep CI green and ship one focused PR per change. When a design decision
+is ambiguous, prefer the choice that makes the reset-safety guarantee easier to test.
