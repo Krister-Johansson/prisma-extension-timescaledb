@@ -380,6 +380,24 @@ refresh"*). `refreshContinuousAggregate` retries this transient case with bounde
 backoff (default: up to 8 attempts); if the contention persists beyond that budget, the original
 `55P03` error is rethrown.
 
+#### Inspecting & dropping chunks
+
+```ts
+// On-demand chunk drop (manual retention) — returns the dropped chunk names.
+const dropped = await prisma.$timescale.dropChunks("SensorReading", { olderThan: "30 days" });
+
+// Size, row-count, and compression introspection — sizes/counts come back as exact `bigint`.
+const bytes  = await prisma.$timescale.hypertableSize("SensorReading");         // bigint (total bytes)
+const detail = await prisma.$timescale.hypertableDetailedSize("SensorReading"); // { tableBytes, indexBytes, toastBytes, totalBytes }
+const rows   = await prisma.$timescale.approximateRowCount("SensorReading");    // bigint (planner estimate; fast)
+const stats  = await prisma.$timescale.compressionStats("SensorReading");       // { totalChunks, compressedChunks, beforeTotalBytes, afterTotalBytes }
+```
+
+`dropChunks` bounds (`olderThan` / `newerThan`) are intervals **relative to now** (combine both for a
+window), matching `@timescale.retention`'s `dropAfter` — absolute-timestamp cutoffs aren't supported.
+The introspection helpers wrap `hypertable_size`, `hypertable_detailed_size`, `approximate_row_count`,
+and `hypertable_columnstore_stats`.
+
 ---
 
 ## Data retention (`@timescale.retention`)

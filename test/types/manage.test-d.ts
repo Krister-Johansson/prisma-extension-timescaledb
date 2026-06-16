@@ -39,6 +39,26 @@ loose.refreshContinuousAggregate("anything"); // ok
 loose.addCompressionPolicy("anything", { after: "1 day" }); // ok — string fallback
 loose.removeCompressionPolicy("anything"); // ok
 
+// chunk + size helpers: model-name checked, with typed returns
+m.dropChunks("SensorReading", { olderThan: "30 days" }); // ok (interval bound)
+m.dropChunks("DeviceLog", { olderThan: "7 days", newerThan: "30 days" }); // ok (interval window)
+const _bytes: Promise<bigint> = m.hypertableSize("SensorReading");
+const _rows: Promise<bigint> = m.approximateRowCount("SensorReading");
+const _dropped: Promise<string[]> = m.dropChunks("SensorReading", { olderThan: "1 day" });
+void _bytes;
+void _rows;
+void _dropped;
+void m.hypertableDetailedSize("SensorReading"); // Promise<HypertableSize>
+void m.compressionStats("SensorReading"); // Promise<CompressionStats>
+// @ts-expect-error - typo on the model name
+m.dropChunks("SensorRead", { olderThan: "30 days" });
+// @ts-expect-error - typo on the model name
+m.hypertableSize("SensorRaeding");
+// @ts-expect-error - dropChunks bounds are intervals relative to now, not Dates
+m.dropChunks("SensorReading", { olderThan: new Date() });
+loose.dropChunks("anything", { olderThan: "1 day" }); // ok — string fallback
+loose.hypertableSize("anything"); // ok
+
 // --- 2) name extraction from a const registry (model ?? table / model ?? name) ---
 const mapped = {
   hypertables: [{ model: "SensorReading", table: "sensor_readings" }],

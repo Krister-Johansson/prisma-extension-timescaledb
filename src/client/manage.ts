@@ -45,6 +45,37 @@ export interface CompressionOptions {
 /** Minimal raw-capable client surface we rely on (PrismaClient provides these). */
 export interface RawClient {
   $executeRawUnsafe(query: string, ...values: unknown[]): Promise<number>;
+  /** Read-returning raw query, for the introspection helpers (sizes, row count, dropped chunks). */
+  $queryRawUnsafe<T = unknown>(query: string, ...values: unknown[]): Promise<T>;
+}
+
+/** Options for an on-demand chunk drop. At least one bound is required; each is an `Interval`
+ * relative to now (matching retention's `dropAfter`). Absolute-timestamp cutoffs aren't supported —
+ * `drop_chunks`'s bound type must match the partition column's exact (tz vs no-tz) type, which the
+ * registry doesn't carry; use an interval relative to now instead. */
+export interface DropChunksOptions {
+  /** Drop chunks whose time range is entirely older than this interval before now. */
+  olderThan?: Interval;
+  /** Drop chunks whose time range is entirely newer than this interval before now (combine with `olderThan` for a window). */
+  newerThan?: Interval;
+}
+
+/** Per-component byte sizes of a hypertable (from `hypertable_detailed_size`). */
+export interface HypertableSize {
+  tableBytes: bigint;
+  indexBytes: bigint;
+  toastBytes: bigint;
+  totalBytes: bigint;
+}
+
+/** Columnstore-compression effectiveness for a hypertable (from `hypertable_columnstore_stats`). */
+export interface CompressionStats {
+  totalChunks: bigint;
+  compressedChunks: bigint;
+  /** Total bytes before compression across compressed chunks; `null` when nothing is compressed. */
+  beforeTotalBytes: bigint | null;
+  /** Total bytes after compression across compressed chunks; `null` when nothing is compressed. */
+  afterTotalBytes: bigint | null;
 }
 
 /** Range for a continuous-aggregate refresh; null bounds mean "open" (full refresh). */
@@ -113,6 +144,24 @@ export interface TimescaleManage<HModels extends string = string, CModels extend
    * the columnstore itself enabled — disabling it fails once any chunk has been compressed.
    */
   removeCompressionPolicy(model: HModels): Promise<void>;
+
+  /**
+   * Drop chunks from a hypertable on demand (manual retention) — `drop_chunks`. At least one of
+   * `olderThan` / `newerThan` is required; combine both for a window. Returns the dropped chunk names.
+   */
+  dropChunks(model: HModels, options: DropChunksOptions): Promise<string[]>;
+
+  /** Total on-disk size of a hypertable in bytes (`hypertable_size`). */
+  hypertableSize(model: HModels): Promise<bigint>;
+
+  /** Per-component byte sizes of a hypertable: table / index / toast / total (`hypertable_detailed_size`). */
+  hypertableDetailedSize(model: HModels): Promise<HypertableSize>;
+
+  /** Approximate row count from planner statistics (`approximate_row_count`) — fast, may be 0 until ANALYZE. */
+  approximateRowCount(model: HModels): Promise<bigint>;
+
+  /** Columnstore-compression effectiveness: chunk counts and before/after sizes (`hypertable_columnstore_stats`). */
+  compressionStats(model: HModels): Promise<CompressionStats>;
 }
 
 // SQLSTATE 55P03 (lock_not_available): TimescaleDB raises this when a manual
@@ -239,6 +288,81 @@ export function makeManage<HModels extends string = string, CModels extends stri
       const ref = resolveHypertable(model);
       const rel = relationLiteral(ref.table, ref.schema);
       await client.$executeRawUnsafe(`CALL remove_columnstore_policy(${rel}, if_exists => TRUE)`);
+    },
+
+    async dropChunks(model, opts) {
+      const ref = resolveHypertable(model);
+      const rel = relationLiteral(ref.table, ref.schema);
+      // Each bound is a validated Interval interpolated as `INTERVAL '...'` — a typed literal, so
+      // `older_than`'s polymorphic "any" parameter resolves (a bind param would be type-ambiguous).
+      const bound = (key: string, value: Interval | undefined): string | undefined => {
+        if (value === undefined) return undefined;
+        assertInterval(value);
+        return `${key} => INTERVAL ${quoteLiteral(value)}`;
+      };
+      const args = [bound("older_than", opts.olderThan), bound("newer_than", opts.newerThan)].filter(
+        (a): a is string => a !== undefined,
+      );
+      if (args.length === 0) {
+        throw new Error("dropChunks: specify olderThan and/or newerThan.");
+      }
+      const rows = await client.$queryRawUnsafe<{ chunk: string }[]>(
+        `SELECT drop_chunks(${rel}, ${args.join(", ")}) AS chunk`,
+      );
+      return rows.map((r) => r.chunk);
+    },
+
+    async hypertableSize(model) {
+      const ref = resolveHypertable(model);
+      const rows = await client.$queryRawUnsafe<{ bytes: bigint }[]>(
+        `SELECT hypertable_size(${relationLiteral(ref.table, ref.schema)}) AS bytes`,
+      );
+      return rows[0]?.bytes ?? 0n;
+    },
+
+    async hypertableDetailedSize(model) {
+      const ref = resolveHypertable(model);
+      const rows = await client.$queryRawUnsafe<
+        { table_bytes: bigint; index_bytes: bigint; toast_bytes: bigint; total_bytes: bigint }[]
+      >(
+        `SELECT table_bytes, index_bytes, toast_bytes, total_bytes FROM hypertable_detailed_size(${relationLiteral(ref.table, ref.schema)})`,
+      );
+      const r = rows[0];
+      return {
+        tableBytes: r?.table_bytes ?? 0n,
+        indexBytes: r?.index_bytes ?? 0n,
+        toastBytes: r?.toast_bytes ?? 0n,
+        totalBytes: r?.total_bytes ?? 0n,
+      };
+    },
+
+    async approximateRowCount(model) {
+      const ref = resolveHypertable(model);
+      const rows = await client.$queryRawUnsafe<{ count: bigint }[]>(
+        `SELECT approximate_row_count(${relationLiteral(ref.table, ref.schema)}) AS count`,
+      );
+      return rows[0]?.count ?? 0n;
+    },
+
+    async compressionStats(model) {
+      const ref = resolveHypertable(model);
+      const rows = await client.$queryRawUnsafe<
+        {
+          total_chunks: bigint;
+          number_compressed_chunks: bigint;
+          before_compression_total_bytes: bigint | null;
+          after_compression_total_bytes: bigint | null;
+        }[]
+      >(
+        `SELECT total_chunks, number_compressed_chunks, before_compression_total_bytes, after_compression_total_bytes FROM hypertable_columnstore_stats(${relationLiteral(ref.table, ref.schema)})`,
+      );
+      const r = rows[0];
+      return {
+        totalChunks: r?.total_chunks ?? 0n,
+        compressedChunks: r?.number_compressed_chunks ?? 0n,
+        beforeTotalBytes: r?.before_compression_total_bytes ?? null,
+        afterTotalBytes: r?.after_compression_total_bytes ?? null,
+      };
     },
   };
 }
