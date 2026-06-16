@@ -319,7 +319,8 @@ const rows = await prisma.sensorReading.timeBucket({
 - `fill: "locf"` carries the last observed value forward into empty buckets; `fill: "interpolate"`
   linearly interpolates between the surrounding values. Both are `null` at the range edges where
   there's no neighbouring value, and gap-filling happens **per `groupBy` group**.
-- **Under `gapfill`, every aggregate is nullable** (`number | null`) — empty buckets have no data.
+- **Under `gapfill`, every aggregate becomes nullable** — its base type still follows `as` / `fill`
+  (so an unfilled `{ sum, as: "bigint" }` comes back as `bigint | null`), since empty buckets have no data.
 - `fill` requires `gapfill: true` and is mutually exclusive with
   [`as`](#exact-aggregate-results-as-bigint--string) (a carried/interpolated value is a JS `number`,
   not an exact bigint/decimal).
