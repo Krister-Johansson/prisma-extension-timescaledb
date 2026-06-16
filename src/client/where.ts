@@ -2,10 +2,9 @@
 // single-table timeBucket query. Values are always bound as parameters; column names are
 // resolved + identifier-checked by the caller, so the result is injection-safe.
 //
-// Supported: equals, not, in, notIn, lt, lte, gt, gte, contains, startsWith, endsWith
-// (+ mode: "insensitive"), null checks, shorthand equality, and AND / OR / NOT.
-// Unsupported (throws): relation filters (some/none/every), nested `not: {...}`, and any
-// operator not in the list above.
+// Supported: equals, not (incl. nested `not: { ... }`), in, notIn, lt, lte, gt, gte, contains,
+// startsWith, endsWith (+ mode: "insensitive"), null checks, shorthand equality, and AND / OR / NOT.
+// Unsupported (throws): relation filters (some/none/every) and any operator not in the list above.
 
 export interface WhereCtx {
   /** Resolve a Prisma field name to a quoted DB column (e.g. `deviceId` -> `"device_id"`). */
@@ -55,13 +54,16 @@ function fieldClause(field: string, value: unknown, ctx: WhereCtx): string {
   if (Array.isArray(value)) {
     throw new Error(`timeBucket: unsupported array filter on "${field}".`);
   }
+  return operatorMapToSql(c, field, value as Record<string, unknown>, ctx);
+}
 
-  const filter = value as Record<string, unknown>;
+/** AND together every operator clause in a filter object (e.g. `{ gte, lt }`). `mode` applies to LIKE ops. */
+function operatorMapToSql(col: string, field: string, filter: Record<string, unknown>, ctx: WhereCtx): string {
   const mode = filter["mode"] === "insensitive" ? "insensitive" : undefined;
   const parts: string[] = [];
   for (const [op, v] of Object.entries(filter)) {
     if (v === undefined || op === "mode") continue;
-    parts.push(operatorClause(c, field, op, v, mode, ctx));
+    parts.push(operatorClause(col, field, op, v, mode, ctx));
   }
   return parts.join(" AND ");
 }
@@ -80,7 +82,13 @@ function operatorClause(
     case "not":
       if (v === null) return `${col} IS NOT NULL`;
       if (isScalar(v)) return `${col} <> ${ctx.push(v)}`;
-      throw new Error(`timeBucket: nested "not" filter on "${field}" is not supported.`);
+      if (Array.isArray(v)) {
+        throw new Error(`timeBucket: "not" on "${field}" cannot be an array — use { not: { in: [...] } } or notIn.`);
+      }
+      // Negate a nested filter object. NOT (...) reproduces Prisma's findMany semantics exactly,
+      // including NULL handling: under negation NULL rows are excluded (SQL three-valued logic —
+      // NOT(unknown) is unknown — verified against Prisma). Recurses for deeper nesting.
+      return `NOT (${operatorMapToSql(col, field, v as Record<string, unknown>, ctx)})`;
     case "in":
       return inClause(col, v, false, field, ctx);
     case "notIn":

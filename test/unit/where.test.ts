@@ -84,9 +84,37 @@ describe("whereToSql", () => {
     );
   });
 
-  it("throws on unsupported operator, relation filter, and nested not", () => {
+  it("nested not negates the inner filter as NOT (...) (matches Prisma; NULLs excluded)", () => {
+    const a = harness();
+    expect(whereToSql({ deviceId: { not: { in: [1, 2] } } }, a.ctx)).toBe(`NOT ("deviceId" IN ($1, $2))`);
+    expect(a.params).toEqual([1, 2]);
+
+    const b = harness();
+    expect(whereToSql({ temperature: { not: { gte: 30 } } }, b.ctx)).toBe(`NOT ("temperature" >= $1)`);
+    expect(b.params).toEqual([30]);
+
+    // multiple inner operators are ANDed inside the negation
+    const c = harness();
+    expect(whereToSql({ temperature: { not: { gte: 20, lt: 30 } } }, c.ctx)).toBe(
+      `NOT ("temperature" >= $1 AND "temperature" < $2)`,
+    );
+    expect(c.params).toEqual([20, 30]);
+
+    // a LIKE op + mode inside not
+    const d = harness();
+    expect(whereToSql({ label: { not: { contains: "x", mode: "insensitive" } } }, d.ctx)).toBe(
+      `NOT ("label" ILIKE $1 ESCAPE '\\')`,
+    );
+    expect(d.params).toEqual(["%x%"]);
+  });
+
+  it("throws on unsupported operators, relation filters (incl. inside not), and not: [array]", () => {
     expect(() => whereToSql({ deviceId: { foo: 1 } }, harness().ctx)).toThrow(/unsupported where operator "foo"/);
     expect(() => whereToSql({ author: { some: {} } }, harness().ctx)).toThrow(/unsupported where operator "some"/);
-    expect(() => whereToSql({ deviceId: { not: { gt: 1 } } }, harness().ctx)).toThrow(/nested "not"/);
+    // relation filters nested inside not still throw clearly
+    expect(() => whereToSql({ author: { not: { some: {} } } }, harness().ctx)).toThrow(
+      /unsupported where operator "some"/,
+    );
+    expect(() => whereToSql({ deviceId: { not: [1, 2] } }, harness().ctx)).toThrow(/cannot be an array/);
   });
 });
