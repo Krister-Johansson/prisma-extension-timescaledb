@@ -106,8 +106,13 @@ describe.skipIf(!DOCKER_OK)("timeBucket relation filters (real TimescaleDB)", ()
   // The gold standard: the same where through Prisma's own findMany (time-bounded to match the
   // timeBucket range), so results are checked against Prisma rather than hand-computed counts.
   const expected = async (where: object): Promise<number> =>
-    (await prisma.reading.findMany({ where: { time: { gte: range.start, lt: range.end }, ...where }, select: { id: true } }))
-      .length;
+    (
+      await prisma.reading.findMany({
+        // AND (not spread) so a case carrying its own `time` can never override the range guardrail.
+        where: { AND: [{ time: { gte: range.start, lt: range.end } }, where] },
+        select: { id: true },
+      })
+    ).length;
 
   it("no filter counts all rows", async () => {
     expect(await count()).toBe(4);
