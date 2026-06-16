@@ -63,7 +63,8 @@ function operatorMapToSql(col: string, field: string, filter: Record<string, unk
   const parts: string[] = [];
   for (const [op, v] of Object.entries(filter)) {
     if (v === undefined || op === "mode") continue;
-    parts.push(operatorClause(col, field, op, v, mode, ctx));
+    const clause = operatorClause(col, field, op, v, mode, ctx);
+    if (clause) parts.push(clause); // skip empties (e.g. an empty nested `not`) so the AND join stays valid
   }
   return parts.join(" AND ");
 }
@@ -87,8 +88,12 @@ function operatorClause(
       }
       // Negate a nested filter object. NOT (...) reproduces Prisma's findMany semantics exactly,
       // including NULL handling: under negation NULL rows are excluded (SQL three-valued logic —
-      // NOT(unknown) is unknown — verified against Prisma). Recurses for deeper nesting.
-      return `NOT (${operatorMapToSql(col, field, v as Record<string, unknown>, ctx)})`;
+      // NOT(unknown) is unknown — verified against Prisma). Recurses for deeper nesting. An empty
+      // inner filter (`not: {}` / only `mode`) is a no-op (like an empty top-level NOT), not `NOT ()`.
+      {
+        const inner = operatorMapToSql(col, field, v as Record<string, unknown>, ctx);
+        return inner ? `NOT (${inner})` : "";
+      }
     case "in":
       return inClause(col, v, false, field, ctx);
     case "notIn":
