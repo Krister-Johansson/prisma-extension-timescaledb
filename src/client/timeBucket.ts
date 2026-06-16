@@ -5,7 +5,7 @@ import { Prisma } from "@prisma/client/extension";
 import type { Interval } from "../core/interval.js";
 import { assertInterval } from "../core/interval.js";
 import type { RelationConfig } from "../core/types.js";
-import { assertSafeIdent, qualifiedIdent, quoteIdent } from "../core/sql.js";
+import { assertSafeIdent, qualifiedIdent, quoteIdent, quoteLiteral } from "../core/sql.js";
 import { whereToSql, type RuntimeRelation } from "./where.js";
 
 // --- type machinery --------------------------------------------------------
@@ -96,6 +96,15 @@ export interface TimeBucketArgs<R, W = unknown> {
    * Enabling this makes every aggregate in the result row nullable.
    */
   gapfill?: boolean;
+  /**
+   * Bucket in this IANA timezone (e.g. `"Europe/Stockholm"`) so day/week/month buckets align to
+   * that zone's calendar boundaries across DST. **Requires a `timestamptz` time column** (`@db.Timestamptz`).
+   */
+  timezone?: string;
+  /** Align bucket boundaries to this instant (TimescaleDB `time_bucket(..., origin => ...)`). */
+  origin?: Date;
+  /** Shift bucket boundaries by this interval (TimescaleDB `time_bucket(..., offset => ...)`). */
+  offset?: Interval;
 }
 
 type GroupByOf<A> = A extends { groupBy: ReadonlyArray<infer G> } ? G : never;
@@ -157,6 +166,60 @@ export interface TimeBucketRuntimeArgs {
   groupBy?: readonly string[];
   aggregate: Record<string, Record<string, string>>;
   gapfill?: boolean;
+  timezone?: string;
+  origin?: Date;
+  offset?: string;
+}
+
+// IANA timezone names: letters/digits and `_ + - /` (e.g. "Europe/Stockholm", "UTC", "Etc/GMT+5").
+// The value is also quoted as a literal (injection-safe); this rejects obvious garbage with a clear error.
+const TZ_RE = /^[A-Za-z][A-Za-z0-9_+/-]*$/;
+
+/**
+ * Build the bucketing expression for the SELECT/GROUP BY. The plain `time_bucket($1, time)` unless:
+ *  - `gapfill` -> `time_bucket_gapfill($1, time)` (bounds inferred from the range WHERE), or
+ *  - `timezone`/`origin`/`offset` -> the 3-arg `time_bucket` forms. `timezone` is the positional
+ *    3rd arg (requires a timestamptz column); `origin` is a bare ISO literal that coerces to the
+ *    column's type; `offset` is an INTERVAL literal. TimescaleDB has no `timestamp + origin + offset`
+ *    overload, so origin+offset together require a timezone — and gapfill can't combine with these yet.
+ */
+function bucketExpression(time: string, args: TimeBucketRuntimeArgs): string {
+  const gapfill = args.gapfill === true;
+  const { timezone, origin, offset } = args;
+  const hasModifier = timezone !== undefined || origin !== undefined || offset !== undefined;
+
+  if (gapfill) {
+    if (hasModifier) {
+      throw new Error("timeBucket: gapfill cannot be combined with timezone / origin / offset yet.");
+    }
+    return `time_bucket_gapfill($1, ${time})`;
+  }
+  if (!hasModifier) return `time_bucket($1, ${time})`;
+
+  if (origin !== undefined && offset !== undefined && timezone === undefined) {
+    throw new Error("timeBucket: origin and offset together require a timezone (no matching TimescaleDB overload).");
+  }
+  const extra: string[] = [];
+  if (timezone !== undefined) {
+    // typeof check first: a non-string (null/true from a non-TS caller) would coerce through
+    // TZ_RE.test and then crash in quoteLiteral with a raw TypeError.
+    if (typeof timezone !== "string" || !TZ_RE.test(timezone)) {
+      throw new Error(`timeBucket: invalid timezone ${JSON.stringify(timezone)}.`);
+    }
+    extra.push(quoteLiteral(timezone)); // positional 3rd arg — must precede the named args
+  }
+  if (origin !== undefined) {
+    // Reject Invalid Date too (it passes `instanceof Date` but throws a raw RangeError at toISOString()).
+    if (!(origin instanceof Date) || Number.isNaN(origin.getTime())) {
+      throw new Error("timeBucket: `origin` must be a valid Date.");
+    }
+    extra.push(`origin => ${quoteLiteral(origin.toISOString())}`);
+  }
+  if (offset !== undefined) {
+    assertInterval(offset);
+    extra.push(`"offset" => INTERVAL ${quoteLiteral(offset)}`);
+  }
+  return `time_bucket($1, ${time}, ${extra.join(", ")})`;
 }
 
 /**
@@ -219,13 +282,10 @@ export function buildTimeBucketQuery(
   const params: unknown[] = [args.bucket, args.range.start, args.range.end];
   const time = quoteIdent(timeColumn);
 
-  // gapfill emits a row for every bucket across the range (empty ones get null aggregates unless
-  // `fill`ed). Its bounds are inferred from the `time >= $2 AND time < $3` predicate below — always
-  // present since `range` is required — so the 2-arg form needs no extra args.
+  // The bucketing expression: plain time_bucket, gapfill (bounds inferred from the range WHERE), or
+  // a 3-arg time_bucket with timezone / origin / offset (see bucketExpression).
   const gapfill = args.gapfill === true;
-  const bucketExpr = gapfill ? `time_bucket_gapfill($1, ${time})` : `time_bucket($1, ${time})`;
-
-  const select: string[] = [`${bucketExpr} AS "bucket"`];
+  const select: string[] = [`${bucketExpression(time, args)} AS "bucket"`];
 
   const groupCols = args.groupBy ?? [];
   for (const g of groupCols) {

@@ -126,7 +126,28 @@ type _fl = Expect<
 const flgf = timeBucket({ bucket: "1 hour", range: { start, end }, gapfill: true, aggregate: { lastLabel: { last: "label" } } });
 type _flgf = Expect<Equal<(typeof flgf)[number], { bucket: Date; lastLabel: string | null }>>;
 
+// --- timezone / origin / offset args (result row unchanged — bucket stays Date) ---
+timeBucket({ bucket: "1 hour", range: { start, end }, timezone: "Europe/Stockholm", aggregate: { n: { count: "label" } } });
+const tzr = timeBucket({
+  bucket: "1 day",
+  range: { start, end },
+  timezone: "UTC",
+  origin: new Date(),
+  offset: "30 minutes",
+  aggregate: { n: { count: "label" } },
+});
+type _tzr = Expect<Equal<(typeof tzr)[number], { bucket: Date; n: number }>>;
+
 // --- negatives: each must fail to compile ---
+
+// offset must be a valid interval literal
+timeBucket({
+  bucket: "1 hour",
+  range: { start, end },
+  // @ts-expect-error - "1 fortnight" is not a valid Interval
+  offset: "1 fortnight",
+  aggregate: { n: { count: "label" } },
+});
 
 // first on a column that doesn't exist
 timeBucket({
