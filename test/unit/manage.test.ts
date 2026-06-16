@@ -12,6 +12,31 @@ function fakeClient() {
   return { client, calls };
 }
 
+/** A client whose $executeRawUnsafe throws `failWith` for the first `failTimes` calls. */
+function flakyClient(failWith: unknown, failTimes: number) {
+  let attempts = 0;
+  const client: RawClient = {
+    async $executeRawUnsafe() {
+      attempts++;
+      if (attempts <= failTimes) throw failWith;
+      return 0;
+    },
+  };
+  return { client, attempts: () => attempts };
+}
+
+// SQLSTATE 55P03 surfaced via the driver's `meta.code` only (message carries no code).
+const metaConcurrent = Object.assign(new Error("lock not available"), { meta: { code: "55P03" } });
+// SQLSTATE 55P03 surfaced only inside Prisma's rendered raw-query message (no `meta`).
+const messageConcurrent = new Error(
+  "Invalid `prisma.$executeRawUnsafe()` invocation:\n" +
+    "Raw query failed. Code: `55P03`. Message: `could not refresh continuous aggregate due to a concurrent refresh`",
+);
+const otherError = Object.assign(new Error("Raw query failed. Code: `42P01`. relation does not exist"), {
+  meta: { code: "42P01" },
+});
+const noSleep = async () => {};
+
 describe("makeManage.refreshContinuousAggregate", () => {
   it("full refresh uses literal NULL bounds and binds no params", async () => {
     const { client, calls } = fakeClient();
@@ -55,5 +80,33 @@ describe("makeManage.refreshContinuousAggregate", () => {
     const viewByModel = new Map([["SensorHourly", { name: "sensor_hourly", schema: "metrics" }]]);
     await makeManage(client, viewByModel).refreshContinuousAggregate("SensorHourly");
     expect(calls[0]!.sql).toBe(`CALL refresh_continuous_aggregate('"metrics"."sensor_hourly"', NULL, NULL)`);
+  });
+
+  it("retries a concurrent-policy refresh (55P03 in the message) then succeeds", async () => {
+    const { client, attempts } = flakyClient(messageConcurrent, 2);
+    await makeManage(client, new Map(), { sleep: noSleep }).refreshContinuousAggregate("SensorHourly");
+    expect(attempts()).toBe(3); // two 55P03s, then success
+  });
+
+  it("detects a concurrent refresh via the driver's meta.code", async () => {
+    const { client, attempts } = flakyClient(metaConcurrent, 1);
+    await makeManage(client, new Map(), { sleep: noSleep }).refreshContinuousAggregate("SensorHourly");
+    expect(attempts()).toBe(2);
+  });
+
+  it("gives up after maxRefreshAttempts and rethrows the 55P03 error", async () => {
+    const { client, attempts } = flakyClient(messageConcurrent, Number.POSITIVE_INFINITY);
+    await expect(
+      makeManage(client, new Map(), { sleep: noSleep, maxRefreshAttempts: 3 }).refreshContinuousAggregate("SensorHourly"),
+    ).rejects.toBe(messageConcurrent);
+    expect(attempts()).toBe(3);
+  });
+
+  it("does not retry errors other than 55P03", async () => {
+    const { client, attempts } = flakyClient(otherError, Number.POSITIVE_INFINITY);
+    await expect(
+      makeManage(client, new Map(), { sleep: noSleep }).refreshContinuousAggregate("SensorHourly"),
+    ).rejects.toBe(otherError);
+    expect(attempts()).toBe(1); // failed fast, no retry
   });
 });
