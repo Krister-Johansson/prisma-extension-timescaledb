@@ -5,7 +5,7 @@
 
 ### Features
 
-* columnstore compression policies (`[@timescale](https://github.com/timescale).compression` + `$timescale`) ([#16](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/16)) ([00e485a](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/00e485a1b2013449ed0adfc28ad4cd6806fd54f2))
+* columnstore compression policies (`@timescale.compression` + `$timescale`) ([#16](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/16)) ([00e485a](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/00e485a1b2013449ed0adfc28ad4cd6806fd54f2))
 
 ## [0.2.0](https://github.com/Krister-Johansson/prisma-extension-timescaledb/compare/prisma-extension-timescaledb-v0.1.0...prisma-extension-timescaledb-v0.2.0) (2026-06-16)
 
