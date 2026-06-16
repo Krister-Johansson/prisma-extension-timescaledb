@@ -220,9 +220,9 @@ describe("buildTimeBucketQuery", () => {
       "sensor_readings",
       "ts",
       { ...base, aggregate: { latest: { last: "temperature", by: "deviceId" } } },
-      { deviceId: "device_id", time: "ts" },
+      { deviceId: "device_id", time: "ts", temperature: "temp_c" },
     );
-    expect(sql).toContain(`last("temperature", "device_id") AS "latest"`);
+    expect(sql).toContain(`last("temp_c", "device_id") AS "latest"`); // both value + by mapped
   });
 
   it("first / last reject as and fill; `by` is rejected on other aggregates", () => {

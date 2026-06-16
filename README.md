@@ -232,7 +232,8 @@ const rows = await prisma.sensorReading.timeBucket({
 
 Aggregate columns are checked against the model's scalar fields **at compile time**
 (avg/sum/min/max require numeric columns), and the result row type is inferred from
-`groupBy` + `aggregate`. Supported functions: `avg`, `sum`, `min`, `max`, `count`.
+`groupBy` + `aggregate`. Supported functions: `avg`, `sum`, `min`, `max`, `count`, and
+[`first` / `last`](#earliest--latest-value-first--last).
 
 #### Relation filters (`some` / `none` / `every` / `is` / `isNot`)
 
