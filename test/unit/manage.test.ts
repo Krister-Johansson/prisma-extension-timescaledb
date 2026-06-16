@@ -1,15 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { makeManage, type RawClient } from "../../src/client/manage.js";
 
-function fakeClient() {
+function fakeClient(queryRows: unknown[] = []) {
   const calls: { sql: string; params: unknown[] }[] = [];
+  const queries: { sql: string; params: unknown[] }[] = [];
   const client: RawClient = {
     async $executeRawUnsafe(sql, ...params) {
       calls.push({ sql, params });
       return 0;
     },
+    async $queryRawUnsafe(sql: string, ...params: unknown[]) {
+      queries.push({ sql, params });
+      return queryRows as never;
+    },
   };
-  return { client, calls };
+  return { client, calls, queries };
 }
 
 /** A client whose $executeRawUnsafe throws `failWith` for the first `failTimes` calls. */
@@ -20,6 +25,9 @@ function flakyClient(failWith: unknown, failTimes: number) {
       attempts++;
       if (attempts <= failTimes) throw failWith;
       return 0;
+    },
+    async $queryRawUnsafe() {
+      return [] as never;
     },
   };
   return { client, attempts: () => attempts };
@@ -221,5 +229,77 @@ describe("makeManage compression policies", () => {
   it("rejects an unsafe model/relation name", async () => {
     const { client } = fakeClient();
     await expect(makeManage(client).addCompressionPolicy("bad name", { after: "1 day" })).rejects.toThrow(/Invalid/);
+  });
+});
+
+describe("makeManage chunk + size helpers", () => {
+  const hypertableByModel = new Map([["SensorReading", { table: "sensor_readings", schema: "metrics" }]]);
+
+  it("dropChunks with an interval bound interpolates a validated INTERVAL literal and maps the @@schema relation", async () => {
+    const { client, queries } = fakeClient([{ chunk: "_hyper_1_1_chunk" }, { chunk: "_hyper_1_2_chunk" }]);
+    const dropped = await makeManage(client, new Map(), { hypertableByModel }).dropChunks("SensorReading", {
+      olderThan: "30 days",
+    });
+    expect(queries).toHaveLength(1);
+    expect(queries[0]!.sql).toBe(
+      `SELECT drop_chunks('"metrics"."sensor_readings"', older_than => INTERVAL '30 days') AS chunk`,
+    );
+    expect(queries[0]!.params).toEqual([]);
+    expect(dropped).toEqual(["_hyper_1_1_chunk", "_hyper_1_2_chunk"]);
+  });
+
+  it("dropChunks supports an older/newer interval window (typed INTERVAL literals, no bind params)", async () => {
+    const { client, queries } = fakeClient([]);
+    await makeManage(client).dropChunks("SensorReading", { olderThan: "7 days", newerThan: "30 days" });
+    expect(queries[0]!.sql).toBe(
+      `SELECT drop_chunks('"SensorReading"', older_than => INTERVAL '7 days', newer_than => INTERVAL '30 days') AS chunk`,
+    );
+    expect(queries[0]!.params).toEqual([]);
+  });
+
+  it("dropChunks requires at least one bound and rejects an invalid interval", async () => {
+    await expect(makeManage(fakeClient().client).dropChunks("SensorReading", {})).rejects.toThrow(
+      /olderThan and\/or newerThan/,
+    );
+    await expect(
+      makeManage(fakeClient().client).dropChunks("SensorReading", { olderThan: "1 fortnight" as never }),
+    ).rejects.toThrow(/Invalid interval/);
+  });
+
+  it("hypertableSize / approximateRowCount return the scalar bigint", async () => {
+    const size = fakeClient([{ bytes: 253952n }]);
+    expect(await makeManage(size.client).hypertableSize("SensorReading")).toBe(253952n);
+    expect(size.queries[0]!.sql).toBe(`SELECT hypertable_size('"SensorReading"') AS bytes`);
+
+    const count = fakeClient([{ count: 1000n }]);
+    expect(await makeManage(count.client).approximateRowCount("SensorReading")).toBe(1000n);
+    expect(count.queries[0]!.sql).toBe(`SELECT approximate_row_count('"SensorReading"') AS count`);
+  });
+
+  it("hypertableDetailedSize maps the columns to camelCase bigints", async () => {
+    const { client, queries } = fakeClient([{ table_bytes: 1n, index_bytes: 2n, toast_bytes: 3n, total_bytes: 6n }]);
+    expect(await makeManage(client).hypertableDetailedSize("SensorReading")).toEqual({
+      tableBytes: 1n,
+      indexBytes: 2n,
+      toastBytes: 3n,
+      totalBytes: 6n,
+    });
+    expect(queries[0]!.sql).toContain(`FROM hypertable_detailed_size('"SensorReading"')`);
+  });
+
+  it("compressionStats maps chunk counts + before/after bytes (null when uncompressed)", async () => {
+    const { client } = fakeClient([
+      { total_chunks: 5n, number_compressed_chunks: 0n, before_compression_total_bytes: null, after_compression_total_bytes: null },
+    ]);
+    expect(await makeManage(client).compressionStats("SensorReading")).toEqual({
+      totalChunks: 5n,
+      compressedChunks: 0n,
+      beforeTotalBytes: null,
+      afterTotalBytes: null,
+    });
+  });
+
+  it("rejects an unsafe model/relation name", async () => {
+    await expect(makeManage(fakeClient().client).hypertableSize("bad name")).rejects.toThrow(/Invalid/);
   });
 });
