@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.5.0](https://github.com/Krister-Johansson/prisma-extension-timescaledb/compare/prisma-extension-timescaledb-v0.4.1...prisma-extension-timescaledb-v0.5.0) (2026-06-16)
+
+
+### Features
+
+* $timescale chunk + size helpers (drop_chunks + introspection) ([#26](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/26)) ([8907a97](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/8907a978a064db97b9d65740157322bc6ee567a6))
+* $timescale.setChunkInterval (resize a live hypertable) ([#31](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/31)) ([41845d0](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/41845d01c53ee01b3501c76c5a34a2a62d7ea0f2))
+* chunk skipping (enable/disable_chunk_skipping) ([#30](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/30)) ([f06662b](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/f06662b67b14b1ec14e06baefb2e386f09869171))
+* continuous-aggregate refresh-policy management ($timescale) ([#29](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/29)) ([d4d1eea](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/d4d1eeae61d68e9c7a500f93bae15982adf26ab3))
+* first() / last() aggregates in timeBucket ([#25](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/25)) ([30c2141](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/30c2141c6a2970e2c717ed4b9b5d07e3a08cc96d))
+* gap-filling in timeBucket (gapfill + locf / interpolate) ([#23](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/23)) ([d180616](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/d18061615cbf82f861b2b4e4cb971a76ee1d5241))
+* hash space partitioning (add_dimension + by_hash) ([#28](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/28)) ([07ea8e9](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/07ea8e9808dd20c8874494d9b6c6518affcaf17d))
+* timezone / origin / offset for timeBucket ([#27](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/27)) ([bc08a87](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/bc08a8728ba56047c6876d7d8ba6fec03c72c771))
+
 ## [0.4.1](https://github.com/Krister-Johansson/prisma-extension-timescaledb/compare/prisma-extension-timescaledb-v0.4.0...prisma-extension-timescaledb-v0.4.1) (2026-06-16)
 
 
