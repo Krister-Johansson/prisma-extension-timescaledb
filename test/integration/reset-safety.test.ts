@@ -106,6 +106,23 @@ describe.skipIf(!DOCKER_OK)("reset-safety (generated migrations)", () => {
         { h: "2026-06-15T10:00:00.000Z", d: 2, avg: 15, n: 1 },
       ]);
 
+      // where operators: device 1 AND temperature >= 21 (excludes the 20.0 reading).
+      const filtered = await prisma.sensorReading.timeBucket({
+        bucket: "1 hour",
+        range: { start: new Date("2026-06-15T00:00:00Z"), end: new Date("2026-06-16T00:00:00Z") },
+        where: { AND: [{ deviceId: { in: [1] } }, { temperature: { gte: 21 } }] },
+        groupBy: ["deviceId"],
+        aggregate: { n: { count: "temperature" } },
+      });
+      expect(
+        filtered
+          .map((r: { bucket: Date; n: number }) => ({ h: r.bucket.toISOString(), n: Number(r.n) }))
+          .sort((a, b) => a.h.localeCompare(b.h)),
+      ).toEqual([
+        { h: "2026-06-15T10:00:00.000Z", n: 2 }, // 22 + 24 (20 excluded by >= 21)
+        { h: "2026-06-15T11:00:00.000Z", n: 1 }, // 30
+      ]);
+
       // Refresh the continuous aggregate, then read it as a normal typed Prisma view.
       await prisma.$timescale.refreshContinuousAggregate("SensorHourly");
       const hourly = await prisma.sensorHourly.findMany({ orderBy: [{ deviceId: "asc" }, { bucket: "asc" }] });
