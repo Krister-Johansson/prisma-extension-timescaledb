@@ -127,12 +127,20 @@ export function buildTimeBucketQuery(
       throw new Error(`timeBucket: unsupported aggregate function "${fn}" for "${resultName}".`);
     }
     const src = quoteIdent(col(column));
-    // count -> ::int so it returns a JS number (Postgres count is bigint otherwise).
-    select.push(
-      fn === "count"
-        ? `count(${src})::int AS ${quoteIdent(resultName)}`
-        : `${fn}(${src}) AS ${quoteIdent(resultName)}`,
-    );
+    const alias = quoteIdent(resultName);
+    // Cast so results come back as JS numbers (matching the typed `number` result), instead
+    // of Prisma's BigInt/Decimal for integer-column aggregates:
+    //   count -> ::int        (Postgres count is bigint)
+    //   sum/avg -> ::float8    (sum of int is bigint; avg of int is numeric)
+    // min/max already return the column's own (numeric) type. NB: float8 means sums beyond
+    // 2^53 lose exactness — acceptable for the `number` contract.
+    if (fn === "count") {
+      select.push(`count(${src})::int AS ${alias}`);
+    } else if (fn === "sum" || fn === "avg") {
+      select.push(`${fn}(${src})::double precision AS ${alias}`);
+    } else {
+      select.push(`${fn}(${src}) AS ${alias}`);
+    }
   }
 
   let where = `${time} >= $2 AND ${time} < $3`;

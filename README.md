@@ -364,9 +364,10 @@ database) ships in this repo.
 - **`@@schema` (multiSchema)** is not yet handled — relations aren't schema-qualified, so
   models must live in the default schema. (`@@map`/`@map` table & column renaming **is**
   supported — see [Renamed tables/columns](#renamed-tablescolumns-map--map) below.)
-- **Integer-column aggregates:** `count` returns a JS `number`; `sum`/`avg` over integer
-  columns may return a Postgres `bigint`/`numeric` while typed as `number`. Float columns
-  behave as expected.
+- **`timeBucket` numeric precision:** results come back as JS `number`s — `count` is cast to
+  `int`, and `sum`/`avg` to `double precision` so integer-column aggregates aren't returned as
+  `BigInt`/`Decimal`. Caveat: `sum`/`avg` are therefore float64, so a `sum` beyond 2^53 loses
+  exactness. (Continuous-aggregate columns use the type you declare on the `view` model.)
 - Continuous aggregates must be declared as Prisma `view`s with `@@unique` (not `@@id`).
 
 ---
