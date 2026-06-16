@@ -5,6 +5,15 @@
 // generator binary, and the runtime must not depend on it (CLAUDE.md resilience rule).
 export { timescaledb } from "./client/index.js";
 export type { TimescaleConfig } from "./client/index.js";
+// Management namespace types ($timescale), so callers can name the return shapes.
+export type {
+  TimescaleManage,
+  RefreshRange,
+  TimescaleJob,
+  JobStats,
+  JobError,
+  AlterJobOptions,
+} from "./client/index.js";
 
 // Re-export the core types + SQL builders for convenience (also available at "./core").
 export type {

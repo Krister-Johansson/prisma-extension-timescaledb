@@ -439,6 +439,33 @@ to the [`chunkInterval`](#annotation-reference) annotation: `chunkInterval` sets
 time, and re-generating the schema can't change it later (`create_hypertable` is a no-op once the
 table exists), so use `setChunkInterval` to adjust it in place.
 
+#### Background jobs & policies (`listJobs` / `alterJob` / …)
+
+Every policy this package creates (retention, compression, cagg refresh) runs as a TimescaleDB
+**background job**. These helpers let you inspect and control them — the "did my retention actually
+run?" / "pause compression for now" surface.
+
+```ts
+// Inspect — filter by model (a hypertable or a continuous aggregate), or omit for all jobs.
+const jobs  = await prisma.$timescale.listJobs("SensorReading");   // [{ jobId, procName, scheduleInterval, scheduled, config, nextStart, ... }]
+const stats = await prisma.$timescale.jobStats("SensorReading");   // last/next run, status, totalRuns/Successes/Failures (bigint)
+const errs  = await prisma.$timescale.jobErrors("SensorReading");  // recent failures (SQLSTATE + message), newest first
+
+// Control — by numeric job id (from listJobs).
+const { jobId } = jobs[0];
+await prisma.$timescale.alterJob(jobId, { scheduled: false });            // pause
+await prisma.$timescale.alterJob(jobId, { scheduled: true, scheduleInterval: "2 days" }); // resume + reschedule
+await prisma.$timescale.runJob(jobId);                                    // run now, synchronously
+await prisma.$timescale.deleteJob(jobId);                                 // remove a custom job
+```
+
+`listJobs`/`jobStats`/`jobErrors` read the `timescaledb_information.jobs` / `job_stats` / `job_errors`
+views and resolve the model name to its hypertable table or cagg view (so the filter spans both).
+`alterJob` only changes the fields you pass (`scheduled`, `scheduleInterval`, `nextStart`, `maxRetries`,
+`retryPeriod`, `maxRuntime`, `config`) and is a no-op if the job is already gone. `runJob` wraps the
+`run_job` **procedure**, running the job inline. For the package's own policies, prefer the dedicated
+`remove*Policy` methods over `deleteJob`; `alterJob`/`runJob` work on all of them by id.
+
 ---
 
 ## Data retention (`@timescale.retention`)
