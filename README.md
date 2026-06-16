@@ -383,6 +383,15 @@ const hourly = await prisma.sensorHourly.findMany({
 ```ts
 await prisma.$timescale.refreshContinuousAggregate("SensorHourly");              // full refresh
 await prisma.$timescale.refreshContinuousAggregate("SensorHourly", { start, end }); // window
+
+// Manage the cagg's refresh policy at runtime — the complement of the `refresh: { … }` annotation
+// (and the way to set one on the manual-config path):
+await prisma.$timescale.addContinuousAggregatePolicy("SensorHourly", {
+  startOffset: "1 month",
+  endOffset: "1 hour",
+  scheduleInterval: "1 hour",
+});
+await prisma.$timescale.removeContinuousAggregatePolicy("SensorHourly");
 ```
 
 > **Typo-safe.** The model/view names passed to every `$timescale` method (and

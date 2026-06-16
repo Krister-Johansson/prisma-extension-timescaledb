@@ -2,7 +2,7 @@
 import { assertSafeIdent, qualifiedIdent, quoteLiteral, relationLiteral } from "../core/sql.js";
 import { assertInterval, type Interval } from "../core/interval.js";
 import { columnstoreReloptions, parseOrderByTerm } from "../core/compression.js";
-import type { CompressionOrderBy } from "../core/types.js";
+import type { CompressionOrderBy, RefreshPolicy } from "../core/types.js";
 
 /** Resolved DB identity of a continuous aggregate (name + optional @@schema). */
 export interface CaggRef {
@@ -119,6 +119,16 @@ export interface TimescaleManage<HModels extends string = string, CModels extend
   refreshContinuousAggregate(name: CModels, range?: RefreshRange): Promise<void>;
 
   /**
+   * Add (or no-op re-add) a refresh policy to a continuous aggregate — `add_continuous_aggregate_policy`.
+   * The complement of the `refresh: { ... }` annotation, and the way to set one on the manual-config path.
+   * Idempotent (`if_not_exists`); NB TimescaleDB won't update an existing policy's offsets — remove it first.
+   */
+  addContinuousAggregatePolicy(name: CModels, options: RefreshPolicy): Promise<void>;
+
+  /** Remove the refresh policy from a continuous aggregate (no-op if there is none). */
+  removeContinuousAggregatePolicy(name: CModels): Promise<void>;
+
+  /**
    * Add a data-retention policy to a hypertable — drops chunks whose data is older than
    * `dropAfter`. Accepts the Prisma model name (resolved to the DB relation via @@map/@@schema).
    * Idempotent: re-adding an identical policy is a no-op. NB: TimescaleDB will NOT update an
@@ -222,11 +232,17 @@ export function makeManage<HModels extends string = string, CModels extends stri
     return ref;
   };
 
+  /** Resolve a Prisma view model name to its continuous-aggregate DB ref (identity when unregistered). */
+  const resolveCagg = (name: string): CaggRef => {
+    const ref = viewByModel.get(name) ?? { name };
+    assertSafeIdent(ref.name, "continuous aggregate name");
+    if (ref.schema !== undefined) assertSafeIdent(ref.schema, "continuous aggregate schema");
+    return ref;
+  };
+
   return {
     async refreshContinuousAggregate(name, range) {
-      const ref = viewByModel.get(name) ?? { name };
-      assertSafeIdent(ref.name, "continuous aggregate name");
-      if (ref.schema !== undefined) assertSafeIdent(ref.schema, "continuous aggregate schema");
+      const ref = resolveCagg(name);
       // Open bounds (full refresh) must be a literal NULL, not a bound param: Postgres
       // can't infer the type of a NULL parameter for the function's "any" window args.
       const params: unknown[] = [];
@@ -248,6 +264,26 @@ export function makeManage<HModels extends string = string, CModels extends stri
           await sleep(Math.min(50 * 2 ** (attempt - 1), 1000));
         }
       }
+    },
+
+    async addContinuousAggregatePolicy(name, opts) {
+      const ref = resolveCagg(name);
+      assertInterval(opts.startOffset);
+      assertInterval(opts.endOffset);
+      assertInterval(opts.scheduleInterval);
+      const rel = relationLiteral(ref.name, ref.schema);
+      // Offsets are strict-grammar Intervals quoted as literals; if_not_exists keeps a re-add a no-op.
+      await client.$executeRawUnsafe(
+        `SELECT add_continuous_aggregate_policy(${rel}, start_offset => INTERVAL ${quoteLiteral(opts.startOffset)}, end_offset => INTERVAL ${quoteLiteral(opts.endOffset)}, schedule_interval => INTERVAL ${quoteLiteral(opts.scheduleInterval)}, if_not_exists => TRUE)`,
+      );
+    },
+
+    async removeContinuousAggregatePolicy(name) {
+      const ref = resolveCagg(name);
+      // remove_continuous_aggregate_policy's idempotent flag is (confusingly) named if_not_exists.
+      await client.$executeRawUnsafe(
+        `SELECT remove_continuous_aggregate_policy(${relationLiteral(ref.name, ref.schema)}, if_not_exists => TRUE)`,
+      );
     },
 
     async addRetentionPolicy(model, opts) {

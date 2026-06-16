@@ -59,6 +59,16 @@ m.dropChunks("SensorReading", { olderThan: new Date() });
 loose.dropChunks("anything", { olderThan: "1 day" }); // ok — string fallback
 loose.hypertableSize("anything"); // ok
 
+// continuous-aggregate policy helpers: cagg-name checked
+m.addContinuousAggregatePolicy("SensorHourly", { startOffset: "1 month", endOffset: "1 hour", scheduleInterval: "1 hour" }); // ok
+m.removeContinuousAggregatePolicy("SensorHourly"); // ok
+// @ts-expect-error - "SensorHrly" is not a registered continuous aggregate
+m.addContinuousAggregatePolicy("SensorHrly", { startOffset: "1 month", endOffset: "1 hour", scheduleInterval: "1 hour" });
+// @ts-expect-error - typo on the cagg name
+m.removeContinuousAggregatePolicy("SensorHrly");
+loose.addContinuousAggregatePolicy("anything", { startOffset: "1 month", endOffset: "1 hour", scheduleInterval: "1 hour" }); // ok — string fallback
+loose.removeContinuousAggregatePolicy("anything"); // ok — string fallback
+
 // --- 2) name extraction from a const registry (model ?? table / model ?? name) ---
 const mapped = {
   hypertables: [{ model: "SensorReading", table: "sensor_readings" }],
