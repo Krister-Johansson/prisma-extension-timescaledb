@@ -24,9 +24,11 @@ describe("interval", () => {
     }
   });
 
-  it("rejects malformed intervals and non-input units (quarter, millennium)", () => {
+  it("rejects malformed intervals, non-input units (quarter, millennium), and non-positive amounts", () => {
     // `quarter` / `millennium` are EXTRACT fields, not interval input units in PostgreSQL.
-    for (const v of ["hour", "1hour", "1 fortnight", "1 quarter", "1 millennium", "1  hour", " 1 hour", "1 hour ", "-1 hours", ""]) {
+    // "0 …" is well-formed shape-wise, but a zero amount is meaningless for a chunk size / policy
+    // threshold / bucket width (negatives are already rejected by the grammar — no leading `-`).
+    for (const v of ["hour", "1hour", "1 fortnight", "1 quarter", "1 millennium", "1  hour", " 1 hour", "1 hour ", "-1 hours", "0 days", "0.0 seconds", "00 hours", ""]) {
       expect(isInterval(v)).toBe(false);
       expect(() => assertInterval(v)).toThrow(/Invalid interval/);
     }

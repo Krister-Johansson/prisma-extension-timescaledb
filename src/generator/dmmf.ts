@@ -32,8 +32,11 @@ export interface TimescaleSchema {
   relationsByModel: Record<string, RelationConfig[]>;
 }
 
-// Field types acceptable as a hypertable / time_bucket partitioning column.
-const TIME_TYPES = new Set(["DateTime", "Int", "BigInt"]);
+// Field types acceptable as a hypertable / continuous-aggregate partitioning column. DateTime
+// only: integer time columns aren't supported yet — every builder emits interval-based SQL
+// (`by_range(col, INTERVAL …)`, `time_bucket($1, col)`), so accepting Int/BigInt here would pass
+// generation and then fail at `migrate`. Reject them up front with a clear message instead.
+const TIME_TYPES = new Set(["DateTime"]);
 const AGG_FNS = new Set<AggregateSpec["fn"]>(["avg", "sum", "min", "max", "count"]);
 
 /** Extract and validate all TimescaleDB configs from a Prisma DMMF document. */
@@ -107,7 +110,7 @@ function buildHypertable(
   }
   if (!TIME_TYPES.has(field.type)) {
     throw new Error(
-      `${ctx}: column "${column}" has type ${field.type}; the partitioning column must be a DateTime or integer field.`,
+      `${ctx}: column "${column}" has type ${field.type}; the partitioning column must be a DateTime field (integer time columns are not supported yet).`,
     );
   }
   if (chunkInterval !== undefined) assertInterval(chunkInterval);
@@ -274,7 +277,7 @@ function buildCagg(
   }
   if (!TIME_TYPES.has(timeField.type)) {
     throw new Error(
-      `${ctx}: timeColumn "${timeColumn}" has type ${timeField.type}; it must be a DateTime or integer field.`,
+      `${ctx}: timeColumn "${timeColumn}" has type ${timeField.type}; it must be a DateTime field (integer time columns are not supported yet).`,
     );
   }
 
