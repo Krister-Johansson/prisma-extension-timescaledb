@@ -3,7 +3,7 @@ import { assertInterval, isInterval } from "../../src/core/interval.js";
 
 describe("interval", () => {
   it("accepts well-formed intervals", () => {
-    for (const v of ["1 hour", "7 days", "30 minutes", "1 second", "12 months", "2 weeks", "1.5 days"]) {
+    for (const v of ["1 hour", "7 days", "30 minutes", "1 second", "12 months", "2 weeks", "1.5 days", "1 year", "2 years"]) {
       expect(isInterval(v)).toBe(true);
       expect(() => assertInterval(v)).not.toThrow();
     }

@@ -427,7 +427,8 @@ database) ships in this repo.
 | `@timescale.aggregate` | view field | `fn` (`avg`\|`sum`\|`min`\|`max`\|`count`), `column` |
 
 **Intervals** are `"<amount> <unit>"` where unit is `second(s)`, `minute(s)`, `hour(s)`,
-`day(s)`, `week(s)`, or `month(s)` — validated at compile time (`"1 hour"`, `"7 days"`).
+`day(s)`, `week(s)`, `month(s)`, or `year(s)` — validated at compile time (`"1 hour"`, `"7 days"`,
+`"2 years"`).
 
 ---
 

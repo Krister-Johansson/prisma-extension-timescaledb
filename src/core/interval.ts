@@ -15,13 +15,15 @@ const UNITS = [
   "weeks",
   "month",
   "months",
+  "year",
+  "years",
 ] as const;
 
 type Unit = (typeof UNITS)[number];
 
 /**
  * A Postgres/TimescaleDB interval literal, branded at the type level to catch typos at
- * compile time, e.g. `"1 hour"`, `"7 days"`, `"30 minutes"`.
+ * compile time, e.g. `"1 hour"`, `"7 days"`, `"30 minutes"`, `"2 years"`.
  */
 export type Interval = `${number} ${Unit}`;
 
