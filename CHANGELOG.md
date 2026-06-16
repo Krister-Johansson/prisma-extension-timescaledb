@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/Krister-Johansson/prisma-extension-timescaledb/compare/prisma-extension-timescaledb-v0.4.0...prisma-extension-timescaledb-v0.4.1) (2026-06-16)
+
+
+### Bug Fixes
+
+* reject unsupported integer time columns and non-positive intervals up front ([#21](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/21)) ([08adde3](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/08adde33b5ab4c1722adb8928ef88c9d5b123f30))
+
 ## [0.4.0](https://github.com/Krister-Johansson/prisma-extension-timescaledb/compare/prisma-extension-timescaledb-v0.3.0...prisma-extension-timescaledb-v0.4.0) (2026-06-16)
 
 
