@@ -2,6 +2,11 @@
 // jobStats / jobErrors / alterJob / runJob / deleteJob. The schema declares a retention policy
 // (job -> SensorReading) and a cagg refresh policy (job -> SensorHourly), so we can exercise both
 // the model filter (hypertable vs cagg) and the full job lifecycle.
+//
+// Runtime-only feature (these $timescale methods emit no migration SQL), so — like the other
+// runtime $timescale tests (cagg-policy, chunk-helpers, set-chunk-interval) — it uses migrate deploy
+// without a migrate-reset assertion. Reset-safety of the underlying retention/cagg refresh policies
+// is covered by retention.test.ts / reset-safety.test.ts.
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
