@@ -78,6 +78,9 @@ export interface HypertableConfig {
   column: string;
   /** Chunk size; defaults to "7 days" when omitted. */
   chunkInterval?: Interval;
+  /** Optional hash space dimension (`add_dimension` + `by_hash`): partition by `column` (DB name)
+   * into `partitions` buckets, in addition to the time dimension. Omitted means time-only. */
+  spacePartition?: { column: string; partitions: number };
   /**
    * Map of Prisma field name -> DB column name, for runtime helpers that take Prisma field
    * names (timeBucket where/groupBy/aggregate) and must emit DB column names. Omitted when
