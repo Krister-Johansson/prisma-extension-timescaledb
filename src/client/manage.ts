@@ -299,7 +299,7 @@ export interface TimescaleManage<HModels extends string = string, CModels extend
 
   /**
    * List a hypertable's chunks — `show_chunks` — as relation names (e.g.
-   * `_timescaledb_internal._hyper_1_2_chunk`), newest-bounded by the optional `olderThan` / `newerThan`
+   * `_timescaledb_internal._hyper_1_2_chunk`), optionally bounded by the `olderThan` / `newerThan`
    * intervals (relative to now, like `dropChunks`). The returned names are the handles for
    * `compressChunk` / `decompressChunk`.
    */
