@@ -234,7 +234,7 @@ const rows = await prisma.sensorReading.timeBucket({
 Aggregate columns are checked against the model's scalar fields **at compile time**
 (avg/sum/min/max require numeric columns), and the result row type is inferred from
 `groupBy` + `aggregate`. Supported functions: `avg`, `sum`, `min`, `max`, `count`,
-`stddev`, `stddevPop`, `variance`, `varPop`, `histogram`, and
+`stddev`, `stddevPop`, `variance`, `varPop`, `histogram`, `percentile`, and
 [`first` / `last`](#earliest--latest-value-first--last).
 
 ```ts
@@ -245,6 +245,7 @@ const rows = await prisma.sensorReading.timeBucket({
     spread:  { stddev: "temperature" },                 // sample stddev (number); stddevPop / variance / varPop too
     devices: { count: "deviceId", distinct: true },     // count(DISTINCT deviceId)
     dist:    { histogram: "temperature", min: 0, max: 100, buckets: 10 }, // number[] of buckets+2 counts
+    p95:     { percentile: "temperature", p: 0.95 },    // approximate p95 (number)
   },
 });
 ```
@@ -252,6 +253,7 @@ const rows = await prisma.sensorReading.timeBucket({
 - `stddev` / `stddevPop` / `variance` / `varPop` are numeric like `avg` (default JS `number`; `as: "string"` for the exact decimal).
 - `count` takes `distinct: true` for `count(DISTINCT col)`.
 - `histogram` returns a **`number[]`** of `buckets + 2` counts — the first and last entries are the below-`min` / above-`max` overflow bins. It takes no `as` / `fill`.
+- `percentile` is an **approximate** percentile (`p` is the fraction in `[0, 1]`, e.g. `0.95` for p95), via the TimescaleDB Toolkit `approx_percentile` / `percentile_agg`. **Requires the `timescaledb_toolkit` extension** (present on Tiger Cloud and the `timescale/timescaledb-ha` image; not in the slim `timescaledb` image).
 
 #### Ordering & limiting (`orderBy` / `limit`)
 

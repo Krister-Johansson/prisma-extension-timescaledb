@@ -388,4 +388,24 @@ describe("buildTimeBucketQuery", () => {
       /unexpected key/,
     );
   });
+
+  it("percentile emits approx_percentile(p, percentile_agg(col))", () => {
+    const { sql } = buildTimeBucketQuery("SensorReading", "time", {
+      ...base,
+      aggregate: { p95: { percentile: "temperature", p: 0.95 } },
+    });
+    expect(sql).toContain(`approx_percentile(0.95, percentile_agg("temperature")) AS "p95"`);
+  });
+
+  it("rejects a bad/missing percentile p, p on a non-percentile, and as/fill on percentile", () => {
+    const bad = (aggregate: Record<string, Record<string, unknown>>) =>
+      buildTimeBucketQuery("SensorReading", "time", { ...base, aggregate });
+    expect(() => bad({ x: { percentile: "temperature", p: 1.5 } })).toThrow(/p as a number in \[0, 1\]/);
+    expect(() => bad({ x: { percentile: "temperature" } })).toThrow(/p as a number in \[0, 1\]/); // missing p
+    expect(() => bad({ x: { avg: "temperature", p: 0.5 } })).toThrow(/"p" is only valid on percentile/);
+    expect(() => bad({ x: { percentile: "temperature", p: 0.5, as: "string" } })).toThrow(/does not support as/);
+    expect(() => bad({ h: { histogram: "temperature", min: 0, max: 1, buckets: 2, p: 0.5 } })).toThrow(
+      /does not support as \/ fill \/ by \/ distinct \/ p/,
+    );
+  });
 });

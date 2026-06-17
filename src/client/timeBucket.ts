@@ -66,7 +66,10 @@ export type AggregateOp<R> =
   | { last: AnyColumn<R>; by?: AnyColumn<R> }
   // TimescaleDB `histogram(value, min, max, buckets)` -> a `number[]` of `buckets + 2` counts (the
   // first/last are the below-min / above-max overflow bins). No `as` / `fill`.
-  | { histogram: NumericColumn<R>; min: number; max: number; buckets: number };
+  | { histogram: NumericColumn<R>; min: number; max: number; buckets: number }
+  // Toolkit approximate percentile: `approx_percentile(p, percentile_agg(value))`. `p` is the
+  // fraction in [0, 1] (e.g. 0.95 for p95). Returns a number. Requires `timescaledb_toolkit`.
+  | { percentile: NumericColumn<R>; p: number };
 
 /** The `aggregate` spec: result-column name -> aggregate operation. */
 export type AggregateInput<R> = Record<string, AggregateOp<R>>;
@@ -353,7 +356,9 @@ export function buildTimeBucketQuery(
     assertSafeIdent(resultName, "aggregate result column");
     // Split the optional selectors (none of which are function names) from the function entry. The
     // runtime view is loose (`unknown`), so narrow each before use — this also hardens non-TS callers.
-    const { as: outputAs, fill, by, distinct, ...rest } = op;
+    // `p` (percentile fraction) is pulled out like the others; `min`/`max`/`buckets` are NOT, because
+    // they collide with the min/max function names — histogram reads them from `rest` instead.
+    const { as: outputAs, fill, by, distinct, p, ...rest } = op;
     if (outputAs !== undefined && typeof outputAs !== "string") throw new Error(`timeBucket: as on "${resultName}" must be a string.`);
     if (fill !== undefined && typeof fill !== "string") throw new Error(`timeBucket: fill on "${resultName}" must be a string.`);
     if (by !== undefined && typeof by !== "string") throw new Error(`timeBucket: by on "${resultName}" must be a string.`);
@@ -364,8 +369,8 @@ export function buildTimeBucketQuery(
     // `min`/`max` are themselves aggregate function names — detecting it up front avoids the clash.
     // Result is a `number[]` of `buckets + 2` counts; no as / fill / by / distinct.
     if ("histogram" in rest) {
-      if (outputAs !== undefined || fill !== undefined || by !== undefined || distinct !== undefined) {
-        throw new Error(`timeBucket: "histogram" on "${resultName}" does not support as / fill / by / distinct.`);
+      if (outputAs !== undefined || fill !== undefined || by !== undefined || distinct !== undefined || p !== undefined) {
+        throw new Error(`timeBucket: "histogram" on "${resultName}" does not support as / fill / by / distinct / p.`);
       }
       const { histogram: columnRaw, min, max, buckets } = rest;
       const extra = Object.keys(rest).filter((k) => k !== "histogram" && k !== "min" && k !== "max" && k !== "buckets");
@@ -410,6 +415,20 @@ export function buildTimeBucketQuery(
       continue;
     }
     if (by !== undefined) throw new Error(`timeBucket: "by" is only valid on first / last (on "${resultName}").`);
+
+    // percentile: approx_percentile(p, percentile_agg(col)) — `p` is a fraction in [0, 1]. No as / fill.
+    if (fn === "percentile") {
+      if (outputAs !== undefined || fill !== undefined) {
+        throw new Error(`timeBucket: "percentile" on "${resultName}" does not support as / fill.`);
+      }
+      if (typeof p !== "number" || !Number.isFinite(p) || p < 0 || p > 1) {
+        throw new Error(`timeBucket: percentile "${resultName}" requires p as a number in [0, 1].`);
+      }
+      // p is a validated number — safe to inline directly.
+      select.push(`approx_percentile(${p}, percentile_agg(${src})) AS ${alias}`);
+      continue;
+    }
+    if (p !== undefined) throw new Error(`timeBucket: "p" is only valid on percentile (on "${resultName}").`);
 
     const allowedAs = AGG_AS[fn];
     if (!allowedAs) {
