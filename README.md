@@ -234,8 +234,8 @@ const rows = await prisma.sensorReading.timeBucket({
 Aggregate columns are checked against the model's scalar fields **at compile time**
 (avg/sum/min/max require numeric columns), and the result row type is inferred from
 `groupBy` + `aggregate`. Supported functions: `avg`, `sum`, `min`, `max`, `count`,
-`stddev`, `stddevPop`, `variance`, `varPop`, `histogram`, `percentile`, and
-[`first` / `last`](#earliest--latest-value-first--last).
+`stddev`, `stddevPop`, `variance`, `varPop`, `histogram`, `percentile`, `rate`, `delta`,
+`timeWeightedAverage`, and [`first` / `last`](#earliest--latest-value-first--last).
 
 ```ts
 const rows = await prisma.sensorReading.timeBucket({
@@ -246,6 +246,8 @@ const rows = await prisma.sensorReading.timeBucket({
     devices: { count: "deviceId", distinct: true },     // count(DISTINCT deviceId)
     dist:    { histogram: "temperature", min: 0, max: 100, buckets: 10 }, // number[] of buckets+2 counts
     p95:     { percentile: "temperature", p: 0.95 },    // approximate p95 (number)
+    reqRate: { rate: "requestsTotal" },                 // per-second rate of a reset-aware counter
+    twAvg:   { timeWeightedAverage: "temperature" },    // time-weighted average (LOCF; or method: "linear")
   },
 });
 ```
@@ -253,7 +255,12 @@ const rows = await prisma.sensorReading.timeBucket({
 - `stddev` / `stddevPop` / `variance` / `varPop` are numeric like `avg` (default JS `number`; `as: "string"` for the exact decimal).
 - `count` takes `distinct: true` for `count(DISTINCT col)`.
 - `histogram` returns a **`number[]`** of `buckets + 2` counts — the first and last entries are the below-`min` / above-`max` overflow bins. It takes no `as` / `fill`.
-- `percentile` is an **approximate** percentile (`p` is the fraction in `[0, 1]`, e.g. `0.95` for p95), via the TimescaleDB Toolkit `approx_percentile` / `percentile_agg`. **Requires the `timescaledb_toolkit` extension** (present on Tiger Cloud and the `timescale/timescaledb-ha` image; not in the slim `timescaledb` image).
+
+**Toolkit hyperfunctions** (`percentile`, `rate`, `delta`, `timeWeightedAverage`) all return a `number`, take no `as` / `fill`, and **require the `timescaledb_toolkit` extension** — present on Tiger Cloud and the `timescale/timescaledb-ha` image, but **not** in the slim `timescaledb` image.
+
+- `percentile` is an **approximate** percentile (`p` is the fraction in `[0, 1]`, e.g. `0.95` for p95), via `approx_percentile` / `percentile_agg`.
+- `rate` (per-second) and `delta` (total change) wrap `counter_agg` for **monotonic counters** — both are **reset-aware** (a counter that resets to a lower value is handled correctly).
+- `timeWeightedAverage` is `average(time_weight(...))` — a [time-weighted average](https://docs.tigerdata.com/) that weights each value by how long it held, ideal for irregularly-sampled gauges. `method` is `"locf"` (default) or `"linear"`.
 
 #### Ordering & limiting (`orderBy` / `limit`)
 
