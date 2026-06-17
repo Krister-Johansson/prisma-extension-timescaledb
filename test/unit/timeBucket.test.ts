@@ -381,5 +381,11 @@ describe("buildTimeBucketQuery", () => {
     // `min` is itself a function name, so a stray histogram param on another fn reads as two functions.
     expect(() => bad({ x: { avg: "temperature", min: 0 } })).toThrow(/exactly one function/);
     expect(() => bad({ x: { stddev: "temperature", as: "bigint" } })).toThrow(/is not valid for "stddev"/);
+    // a non-boolean distinct, distinct on a non-count, and an extra key in a histogram spec
+    expect(() => bad({ x: { count: "deviceId", distinct: "yes" } })).toThrow(/distinct on "x" must be a boolean/);
+    expect(() => bad({ x: { first: "temperature", distinct: true } })).toThrow(/"distinct" is only valid on count/);
+    expect(() => bad({ h: { histogram: "temperature", min: 0, max: 1, buckets: 2, sum: "temperature" } })).toThrow(
+      /unexpected key/,
+    );
   });
 });

@@ -357,6 +357,7 @@ export function buildTimeBucketQuery(
     if (outputAs !== undefined && typeof outputAs !== "string") throw new Error(`timeBucket: as on "${resultName}" must be a string.`);
     if (fill !== undefined && typeof fill !== "string") throw new Error(`timeBucket: fill on "${resultName}" must be a string.`);
     if (by !== undefined && typeof by !== "string") throw new Error(`timeBucket: by on "${resultName}" must be a string.`);
+    if (distinct !== undefined && typeof distinct !== "boolean") throw new Error(`timeBucket: distinct on "${resultName}" must be a boolean.`);
     const alias = quoteIdent(resultName);
 
     // histogram is resolved by its key FIRST: its `min`/`max`/`buckets` params are siblings, and
@@ -367,6 +368,10 @@ export function buildTimeBucketQuery(
         throw new Error(`timeBucket: "histogram" on "${resultName}" does not support as / fill / by / distinct.`);
       }
       const { histogram: columnRaw, min, max, buckets } = rest;
+      const extra = Object.keys(rest).filter((k) => k !== "histogram" && k !== "min" && k !== "max" && k !== "buckets");
+      if (extra.length > 0) {
+        throw new Error(`timeBucket: histogram "${resultName}" has unexpected key(s): ${extra.join(", ")}.`);
+      }
       if (typeof columnRaw !== "string") throw new Error(`timeBucket: histogram "${resultName}" must map to a column name.`);
       if (typeof min !== "number" || !Number.isFinite(min)) throw new Error(`timeBucket: histogram "${resultName}" requires a finite numeric min.`);
       if (typeof max !== "number" || !Number.isFinite(max)) throw new Error(`timeBucket: histogram "${resultName}" requires a finite numeric max.`);
@@ -390,6 +395,10 @@ export function buildTimeBucketQuery(
       throw new Error(`timeBucket: aggregate "${resultName}" must map its function to a column name.`);
     }
     const src = quoteIdent(col(columnRaw));
+    // `distinct` applies only to count — reject it everywhere else up front (incl. first/last below).
+    if (distinct !== undefined && fn !== "count") {
+      throw new Error(`timeBucket: "distinct" is only valid on count (on "${resultName}").`);
+    }
 
     // first/last: the value of `column` ordered by `by` (default: the model's time column). They
     // return the value column's own type, so they take no `as`/`fill`.
@@ -401,9 +410,6 @@ export function buildTimeBucketQuery(
       continue;
     }
     if (by !== undefined) throw new Error(`timeBucket: "by" is only valid on first / last (on "${resultName}").`);
-    if (distinct !== undefined && fn !== "count") {
-      throw new Error(`timeBucket: "distinct" is only valid on count (on "${resultName}").`);
-    }
 
     const allowedAs = AGG_AS[fn];
     if (!allowedAs) {
