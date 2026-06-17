@@ -1,7 +1,7 @@
 // Type-level tests for model.timeBucket (BUILD_PLAN M4 gate). Checked by
 // `npm run test:types` (tsc -p tsconfig.types.json). No runtime assertions here:
 // success == it type-checks, and each `@ts-expect-error` must actually error.
-import type { TimeBucketArgs, TimeBucketRow } from "../../src/client/timeBucket.js";
+import type { TimeBucketArgs, TimeBucketRow, TimeBucketOrderBy } from "../../src/client/timeBucket.js";
 
 // Exact type-equality assertion (dependency-free).
 type Equal<X, Y> = (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2 ? true : false;
@@ -19,8 +19,10 @@ interface Where {
   label?: string;
 }
 
-// Mirrors the real method's generic signature, pinned to Row/Where.
-declare function timeBucket<const A extends TimeBucketArgs<Row, Where>>(args: A): Array<TimeBucketRow<Row, A>>;
+// Mirrors the real method's generic signature, pinned to Row/Where (incl. the orderBy intersection).
+declare function timeBucket<
+  const A extends TimeBucketArgs<Row, Where> & { orderBy?: TimeBucketOrderBy<Row, A> },
+>(args: A): Array<TimeBucketRow<Row, A>>;
 
 const start = new Date();
 const end = new Date();
@@ -225,6 +227,51 @@ timeBucket({
   bucket: "1 fortnight",
   range: { start, end },
   aggregate: { x: { avg: "temperature" } },
+});
+
+// --- orderBy / limit ---
+// order by the bucket, a groupBy column, or an aggregate; single object or array; + limit
+timeBucket({
+  bucket: "1 hour",
+  range: { start, end },
+  groupBy: ["deviceId"],
+  aggregate: { avgTemp: { avg: "temperature" } },
+  orderBy: { bucket: "desc" },
+  limit: 10,
+});
+timeBucket({
+  bucket: "1 hour",
+  range: { start, end },
+  groupBy: ["deviceId"],
+  aggregate: { avgTemp: { avg: "temperature" } },
+  orderBy: [{ deviceId: "asc" }, { avgTemp: "desc" }],
+});
+
+// invalid sort direction
+timeBucket({
+  bucket: "1 hour",
+  range: { start, end },
+  aggregate: { avgTemp: { avg: "temperature" } },
+  // @ts-expect-error - direction must be "asc" | "desc"
+  orderBy: { bucket: "up" },
+});
+
+// orderBy a key that is neither the bucket, a groupBy column, nor an aggregate
+timeBucket({
+  bucket: "1 hour",
+  range: { start, end },
+  aggregate: { avgTemp: { avg: "temperature" } },
+  // @ts-expect-error - "nope" is not an orderable key
+  orderBy: { nope: "asc" },
+});
+
+// limit must be a number
+timeBucket({
+  bucket: "1 hour",
+  range: { start, end },
+  aggregate: { avgTemp: { avg: "temperature" } },
+  // @ts-expect-error - limit must be a number
+  limit: "10",
 });
 
 export {};

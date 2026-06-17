@@ -105,6 +105,8 @@ export interface TimeBucketArgs<R, W = unknown> {
   origin?: Date;
   /** Shift bucket boundaries by this interval (TimescaleDB `time_bucket(..., offset => ...)`). */
   offset?: Interval;
+  /** Cap the number of returned rows (SQL `LIMIT`) — a positive integer, applied after `orderBy`. */
+  limit?: number;
 }
 
 type GroupByOf<A> = A extends { groupBy: ReadonlyArray<infer G> } ? G : never;
@@ -120,9 +122,32 @@ export type TimeBucketRow<R, A extends TimeBucketArgs<R, unknown>> = Prettify<
   }
 >;
 
+/** Sort direction for `orderBy`. */
+export type SortDir = "asc" | "desc";
+
+/** Keys a timeBucket result can be ordered by: the bucket, a selected groupBy column, or an
+ * aggregate result name (the output aliases). Derived from the args `A` so a typo fails to compile. */
+type TimeBucketOrderKey<R, A extends TimeBucketArgs<R, unknown>> =
+  | "bucket"
+  | Extract<GroupByOf<A>, keyof R>
+  | (keyof A["aggregate"] & string);
+
+/** `orderBy` spec: map orderable keys -> direction. A single object, or an array for multi-key
+ * precedence (Prisma-style). */
+export type TimeBucketOrderBy<R, A extends TimeBucketArgs<R, unknown>> =
+  | { readonly [K in TimeBucketOrderKey<R, A>]?: SortDir }
+  | ReadonlyArray<{ readonly [K in TimeBucketOrderKey<R, A>]?: SortDir }>;
+
 /** The generic call signature installed on every model as `.timeBucket(...)`. */
 export interface TimeBucketMethod {
-  <T, const A extends TimeBucketArgs<ScalarRow<T>, WhereInput<T>>>(
+  <
+    T,
+    const A extends TimeBucketArgs<ScalarRow<T>, WhereInput<T>> & {
+      /** Order the result rows; default is the bucket ascending. Map orderable keys -> `"asc"`/`"desc"`,
+       * or pass an array for multi-key precedence. Keys: `"bucket"`, a `groupBy` column, or an aggregate name. */
+      orderBy?: TimeBucketOrderBy<ScalarRow<T>, A>;
+    },
+  >(
     this: T,
     args: A,
   ): Promise<Array<TimeBucketRow<ScalarRow<T>, A>>>;
@@ -169,6 +194,8 @@ export interface TimeBucketRuntimeArgs {
   timezone?: string;
   origin?: Date;
   offset?: string;
+  orderBy?: Record<string, SortDir> | ReadonlyArray<Record<string, SortDir>>;
+  limit?: number;
 }
 
 // IANA timezone names: letters/digits and `_ + - /` (e.g. "Europe/Stockholm", "UTC", "Etc/GMT+5").
@@ -376,6 +403,38 @@ export function buildTimeBucketQuery(
   if (whereSql) where += ` AND (${whereSql})`;
 
   const groupBy = [`"bucket"`, ...groupCols.map((g) => quoteIdent(g))].join(", ");
-  const sql = `SELECT ${select.join(", ")} FROM ${qualifiedIdent(table, schema)} WHERE ${where} GROUP BY ${groupBy} ORDER BY "bucket"`;
+
+  // ORDER BY: default to the bucket ascending; otherwise the caller's spec over the output aliases
+  // (the bucket, a groupBy column, or an aggregate name). An array gives multi-key precedence.
+  const orderable = new Set<string>(["bucket", ...groupCols, ...aggregateEntries.map(([name]) => name)]);
+  const orderSpecs = args.orderBy === undefined ? [] : Array.isArray(args.orderBy) ? args.orderBy : [args.orderBy];
+  const orderTerms: string[] = [];
+  for (const spec of orderSpecs) {
+    // Guard non-TS callers: a null / non-object entry would throw a raw TypeError in Object.entries.
+    if (spec === null || typeof spec !== "object") {
+      throw new Error(`timeBucket: each orderBy entry must be an object (got ${JSON.stringify(spec)}).`);
+    }
+    for (const [key, dir] of Object.entries(spec)) {
+      if (dir === undefined) continue;
+      if (!orderable.has(key)) {
+        throw new Error(
+          `timeBucket: orderBy key ${JSON.stringify(key)} must be "bucket", a groupBy column, or an aggregate (one of: ${[...orderable].join(", ")}).`,
+        );
+      }
+      if (dir !== "asc" && dir !== "desc") {
+        throw new Error(`timeBucket: orderBy direction for ${JSON.stringify(key)} must be "asc" or "desc" (got ${JSON.stringify(dir)}).`);
+      }
+      orderTerms.push(`${quoteIdent(key)} ${dir === "desc" ? "DESC" : "ASC"}`);
+    }
+  }
+  const orderBy = orderTerms.length > 0 ? orderTerms.join(", ") : `"bucket"`;
+
+  let sql = `SELECT ${select.join(", ")} FROM ${qualifiedIdent(table, schema)} WHERE ${where} GROUP BY ${groupBy} ORDER BY ${orderBy}`;
+  if (args.limit !== undefined) {
+    if (!Number.isInteger(args.limit) || args.limit < 1) {
+      throw new Error(`timeBucket: limit must be a positive integer (got ${JSON.stringify(args.limit)}).`);
+    }
+    sql += ` LIMIT ${args.limit}`;
+  }
   return { sql, params };
 }

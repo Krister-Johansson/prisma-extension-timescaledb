@@ -236,6 +236,36 @@ Aggregate columns are checked against the model's scalar fields **at compile tim
 `groupBy` + `aggregate`. Supported functions: `avg`, `sum`, `min`, `max`, `count`, and
 [`first` / `last`](#earliest--latest-value-first--last).
 
+#### Ordering & limiting (`orderBy` / `limit`)
+
+By default rows come back ordered by the bucket ascending. Use `orderBy` + `limit` for the common
+"latest N buckets" and "top N buckets by value" shapes:
+
+```ts
+// latest 24 buckets, newest first
+await prisma.sensorReading.timeBucket({
+  bucket: "1 hour", range: { start, end },
+  aggregate: { avgTemp: { avg: "temperature" } },
+  orderBy: { bucket: "desc" },
+  limit: 24,
+});
+
+// the 10 buckets with the highest average — order by an aggregate, with a multi-key tiebreak
+await prisma.sensorReading.timeBucket({
+  bucket: "1 hour", range: { start, end },
+  groupBy: ["deviceId"],
+  aggregate: { avgTemp: { avg: "temperature" } },
+  orderBy: [{ avgTemp: "desc" }, { bucket: "asc" }],   // array = precedence
+  limit: 10,
+});
+```
+
+`orderBy` keys are **type-checked** to the orderable columns — `"bucket"`, a `groupBy` column, or an
+aggregate result name — so a typo or a bad direction fails to compile. A single object orders by one
+(or more) keys; an array gives explicit multi-key precedence. `limit` is a positive integer (SQL
+`LIMIT`), applied after ordering. Ordering composes with `gapfill` (e.g. `orderBy: { bucket: "desc" }`
+with `locf` still carries values forward correctly).
+
 #### Relation filters (`some` / `none` / `every` / `is` / `isNot`)
 
 Filter a hypertable by a **related** model's fields. The generator reads your schema's relations

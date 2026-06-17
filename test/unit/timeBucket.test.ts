@@ -280,4 +280,55 @@ describe("buildTimeBucketQuery", () => {
       /must be a valid Date/,
     );
   });
+
+  it("defaults to ORDER BY bucket ascending with no LIMIT (unchanged)", () => {
+    const { sql } = buildTimeBucketQuery("SensorReading", "time", base);
+    expect(sql.endsWith(`ORDER BY "bucket"`)).toBe(true);
+    expect(sql).not.toContain("LIMIT");
+  });
+
+  it("orderBy a single key sets the direction over the output alias", () => {
+    const { sql } = buildTimeBucketQuery("SensorReading", "time", { ...base, orderBy: { bucket: "desc" } });
+    expect(sql).toContain(`GROUP BY "bucket" ORDER BY "bucket" DESC`);
+  });
+
+  it("orderBy an aggregate + limit builds top-N (LIMIT inlined as an integer)", () => {
+    const { sql } = buildTimeBucketQuery("SensorReading", "time", { ...base, orderBy: { avgTemp: "desc" }, limit: 5 });
+    expect(sql).toContain(`ORDER BY "avgTemp" DESC LIMIT 5`);
+  });
+
+  it("orderBy a groupBy column and an array gives multi-key precedence", () => {
+    const { sql } = buildTimeBucketQuery("SensorReading", "time", {
+      ...base,
+      groupBy: ["deviceId"],
+      orderBy: [{ deviceId: "asc" }, { bucket: "desc" }],
+    });
+    expect(sql).toContain(`ORDER BY "deviceId" ASC, "bucket" DESC`);
+  });
+
+  it("limit alone keeps the default bucket ordering", () => {
+    const { sql } = buildTimeBucketQuery("SensorReading", "time", { ...base, limit: 10 });
+    expect(sql).toContain(`ORDER BY "bucket" LIMIT 10`);
+  });
+
+  it("rejects an unknown orderBy key, a bad direction, and a non-positive/non-integer limit", () => {
+    expect(() => buildTimeBucketQuery("SensorReading", "time", { ...base, orderBy: { nope: "asc" } })).toThrow(
+      /orderBy key "nope" must be/,
+    );
+    expect(() =>
+      buildTimeBucketQuery("SensorReading", "time", { ...base, orderBy: { bucket: "up" as never } }),
+    ).toThrow(/must be "asc" or "desc"/);
+    expect(() => buildTimeBucketQuery("SensorReading", "time", { ...base, limit: 0 })).toThrow(
+      /limit must be a positive integer/,
+    );
+    expect(() => buildTimeBucketQuery("SensorReading", "time", { ...base, limit: 2.5 })).toThrow(
+      /limit must be a positive integer/,
+    );
+  });
+
+  it("rejects a malformed (non-object) orderBy entry with a structured error, not a raw TypeError", () => {
+    expect(() => buildTimeBucketQuery("SensorReading", "time", { ...base, orderBy: [null as never] })).toThrow(
+      /each orderBy entry must be an object/,
+    );
+  });
 });
