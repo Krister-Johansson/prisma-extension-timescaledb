@@ -81,10 +81,11 @@ describe.skipIf(!DOCKER_OK)("timeBucket counter_agg + time_weight (real Timescal
     expect(typeof row.totalDelta).toBe("number");
     expect(typeof row.twAvg).toBe("number");
     // Reset-aware total change over the bucket (a naive last-minus-first would be ~50).
-    expect(row.totalDelta).toBeCloseTo(350, 1);
-    expect(row.ratePerSec).toBeGreaterThan(0);
-    // Time-weighted average of values spanning 50..300.
-    expect(row.twAvg).toBeGreaterThan(100);
-    expect(row.twAvg).toBeLessThan(250);
+    expect(row.totalDelta).toBeCloseTo(350, 5);
+    // rate = delta / observed span. First..last point span = 00:00..00:59 = 3540s.
+    expect(row.ratePerSec).toBeCloseTo(350 / 3540, 3);
+    // Time-weighted (LOCF) average is 164.4 — distinct from the simple mean of these values (160),
+    // so this specifically validates the time-weighting (not just "some number in range").
+    expect(row.twAvg).toBeCloseTo(164.4, 0);
   });
 });

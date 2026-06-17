@@ -256,7 +256,7 @@ const rows = await prisma.sensorReading.timeBucket({
 - `count` takes `distinct: true` for `count(DISTINCT col)`.
 - `histogram` returns a **`number[]`** of `buckets + 2` counts — the first and last entries are the below-`min` / above-`max` overflow bins. It takes no `as` / `fill`.
 
-**Toolkit hyperfunctions** (`percentile`, `rate`, `delta`, `timeWeightedAverage`) all return a `number` and **require the `timescaledb_toolkit` extension** — present on Tiger Cloud and the `timescale/timescaledb-ha` image, but **not** in the slim `timescaledb` image.
+**Toolkit hyperfunctions** (`percentile`, `rate`, `delta`, `timeWeightedAverage`) all return a `number`, take no `as` / `fill`, and **require the `timescaledb_toolkit` extension** — present on Tiger Cloud and the `timescale/timescaledb-ha` image, but **not** in the slim `timescaledb` image.
 
 - `percentile` is an **approximate** percentile (`p` is the fraction in `[0, 1]`, e.g. `0.95` for p95), via `approx_percentile` / `percentile_agg`.
 - `rate` (per-second) and `delta` (total change) wrap `counter_agg` for **monotonic counters** — both are **reset-aware** (a counter that resets to a lower value is handled correctly).
