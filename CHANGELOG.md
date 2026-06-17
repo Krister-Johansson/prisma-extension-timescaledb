@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/Krister-Johansson/prisma-extension-timescaledb/compare/prisma-extension-timescaledb-v0.7.0...prisma-extension-timescaledb-v0.8.0) (2026-06-17)
+
+
+### Features
+
+* **timeBucket:** stats_agg 1-D statistical summary op ([#46](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/46)) ([4d07a74](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/4d07a74c3e9ade155249935647484b2583a972ec))
+
 ## [0.7.0](https://github.com/Krister-Johansson/prisma-extension-timescaledb/compare/prisma-extension-timescaledb-v0.6.0...prisma-extension-timescaledb-v0.7.0) (2026-06-17)
 
 
