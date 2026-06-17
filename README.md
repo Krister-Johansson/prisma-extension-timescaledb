@@ -233,8 +233,25 @@ const rows = await prisma.sensorReading.timeBucket({
 
 Aggregate columns are checked against the model's scalar fields **at compile time**
 (avg/sum/min/max require numeric columns), and the result row type is inferred from
-`groupBy` + `aggregate`. Supported functions: `avg`, `sum`, `min`, `max`, `count`, and
+`groupBy` + `aggregate`. Supported functions: `avg`, `sum`, `min`, `max`, `count`,
+`stddev`, `stddevPop`, `variance`, `varPop`, `histogram`, and
 [`first` / `last`](#earliest--latest-value-first--last).
+
+```ts
+const rows = await prisma.sensorReading.timeBucket({
+  bucket: "1 hour",
+  range: { start, end },
+  aggregate: {
+    spread:  { stddev: "temperature" },                 // sample stddev (number); stddevPop / variance / varPop too
+    devices: { count: "deviceId", distinct: true },     // count(DISTINCT deviceId)
+    dist:    { histogram: "temperature", min: 0, max: 100, buckets: 10 }, // number[] of buckets+2 counts
+  },
+});
+```
+
+- `stddev` / `stddevPop` / `variance` / `varPop` are numeric like `avg` (default JS `number`; `as: "string"` for the exact decimal).
+- `count` takes `distinct: true` for `count(DISTINCT col)`.
+- `histogram` returns a **`number[]`** of `buckets + 2` counts — the first and last entries are the below-`min` / above-`max` overflow bins. It takes no `as` / `fill`.
 
 #### Ordering & limiting (`orderBy` / `limit`)
 
