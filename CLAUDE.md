@@ -65,8 +65,10 @@ zero errors. This must be covered by an integration test (`test/integration/`).
 - Language: TypeScript, `strict: true`, `module`/`moduleResolution`: `NodeNext`.
 - Single package with internal modules `src/core`, `src/generator`, `src/client`.
   (Not a monorepo.)
-- `@prisma/client` and `prisma` are **peerDependencies** (`>=6.13`), pinned in
-  devDependencies for testing. Bundle nothing from Prisma.
+- `@prisma/client` and `prisma` are **peerDependencies** (`>=7.0.0`), pinned in
+  devDependencies for testing. Bundle nothing from Prisma. (Prisma 7+ only: the documented
+  setup uses a url-less `datasource` block with the URL supplied from `prisma.config.ts`;
+  Prisma 6 rejects that at schema validation with P1012 — verified by a CI probe.)
 - Dual ESM + CJS publish via `tsup`. Validate output with `@arethetypeswrong/cli`.
 - All DB-touching tests use **Testcontainers** with a TimescaleDB image. There is no way
   to test this against a mock; if Docker is unavailable, skip and say so loudly.

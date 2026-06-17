@@ -458,8 +458,10 @@ export function makeManage<HModels extends string = string, CModels extends stri
         params.push(value);
         return `$${params.length}`;
       };
-      const target = qualifiedIdent(ref.name, ref.schema);
-      const sql = `CALL refresh_continuous_aggregate('${target}', ${bound(range?.start)}, ${bound(range?.end)})`;
+      // Route through relationLiteral (like every other $timescale call site) so the
+      // single-quote escaping lives in one place (sql.ts) rather than a hand-built literal.
+      const rel = relationLiteral(ref.name, ref.schema);
+      const sql = `CALL refresh_continuous_aggregate(${rel}, ${bound(range?.start)}, ${bound(range?.end)})`;
       // Retry only on a concurrent policy refresh (55P03), with bounded exponential backoff.
       // Any other error — or exhausting the attempt budget — propagates unchanged.
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
