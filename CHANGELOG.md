@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.0](https://github.com/Krister-Johansson/prisma-extension-timescaledb/compare/prisma-extension-timescaledb-v0.5.0...prisma-extension-timescaledb-v0.6.0) (2026-06-17)
+
+
+### Features
+
+* $timescale job control + introspection ([#34](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/34)) ([17b28a0](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/17b28a0507954de443a53676ca1d9804b4ce9bd9))
+* $timescale on-demand chunk operations (showChunks / compress / decompress) ([#36](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/36)) ([8a296da](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/8a296da769cc013dbc28484c91cd11193e39f212))
+* timeBucket counter_agg (rate/delta) + time-weighted average ([#40](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/40)) ([9c26d3a](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/9c26d3a42be4493cc5141bb2b8073a2365330ea3))
+* timeBucket orderBy + limit ([#37](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/37)) ([810d874](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/810d87441493639749a4d8d6d337566a59032778))
+* timeBucket percentile (Toolkit approx_percentile) + Toolkit-capable test image ([#39](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/39)) ([b6157a0](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/b6157a0071e35e3958c23296458463e039264bec))
+* timeBucket stddev/variance, count(distinct), histogram ([#38](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/38)) ([d35f829](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/d35f829f636618fa92d048efe0fb14aa39096760))
+
 ## [0.5.0](https://github.com/Krister-Johansson/prisma-extension-timescaledb/compare/prisma-extension-timescaledb-v0.4.1...prisma-extension-timescaledb-v0.5.0) (2026-06-16)
 
 
