@@ -331,4 +331,61 @@ describe("buildTimeBucketQuery", () => {
       /each orderBy entry must be an object/,
     );
   });
+
+  it("stddev / variance (+ pop variants) cast to double precision; as: string keeps the exact decimal", () => {
+    const { sql } = buildTimeBucketQuery("SensorReading", "time", {
+      ...base,
+      aggregate: {
+        sd: { stddev: "temperature" },
+        sdp: { stddevPop: "temperature" },
+        v: { variance: "temperature" },
+        vp: { varPop: "temperature" },
+        exact: { stddev: "temperature", as: "string" },
+      },
+    });
+    expect(sql).toContain(`stddev("temperature")::double precision AS "sd"`);
+    expect(sql).toContain(`stddev_pop("temperature")::double precision AS "sdp"`);
+    expect(sql).toContain(`variance("temperature")::double precision AS "v"`);
+    expect(sql).toContain(`var_pop("temperature")::double precision AS "vp"`);
+    expect(sql).toContain(`stddev("temperature")::text AS "exact"`);
+  });
+
+  it("count distinct emits count(DISTINCT col)", () => {
+    const { sql } = buildTimeBucketQuery("SensorReading", "time", {
+      ...base,
+      aggregate: { u: { count: "deviceId", distinct: true }, n: { count: "deviceId" } },
+    });
+    expect(sql).toContain(`count(DISTINCT "deviceId")::int AS "u"`);
+    expect(sql).toContain(`count("deviceId")::int AS "n"`);
+  });
+
+  it("histogram emits histogram(col, min, max, buckets) with inlined numeric params", () => {
+    const { sql } = buildTimeBucketQuery("SensorReading", "time", {
+      ...base,
+      aggregate: { h: { histogram: "temperature", min: 0, max: 100, buckets: 5 } },
+    });
+    expect(sql).toContain(`histogram("temperature", 0, 100, 5) AS "h"`);
+  });
+
+  it("rejects invalid stat / distinct / histogram combinations", () => {
+    const bad = (aggregate: Record<string, Record<string, unknown>>) =>
+      buildTimeBucketQuery("SensorReading", "time", { ...base, aggregate });
+    expect(() => bad({ h: { histogram: "temperature", min: 0, max: 1, buckets: 2, as: "string" } })).toThrow(
+      /"histogram" on "h" does not support as/,
+    );
+    expect(() => bad({ x: { avg: "temperature", distinct: true } })).toThrow(/"distinct" is only valid on count/);
+    expect(() => bad({ h: { histogram: "temperature", min: 0, max: 1, buckets: 0 } })).toThrow(
+      /buckets must be a positive integer/,
+    );
+    expect(() => bad({ h: { histogram: "temperature", min: 5, max: 5, buckets: 2 } })).toThrow(/requires min < max/);
+    // `min` is itself a function name, so a stray histogram param on another fn reads as two functions.
+    expect(() => bad({ x: { avg: "temperature", min: 0 } })).toThrow(/exactly one function/);
+    expect(() => bad({ x: { stddev: "temperature", as: "bigint" } })).toThrow(/is not valid for "stddev"/);
+    // a non-boolean distinct, distinct on a non-count, and an extra key in a histogram spec
+    expect(() => bad({ x: { count: "deviceId", distinct: "yes" } })).toThrow(/distinct on "x" must be a boolean/);
+    expect(() => bad({ x: { first: "temperature", distinct: true } })).toThrow(/"distinct" is only valid on count/);
+    expect(() => bad({ h: { histogram: "temperature", min: 0, max: 1, buckets: 2, sum: "temperature" } })).toThrow(
+      /unexpected key/,
+    );
+  });
 });

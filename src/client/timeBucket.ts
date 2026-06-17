@@ -56,9 +56,17 @@ export type AggregateOp<R> =
   | { avg: NumericColumn<R>; as?: AvgAs; fill?: Fill }
   | { min: NumericColumn<R>; fill?: Fill }
   | { max: NumericColumn<R>; fill?: Fill }
-  | { count: AnyColumn<R>; as?: CountAs; fill?: Fill }
+  | { count: AnyColumn<R>; distinct?: boolean; as?: CountAs; fill?: Fill }
+  // Sample (`stddev`/`variance`) and population (`stddevPop`/`varPop`) statistics; numeric, like `avg`.
+  | { stddev: NumericColumn<R>; as?: AvgAs; fill?: Fill }
+  | { stddevPop: NumericColumn<R>; as?: AvgAs; fill?: Fill }
+  | { variance: NumericColumn<R>; as?: AvgAs; fill?: Fill }
+  | { varPop: NumericColumn<R>; as?: AvgAs; fill?: Fill }
   | { first: AnyColumn<R>; by?: AnyColumn<R> }
-  | { last: AnyColumn<R>; by?: AnyColumn<R> };
+  | { last: AnyColumn<R>; by?: AnyColumn<R> }
+  // TimescaleDB `histogram(value, min, max, buckets)` -> a `number[]` of `buckets + 2` counts (the
+  // first/last are the below-min / above-max overflow bins). No `as` / `fill`.
+  | { histogram: NumericColumn<R>; min: number; max: number; buckets: number };
 
 /** The `aggregate` spec: result-column name -> aggregate operation. */
 export type AggregateInput<R> = Record<string, AggregateOp<R>>;
@@ -70,13 +78,15 @@ export type AggOutput<R, Op> = Op extends { first: infer C extends keyof R }
   ? R[C]
   : Op extends { last: infer C extends keyof R }
     ? R[C]
-    : Op extends { fill: Fill }
-      ? number
-      : Op extends { as: "bigint" }
-        ? bigint
-        : Op extends { as: "string" }
-          ? string
-          : number;
+    : Op extends { histogram: unknown }
+      ? number[]
+      : Op extends { fill: Fill }
+        ? number
+        : Op extends { as: "bigint" }
+          ? bigint
+          : Op extends { as: "string" }
+            ? string
+            : number;
 
 /** Arguments to `timeBucket`. `R` is the model's scalar row, `W` its where input. */
 export interface TimeBucketArgs<R, W = unknown> {
@@ -165,7 +175,14 @@ const AGG_AS: Record<string, ReadonlySet<string>> = {
   min: new Set(["number"]),
   max: new Set(["number"]),
   count: new Set(["number", "bigint"]),
+  stddev: new Set(["number", "string"]),
+  stddevPop: new Set(["number", "string"]),
+  variance: new Set(["number", "string"]),
+  varPop: new Set(["number", "string"]),
 };
+
+/** Map an aggregate op key to its SQL function name (identity unless the JS name differs). */
+const SQL_FN: Record<string, string> = { stddevPop: "stddev_pop", varPop: "var_pop" };
 
 /**
  * SQL cast that controls the JS type Prisma returns for an aggregate — the cast IS the type
@@ -175,11 +192,15 @@ const AGG_AS: Record<string, ReadonlySet<string>> = {
  * (JS `number`, loses precision past 2^53), `min`/`max` -> native (already a number for the
  * numeric column types those accept). Callers are validated against AGG_AS first.
  */
+// SQL function names (post SQL_FN mapping) whose result we cast to double precision so Prisma
+// returns a JS number — incl. stddev/variance over integer columns, which are otherwise `numeric`.
+const DOUBLE_FNS = new Set(["sum", "avg", "stddev", "stddev_pop", "variance", "var_pop"]);
+
 function castFor(fn: string, outputAs: string | undefined): string {
   if (outputAs === "bigint") return "::bigint";
   if (outputAs === "string") return "::text";
   if (fn === "count") return "::int";
-  if (fn === "sum" || fn === "avg") return "::double precision";
+  if (DOUBLE_FNS.has(fn)) return "::double precision";
   return ""; // min/max keep the column type
 }
 
@@ -189,7 +210,9 @@ export interface TimeBucketRuntimeArgs {
   range: { start: Date; end: Date };
   where?: Record<string, unknown>;
   groupBy?: readonly string[];
-  aggregate: Record<string, Record<string, string>>;
+  // Values are mostly the column name (string), plus the optional selectors: `as`/`fill`/`by`
+  // (string), `distinct` (boolean), and histogram's `min`/`max`/`buckets` (number) — hence `unknown`.
+  aggregate: Record<string, Record<string, unknown>>;
   gapfill?: boolean;
   timezone?: string;
   origin?: Date;
@@ -264,16 +287,18 @@ function aggregateExpr(
   fill: string | undefined,
   gapfill: boolean,
   resultName: string,
+  distinct = false,
 ): string {
-  if (fill === undefined) return `${fn}(${src})${castFor(fn, outputAs)}`;
+  const arg = distinct ? `DISTINCT ${src}` : src; // count(DISTINCT col)
+  if (fill === undefined) return `${fn}(${arg})${castFor(fn, outputAs)}`;
   if (!gapfill) {
     throw new Error(`timeBucket: aggregate "${resultName}" sets fill: ${JSON.stringify(fill)} but requires gapfill: true.`);
   }
   if (outputAs !== undefined) {
     throw new Error(`timeBucket: aggregate "${resultName}" cannot combine fill with as — a filled value is a JS number.`);
   }
-  if (fill === "locf") return `locf(${fn}(${src})${castFor(fn, undefined)})`;
-  if (fill === "interpolate") return `interpolate(${fn}(${src})::double precision)`;
+  if (fill === "locf") return `locf(${fn}(${arg})${castFor(fn, undefined)})`;
+  if (fill === "interpolate") return `interpolate(${fn}(${arg})::double precision)`;
   throw new Error(`timeBucket: invalid fill ${JSON.stringify(fill)} on "${resultName}" (expected "locf" or "interpolate").`);
 }
 
@@ -326,13 +351,54 @@ export function buildTimeBucketQuery(
   }
   for (const [resultName, op] of aggregateEntries) {
     assertSafeIdent(resultName, "aggregate result column");
-    // Split the optional `as` / `fill` / `by` selectors from the single function entry ({ sum: "x", as: "bigint" }).
-    const { as: outputAs, fill, by, ...fnPart } = op;
-    const entry = Object.entries(fnPart)[0];
-    if (!entry) throw new Error(`timeBucket: aggregate "${resultName}" must specify a function.`);
-    const [fn, column] = entry;
-    const src = quoteIdent(col(column));
+    // Split the optional selectors (none of which are function names) from the function entry. The
+    // runtime view is loose (`unknown`), so narrow each before use — this also hardens non-TS callers.
+    const { as: outputAs, fill, by, distinct, ...rest } = op;
+    if (outputAs !== undefined && typeof outputAs !== "string") throw new Error(`timeBucket: as on "${resultName}" must be a string.`);
+    if (fill !== undefined && typeof fill !== "string") throw new Error(`timeBucket: fill on "${resultName}" must be a string.`);
+    if (by !== undefined && typeof by !== "string") throw new Error(`timeBucket: by on "${resultName}" must be a string.`);
+    if (distinct !== undefined && typeof distinct !== "boolean") throw new Error(`timeBucket: distinct on "${resultName}" must be a boolean.`);
     const alias = quoteIdent(resultName);
+
+    // histogram is resolved by its key FIRST: its `min`/`max`/`buckets` params are siblings, and
+    // `min`/`max` are themselves aggregate function names — detecting it up front avoids the clash.
+    // Result is a `number[]` of `buckets + 2` counts; no as / fill / by / distinct.
+    if ("histogram" in rest) {
+      if (outputAs !== undefined || fill !== undefined || by !== undefined || distinct !== undefined) {
+        throw new Error(`timeBucket: "histogram" on "${resultName}" does not support as / fill / by / distinct.`);
+      }
+      const { histogram: columnRaw, min, max, buckets } = rest;
+      const extra = Object.keys(rest).filter((k) => k !== "histogram" && k !== "min" && k !== "max" && k !== "buckets");
+      if (extra.length > 0) {
+        throw new Error(`timeBucket: histogram "${resultName}" has unexpected key(s): ${extra.join(", ")}.`);
+      }
+      if (typeof columnRaw !== "string") throw new Error(`timeBucket: histogram "${resultName}" must map to a column name.`);
+      if (typeof min !== "number" || !Number.isFinite(min)) throw new Error(`timeBucket: histogram "${resultName}" requires a finite numeric min.`);
+      if (typeof max !== "number" || !Number.isFinite(max)) throw new Error(`timeBucket: histogram "${resultName}" requires a finite numeric max.`);
+      if (typeof buckets !== "number" || !Number.isInteger(buckets) || buckets < 1) {
+        throw new Error(`timeBucket: histogram "${resultName}" buckets must be a positive integer.`);
+      }
+      if (min >= max) throw new Error(`timeBucket: histogram "${resultName}" requires min < max.`);
+      // min/max/buckets are validated numbers — safe to inline directly.
+      select.push(`histogram(${quoteIdent(col(columnRaw))}, ${min}, ${max}, ${buckets}) AS ${alias}`);
+      continue;
+    }
+
+    // Every other op maps exactly one function name to a column.
+    const fnKeys = Object.keys(rest);
+    if (fnKeys.length !== 1) {
+      throw new Error(`timeBucket: aggregate "${resultName}" must specify exactly one function.`);
+    }
+    const fn = fnKeys[0]!;
+    const columnRaw = rest[fn];
+    if (typeof columnRaw !== "string") {
+      throw new Error(`timeBucket: aggregate "${resultName}" must map its function to a column name.`);
+    }
+    const src = quoteIdent(col(columnRaw));
+    // `distinct` applies only to count — reject it everywhere else up front (incl. first/last below).
+    if (distinct !== undefined && fn !== "count") {
+      throw new Error(`timeBucket: "distinct" is only valid on count (on "${resultName}").`);
+    }
 
     // first/last: the value of `column` ordered by `by` (default: the model's time column). They
     // return the value column's own type, so they take no `as`/`fill`.
@@ -354,8 +420,9 @@ export function buildTimeBucketQuery(
         `timeBucket: as: ${JSON.stringify(outputAs)} is not valid for "${fn}" on "${resultName}" (allowed: ${[...allowedAs].join(", ")}).`,
       );
     }
-    // `aggregateExpr` applies `fill` (gapfill-only locf/interpolate) or the `as` cast.
-    select.push(`${aggregateExpr(fn, src, outputAs, fill, gapfill, resultName)} AS ${alias}`);
+    // Map to the SQL function name (stddevPop -> stddev_pop, …); aggregateExpr applies `fill`
+    // (gapfill-only locf/interpolate), the `as` cast, and DISTINCT for count.
+    select.push(`${aggregateExpr(SQL_FN[fn] ?? fn, src, outputAs, fill, gapfill, resultName, distinct === true)} AS ${alias}`);
   }
 
   // Relation-filter lookup (some/none/every/is/isNot -> EXISTS). Precompute every model's

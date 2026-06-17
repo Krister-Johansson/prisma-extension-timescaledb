@@ -229,6 +229,65 @@ timeBucket({
   aggregate: { x: { avg: "temperature" } },
 });
 
+// --- new aggregates: stddev/variance (+ pop), count distinct, histogram ---
+const stats = timeBucket({
+  bucket: "1 hour",
+  range: { start, end },
+  aggregate: {
+    sd: { stddev: "temperature" }, // number
+    sdp: { stddevPop: "temperature" }, // number
+    v: { variance: "temperature" }, // number
+    vp: { varPop: "temperature" }, // number
+    sdExact: { stddev: "temperature", as: "string" }, // string
+    u: { count: "label", distinct: true }, // number
+    uBig: { count: "label", distinct: true, as: "bigint" }, // bigint
+    h: { histogram: "temperature", min: 0, max: 100, buckets: 5 }, // number[]
+  },
+});
+type _stats = Expect<
+  Equal<
+    (typeof stats)[number],
+    { bucket: Date; sd: number; sdp: number; v: number; vp: number; sdExact: string; u: number; uBig: bigint; h: number[] }
+  >
+>;
+
+// histogram is nullable under gapfill (like every aggregate)
+const hg = timeBucket({
+  bucket: "1 hour",
+  range: { start, end },
+  gapfill: true,
+  aggregate: { h: { histogram: "temperature", min: 0, max: 10, buckets: 4 } },
+});
+type _hg = Expect<Equal<(typeof hg)[number], { bucket: Date; h: number[] | null }>>;
+
+// NB: histogram + `as` and avg + `distinct` are excess properties on a union member, which TS
+// permits through const-generic inference — those combinations are rejected at runtime instead
+// (covered by the unit tests). Only type *mismatches* on known props are caught here.
+
+// histogram requires its numeric params
+timeBucket({
+  bucket: "1 hour",
+  range: { start, end },
+  // @ts-expect-error - histogram requires min / max / buckets
+  aggregate: { h: { histogram: "temperature" } },
+});
+
+// stddev cannot be "bigint" (it is fractional, like avg)
+timeBucket({
+  bucket: "1 hour",
+  range: { start, end },
+  // @ts-expect-error - stddev does not accept as: "bigint"
+  aggregate: { x: { stddev: "temperature", as: "bigint" } },
+});
+
+// stddev on a non-numeric column
+timeBucket({
+  bucket: "1 hour",
+  range: { start, end },
+  // @ts-expect-error - "label" is not a numeric column
+  aggregate: { x: { stddev: "label" } },
+});
+
 // --- orderBy / limit ---
 // order by the bucket, a groupBy column, or an aggregate; single object or array; + limit
 timeBucket({
