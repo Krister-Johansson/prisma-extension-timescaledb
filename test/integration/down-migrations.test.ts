@@ -59,10 +59,11 @@ describe.skipIf(!DOCKER_OK)("down-migrations (constraint 4: DROP MATERIALIZED VI
 
   it("rejects plain DROP VIEW on a continuous aggregate (the reason constraint 4 exists)", async () => {
     expect(await caggCount(h)).toBe(1);
-    // `IF EXISTS` only suppresses "does not exist" — it does NOT suppress the wrong-object-kind
-    // error, so DROP VIEW still fails on a cagg. This is precisely why `down` can't use DROP VIEW.
+    // TimescaleDB itself blocks DROP VIEW on a cagg ("cannot drop continuous aggregate using
+    // DROP VIEW"), and IF EXISTS does not suppress that — which is exactly why the generated
+    // `down` must use DROP MATERIALIZED VIEW.
     await expect(h.query('DROP VIEW IF EXISTS "SensorHourly"')).rejects.toThrow(
-      /materialized view|not a view/i,
+      /continuous aggregate|materialized view|not a view/i,
     );
     expect(await caggCount(h)).toBe(1); // the rejected drop changed nothing
   });
