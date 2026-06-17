@@ -76,7 +76,10 @@ export type AggregateOp<R> =
   | { delta: NumericColumn<R> }
   // Toolkit time-weighted average: `average(time_weight(method, time, value))`. `method` weights
   // gaps by last-observation-carried-forward (`"locf"`, default) or `"linear"` interpolation.
-  | { timeWeightedAverage: NumericColumn<R>; method?: "locf" | "linear" };
+  | { timeWeightedAverage: NumericColumn<R>; method?: "locf" | "linear" }
+  // Toolkit `candlestick_agg(time, price, volume)` -> OHLC + vwap as one object per bucket. Needs a
+  // price (`candlestick`) and a `volume` column. No as / fill, and not combinable with gapfill.
+  | { candlestick: NumericColumn<R>; volume: NumericColumn<R> };
 
 /** The `aggregate` spec: result-column name -> aggregate operation. */
 export type AggregateInput<R> = Record<string, AggregateOp<R>>;
@@ -90,7 +93,9 @@ export type AggOutput<R, Op> = Op extends { first: infer C extends keyof R }
     ? R[C]
     : Op extends { histogram: unknown }
       ? number[]
-      : Op extends { fill: Fill }
+      : Op extends { candlestick: unknown }
+        ? { open: number; high: number; low: number; close: number; vwap: number }
+        : Op extends { fill: Fill }
         ? number
         : Op extends { as: "bigint" }
           ? bigint
@@ -366,20 +371,21 @@ export function buildTimeBucketQuery(
     // `p` (percentile fraction) and `method` (time-weight) are pulled out like the others; `min`/`max`/
     // `buckets` are NOT, because they collide with the min/max function names — histogram reads them
     // from `rest` instead.
-    const { as: outputAs, fill, by, distinct, p, method, ...rest } = op;
+    const { as: outputAs, fill, by, distinct, p, method, volume, ...rest } = op;
     if (outputAs !== undefined && typeof outputAs !== "string") throw new Error(`timeBucket: as on "${resultName}" must be a string.`);
     if (fill !== undefined && typeof fill !== "string") throw new Error(`timeBucket: fill on "${resultName}" must be a string.`);
     if (by !== undefined && typeof by !== "string") throw new Error(`timeBucket: by on "${resultName}" must be a string.`);
     if (distinct !== undefined && typeof distinct !== "boolean") throw new Error(`timeBucket: distinct on "${resultName}" must be a boolean.`);
     if (method !== undefined && typeof method !== "string") throw new Error(`timeBucket: method on "${resultName}" must be a string.`);
+    if (volume !== undefined && typeof volume !== "string") throw new Error(`timeBucket: volume on "${resultName}" must be a string.`);
     const alias = quoteIdent(resultName);
 
     // histogram is resolved by its key FIRST: its `min`/`max`/`buckets` params are siblings, and
     // `min`/`max` are themselves aggregate function names — detecting it up front avoids the clash.
     // Result is a `number[]` of `buckets + 2` counts; no as / fill / by / distinct.
     if ("histogram" in rest) {
-      if (outputAs !== undefined || fill !== undefined || by !== undefined || distinct !== undefined || p !== undefined || method !== undefined) {
-        throw new Error(`timeBucket: "histogram" on "${resultName}" does not support as / fill / by / distinct / p / method.`);
+      if (outputAs !== undefined || fill !== undefined || by !== undefined || distinct !== undefined || p !== undefined || method !== undefined || volume !== undefined) {
+        throw new Error(`timeBucket: "histogram" on "${resultName}" does not support as / fill / by / distinct / p / method / volume.`);
       }
       const { histogram: columnRaw, min, max, buckets } = rest;
       const extra = Object.keys(rest).filter((k) => k !== "histogram" && k !== "min" && k !== "max" && k !== "buckets");
@@ -419,6 +425,9 @@ export function buildTimeBucketQuery(
     if (method !== undefined && fn !== "timeWeightedAverage") {
       throw new Error(`timeBucket: "method" is only valid on timeWeightedAverage (on "${resultName}").`);
     }
+    if (volume !== undefined && fn !== "candlestick") {
+      throw new Error(`timeBucket: "volume" is only valid on candlestick (on "${resultName}").`);
+    }
 
     // first/last: the value of `column` ordered by `by` (default: the model's time column). They
     // return the value column's own type, so they take no `as`/`fill`.
@@ -453,6 +462,18 @@ export function buildTimeBucketQuery(
       const weight = method === undefined || method === "locf" ? "LOCF" : method === "linear" ? "Linear" : undefined;
       if (weight === undefined) throw new Error(`timeBucket: timeWeightedAverage "${resultName}" method must be "locf" or "linear".`);
       select.push(`average(time_weight(${quoteLiteral(weight)}, ${time}, ${src})) AS ${alias}`);
+      continue;
+    }
+    if (fn === "candlestick") {
+      if (outputAs !== undefined || fill !== undefined) throw new Error(`timeBucket: "candlestick" on "${resultName}" does not support as / fill.`);
+      if (gapfill) throw new Error(`timeBucket: "candlestick" on "${resultName}" cannot be combined with gapfill.`);
+      if (typeof volume !== "string") throw new Error(`timeBucket: candlestick "${resultName}" requires a volume column.`);
+      // candlestick_agg is repeated per accessor but Postgres computes it once (common subexpression);
+      // jsonb_build_object returns OHLC + vwap as one JS object column. `src` is the price column.
+      const cs = `candlestick_agg(${time}, ${src}, ${quoteIdent(col(volume))})`;
+      select.push(
+        `jsonb_build_object('open', open(${cs}), 'high', high(${cs}), 'low', low(${cs}), 'close', close(${cs}), 'vwap', vwap(${cs})) AS ${alias}`,
+      );
       continue;
     }
 
