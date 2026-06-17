@@ -1,10 +1,14 @@
 # prisma-extension-timescaledb
 
+[![npm](https://img.shields.io/npm/v/prisma-extension-timescaledb)](https://www.npmjs.com/package/prisma-extension-timescaledb)
+[![CI](https://github.com/Krister-Johansson/prisma-extension-timescaledb/actions/workflows/ci.yml/badge.svg)](https://github.com/Krister-Johansson/prisma-extension-timescaledb/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 ![Prisma](https://img.shields.io/badge/Prisma-%3E%3D7.0.0-2D3748)
 
 Type-safe **[TimescaleDB](https://www.tigerdata.com/) / TigerData** time-series support for
 Prisma — **reset-safe migrations**, hypertables, continuous aggregates, and typed query helpers.
+
+📖 **[Documentation](https://github.com/Krister-Johansson/prisma-extension-timescaledb/wiki)** · 📦 **[npm](https://www.npmjs.com/package/prisma-extension-timescaledb)** · 🚀 **[NestJS example](https://github.com/Krister-Johansson/prisma-extension-timescaledb-nestjs-example)**
 
 Prisma can't model TimescaleDB features in its schema language, and the naive setup
 **breaks on `prisma migrate reset` / `migrate dev`**. This package fixes that with:
@@ -112,6 +116,11 @@ const rows = await prisma.sensorReading.timeBucket({
 ```
 
 → Continue in the **[wiki](https://github.com/Krister-Johansson/prisma-extension-timescaledb/wiki)** for the full setup, query, and management docs.
+
+## Examples
+
+A runnable **NestJS** app — hypertables, continuous aggregates and `timeBucket` queries wired up end to end:
+**[prisma-extension-timescaledb-nestjs-example](https://github.com/Krister-Johansson/prisma-extension-timescaledb-nestjs-example)**.
 
 ## Shadow database
 
