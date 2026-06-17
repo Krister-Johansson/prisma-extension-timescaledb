@@ -248,7 +248,6 @@ const rows = await prisma.sensorReading.timeBucket({
     p95:     { percentile: "temperature", p: 0.95 },    // approximate p95 (number)
     reqRate: { rate: "requestsTotal" },                 // per-second rate of a reset-aware counter
     twAvg:   { timeWeightedAverage: "temperature" },    // time-weighted average (LOCF; or method: "linear")
-    candle:  { candlestick: "price", volume: "volume" },// -> { open, high, low, close, vwap } object
   },
 });
 ```
@@ -262,7 +261,17 @@ const rows = await prisma.sensorReading.timeBucket({
 - `percentile` is an **approximate** percentile (`p` is the fraction in `[0, 1]`, e.g. `0.95` for p95), via `approx_percentile` / `percentile_agg`.
 - `rate` (per-second) and `delta` (total change) wrap `counter_agg` for **monotonic counters** — both are **reset-aware** (a counter that resets to a lower value is handled correctly).
 - `timeWeightedAverage` is `average(time_weight(...))` — a time-weighted average that weights each value by how long it held, ideal for irregularly-sampled gauges. `method` is `"locf"` (default) or `"linear"`.
-- `candlestick` (`candlestick_agg`) returns an **object** `{ open, high, low, close, vwap }` per bucket — takes a price (`candlestick`) and a `volume` column. Not combinable with `gapfill`. (`percentile`/`rate`/`delta`/`timeWeightedAverage` return a `number`.)
+- `candlestick` (`candlestick_agg`) returns an **object** `{ open, high, low, close, vwap }` per bucket — takes a price (`candlestick`) and a `volume` column (so it suits a model that has both). Not combinable with `gapfill`. (`percentile`/`rate`/`delta`/`timeWeightedAverage` return a `number`.)
+
+```ts
+// on a Trade model with `time`, `price`, and `volume` columns:
+const candles = await prisma.trade.timeBucket({
+  bucket: "1 day",
+  range: { start, end },
+  aggregate: { ohlc: { candlestick: "price", volume: "volume" } },
+});
+// candles[i].ohlc -> { open, high, low, close, vwap }
+```
 
 #### Ordering & limiting (`orderBy` / `limit`)
 
