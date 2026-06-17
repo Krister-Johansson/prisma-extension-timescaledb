@@ -410,6 +410,10 @@ export function buildTimeBucketQuery(
   const orderSpecs = args.orderBy === undefined ? [] : Array.isArray(args.orderBy) ? args.orderBy : [args.orderBy];
   const orderTerms: string[] = [];
   for (const spec of orderSpecs) {
+    // Guard non-TS callers: a null / non-object entry would throw a raw TypeError in Object.entries.
+    if (spec === null || typeof spec !== "object") {
+      throw new Error(`timeBucket: each orderBy entry must be an object (got ${JSON.stringify(spec)}).`);
+    }
     for (const [key, dir] of Object.entries(spec)) {
       if (dir === undefined) continue;
       if (!orderable.has(key)) {

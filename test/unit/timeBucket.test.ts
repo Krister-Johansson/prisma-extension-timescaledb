@@ -325,4 +325,10 @@ describe("buildTimeBucketQuery", () => {
       /limit must be a positive integer/,
     );
   });
+
+  it("rejects a malformed (non-object) orderBy entry with a structured error, not a raw TypeError", () => {
+    expect(() => buildTimeBucketQuery("SensorReading", "time", { ...base, orderBy: [null as never] })).toThrow(
+      /each orderBy entry must be an object/,
+    );
+  });
 });
