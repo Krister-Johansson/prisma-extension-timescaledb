@@ -251,10 +251,13 @@ view Zinner {
 `,
     });
     const objects = emitMigrations(extractTimescaleSchema(dmmf))[`${OBJECTS_MIGRATION}/migration.sql`]!;
-    // "Aouter" sorts before "Zinner" alphabetically, but it reads FROM Zinner, so Zinner must be created first.
-    expect(objects.indexOf(`CREATE MATERIALIZED VIEW IF NOT EXISTS "Zinner"`)).toBeLessThan(
-      objects.indexOf(`CREATE MATERIALIZED VIEW IF NOT EXISTS "Aouter"`),
-    );
+    const inner = objects.indexOf(`CREATE MATERIALIZED VIEW IF NOT EXISTS "Zinner"`);
+    const outer = objects.indexOf(`CREATE MATERIALIZED VIEW IF NOT EXISTS "Aouter"`);
+    // both must be present (guard against an indexOf -1 false positive)...
+    expect(inner).toBeGreaterThanOrEqual(0);
+    expect(outer).toBeGreaterThanOrEqual(0);
+    // ...and "Aouter" sorts before "Zinner" alphabetically, but reads FROM Zinner — so Zinner is created first.
+    expect(inner).toBeLessThan(outer);
   });
 });
 

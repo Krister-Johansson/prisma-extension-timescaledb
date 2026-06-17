@@ -69,13 +69,18 @@ export function extractTimescaleSchema(dmmf: DMMF.Document): TimescaleSchema {
 
   // A continuous aggregate's source must be a hypertable OR another continuous aggregate (a
   // hierarchical / "cagg-on-cagg" rollup); anything else fails the emitted CREATE MATERIALIZED VIEW.
-  const hypertableNames = new Set(hypertables.map((h) => h.table));
-  const caggNames = new Set(continuousAggregates.map((c) => c.name));
+  // Identity is (schema, name): under multiSchema two relations can share a DB name across schemas,
+  // so a name-only check could misclassify a source or falsely flag a self-reference.
+  const qualify = (schema: string | undefined, name: string): string => (schema ? `${schema}.${name}` : name);
+  const hypertableKeys = new Set(hypertables.map((h) => qualify(h.schema, h.table)));
+  const caggKeys = new Set(continuousAggregates.map((c) => qualify(c.schema, c.name)));
   for (const cagg of continuousAggregates) {
-    if (cagg.source === cagg.name) {
+    const selfKey = qualify(cagg.schema, cagg.name);
+    const sourceKey = qualify(cagg.sourceSchema, cagg.source);
+    if (sourceKey === selfKey) {
       throw new Error(`@timescale.continuousAggregate on view "${cagg.name}": a continuous aggregate cannot be its own source.`);
     }
-    if (!hypertableNames.has(cagg.source) && !caggNames.has(cagg.source)) {
+    if (!hypertableKeys.has(sourceKey) && !caggKeys.has(sourceKey)) {
       throw new Error(
         `@timescale.continuousAggregate on view "${cagg.name}": source "${cagg.source}" must be a @timescale.hypertable or another @timescale.continuousAggregate.`,
       );
