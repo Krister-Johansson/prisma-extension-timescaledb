@@ -469,4 +469,30 @@ describe("buildTimeBucketQuery", () => {
       buildTimeBucketQuery("SensorReading", "time", { ...base, aggregate: { x: { avg: "temperature", volume: "vol" } } }),
     ).toThrow(/"volume" is only valid on candlestick/);
   });
+
+  it("stats emits jsonb_build_object over a single stats_agg(value)", () => {
+    const { sql } = buildTimeBucketQuery("SensorReading", "time", {
+      ...base,
+      aggregate: { s: { stats: "temperature" } },
+    });
+    expect(sql).toContain(`jsonb_build_object('average', average(stats_agg("temperature"))`);
+    expect(sql).toContain(`'numVals', num_vals(stats_agg("temperature"))`);
+    expect(sql).toContain(`'stddev', stddev(stats_agg("temperature"))`);
+    expect(sql).toContain(`'kurtosis', kurtosis(stats_agg("temperature"))) AS "s"`);
+  });
+
+  it("rejects stats with as / fill and stats + gapfill", () => {
+    const bad = (aggregate: Record<string, Record<string, unknown>>) =>
+      buildTimeBucketQuery("SensorReading", "time", { ...base, aggregate });
+    expect(() => bad({ s: { stats: "temperature", as: "string" } })).toThrow(
+      /"stats" on "s" does not support as/,
+    );
+    expect(() =>
+      buildTimeBucketQuery("SensorReading", "time", {
+        ...base,
+        gapfill: true,
+        aggregate: { s: { stats: "temperature" } },
+      }),
+    ).toThrow(/cannot be combined with gapfill/);
+  });
 });

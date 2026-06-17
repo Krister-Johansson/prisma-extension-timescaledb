@@ -333,6 +333,30 @@ timeBucket({
   aggregate: { c: { candlestick: "temperature" } },
 });
 
+// stats -> a 1-D statistical summary object
+const st = timeBucket({
+  bucket: "1 hour",
+  range: { start, end },
+  aggregate: { temp: { stats: "temperature" } },
+});
+type _st = Expect<
+  Equal<
+    (typeof st)[number],
+    {
+      bucket: Date;
+      temp: {
+        average: number;
+        sum: number;
+        numVals: number;
+        stddev: number;
+        variance: number;
+        skewness: number;
+        kurtosis: number;
+      };
+    }
+  >
+>;
+
 // NB: histogram + `as` and avg + `distinct` are excess properties on a union member, which TS
 // permits through const-generic inference — those combinations are rejected at runtime instead
 // (covered by the unit tests). Only type *mismatches* on known props are caught here.
