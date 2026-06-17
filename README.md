@@ -424,6 +424,32 @@ const rows = await prisma.sensorReading.timeBucket({
 - `origin` (a `Date`) and `offset` (an interval) shift the bucket boundaries. `origin` + `offset`
   together require a `timezone`, and none of `timezone` / `origin` / `offset` combine with `gapfill` yet.
 
+### Real-time & hierarchical continuous aggregates
+
+Two extra knobs on `@timescale.continuousAggregate`:
+
+- **`materializedOnly`** — omit it for TimescaleDB's default (materialized-only on 2.18+); set `materializedOnly: false` for **real-time aggregation** (the view combines materialized data with not-yet-materialized recent rows from the source).
+- **Hierarchical caggs** — a cagg's `source` can be **another continuous aggregate** (roll a fine-grained cagg up into a coarser one). The outer `bucket` must be a whole multiple of the inner's, and the generator emits them in dependency order so the inner is created first (reset-safe).
+
+```prisma
+/// @timescale.continuousAggregate(source: "SensorReading", bucket: "1 hour", timeColumn: "time", materializedOnly: false)
+view SensorHourly {
+  bucket   DateTime /// @timescale.bucket
+  deviceId Int      /// @timescale.groupBy
+  avgTemp  Float    /// @timescale.aggregate(fn: "avg", column: "temperature")
+  @@unique([deviceId, bucket])
+}
+
+/// Roll the hourly cagg up into a daily one (source is SensorHourly, not the hypertable):
+/// @timescale.continuousAggregate(source: "SensorHourly", bucket: "1 day", timeColumn: "bucket")
+view SensorDaily {
+  day      DateTime /// @timescale.bucket
+  deviceId Int      /// @timescale.groupBy
+  avgTemp  Float    /// @timescale.aggregate(fn: "avg", column: "avgTemp")
+  @@unique([deviceId, day])
+}
+```
+
 ### Reading a continuous aggregate
 
 A continuous aggregate is a Prisma `view`, so reads are ordinary, fully-typed Prisma:
@@ -787,7 +813,7 @@ database) ships in this repo.
 | `@timescale.hypertable` | model | `column` (required), `chunkInterval` (default `"7 days"`); `partitionColumn` + `partitions` (optional) — a hash space dimension; `chunkSkipping` (optional) — secondary column(s) to [enable chunk skipping](#chunk-skipping-timescalehypertablechunkskipping) on |
 | `@timescale.retention` | model (also a hypertable) | `dropAfter` (required) — drop chunks older than this interval |
 | `@timescale.compression` | model (also a hypertable) | `after` (required) — compress chunks older than this; `segmentBy`, `orderBy` (optional) — columnstore tuning (Prisma field names) |
-| `@timescale.continuousAggregate` | view | `source`, `bucket`, `timeColumn` (required); `refresh: { startOffset, endOffset, scheduleInterval }` (optional) |
+| `@timescale.continuousAggregate` | view | `source` (a hypertable **or another cagg**), `bucket`, `timeColumn` (required); `refresh: { startOffset, endOffset, scheduleInterval }`, `materializedOnly` (optional) |
 | `@timescale.bucket` | view field | — (exactly one per aggregate) |
 | `@timescale.groupBy` | view field | — |
 | `@timescale.aggregate` | view field | `fn` (`avg`\|`sum`\|`min`\|`max`\|`count`), `column` |

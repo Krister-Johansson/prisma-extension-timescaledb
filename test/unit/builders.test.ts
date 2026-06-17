@@ -171,6 +171,17 @@ SELECT add_continuous_aggregate_policy('"SensorHourly"',
     expect(sql.up).toContain(`add_continuous_aggregate_policy('"metrics"."SensorHourly"'`);
     expect(sql.down).toBe(`DROP MATERIALIZED VIEW IF EXISTS "metrics"."SensorHourly";`);
   });
+
+  it("emits timescaledb.materialized_only only when set (false = real-time, true = materialized-only)", () => {
+    expect(createContinuousAggregateSql({ ...base, materializedOnly: false }).up).toContain(
+      `WITH (timescaledb.continuous, timescaledb.materialized_only = false) AS`,
+    );
+    expect(createContinuousAggregateSql({ ...base, materializedOnly: true }).up).toContain(
+      `WITH (timescaledb.continuous, timescaledb.materialized_only = true) AS`,
+    );
+    // omitted -> just the continuous flag (TimescaleDB's own default applies)
+    expect(createContinuousAggregateSql(base).up).toContain(`WITH (timescaledb.continuous) AS`);
+  });
 });
 
 describe("createRetentionPolicySql", () => {

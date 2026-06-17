@@ -221,14 +221,69 @@ ${body}
     );
   });
 
-  it("source is a known model but not a hypertable", async () => {
+  it("source is a known model but neither a hypertable nor a continuous aggregate", async () => {
     // SOURCE (SensorReading) here is a plain model — no @timescale.hypertable annotation.
     await expect(
       extract(
         view(`@timescale.continuousAggregate(source: "SensorReading", bucket: "1 hour", timeColumn: "time")`,
           `  bucket  DateTime /// @timescale.bucket\n  avgTemp Float /// @timescale.aggregate(fn: "avg", column: "temperature")\n  @@unique([bucket])`),
       ),
-    ).rejects.toThrow(/source "SensorReading" must also be annotated with @timescale.hypertable/);
+    ).rejects.toThrow(/source "SensorReading" must be a @timescale.hypertable or another @timescale.continuousAggregate/);
+  });
+});
+
+describe("extractTimescaleSchema — cagg depth (hierarchical + materialized_only)", () => {
+  const HT = `/// @timescale.hypertable(column: "time", chunkInterval: "1 day")
+model SensorReading {
+  time        DateTime
+  temperature Float
+  @@id([time])
+}`;
+
+  it("parses materializedOnly: false (real-time aggregation)", async () => {
+    const result = await extract(`${HT}
+
+/// @timescale.continuousAggregate(source: "SensorReading", bucket: "1 hour", timeColumn: "time", materializedOnly: false)
+view SensorHourly {
+  bucket  DateTime /// @timescale.bucket
+  avgTemp Float    /// @timescale.aggregate(fn: "avg", column: "temperature")
+  @@unique([bucket])
+}`);
+    expect(result.continuousAggregates[0]?.materializedOnly).toBe(false);
+  });
+
+  it("accepts a hierarchical cagg whose source is another continuous aggregate", async () => {
+    const result = await extract(`${HT}
+
+/// @timescale.continuousAggregate(source: "SensorReading", bucket: "1 hour", timeColumn: "time")
+view SensorHourly {
+  bucket  DateTime /// @timescale.bucket
+  avgTemp Float    /// @timescale.aggregate(fn: "avg", column: "temperature")
+  @@unique([bucket])
+}
+
+/// @timescale.continuousAggregate(source: "SensorHourly", bucket: "1 day", timeColumn: "bucket")
+view SensorDaily {
+  day     DateTime /// @timescale.bucket
+  avgTemp Float    /// @timescale.aggregate(fn: "avg", column: "avgTemp")
+  @@unique([day])
+}`);
+    const daily = result.continuousAggregates.find((c) => c.name === "SensorDaily");
+    expect(daily?.source).toBe("SensorHourly");
+    expect(daily?.timeColumn).toBe("bucket");
+  });
+
+  it("rejects a continuous aggregate that is its own source", async () => {
+    await expect(
+      extract(`${HT}
+
+/// @timescale.continuousAggregate(source: "SensorHourly", bucket: "1 hour", timeColumn: "bucket")
+view SensorHourly {
+  bucket  DateTime /// @timescale.bucket
+  avgTemp Float    /// @timescale.aggregate(fn: "avg", column: "avgTemp")
+  @@unique([bucket])
+}`),
+    ).rejects.toThrow(/cannot be its own source/);
   });
 });
 

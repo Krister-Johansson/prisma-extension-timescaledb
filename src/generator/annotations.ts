@@ -72,6 +72,15 @@ export function optionalString(args: AnnotationArgs, key: string, context: strin
   return v;
 }
 
+/** Read an optional boolean-valued arg (a bare `true` / `false` token, e.g. `materializedOnly: false`). */
+export function optionalBoolean(args: AnnotationArgs, key: string, context: string): boolean | undefined {
+  const v = args[key];
+  if (v === undefined) return undefined;
+  if (v === "true") return true;
+  if (v === "false") return false;
+  throw new Error(`${context}: argument "${key}" must be true or false.`);
+}
+
 /** Read a nested-object arg, or undefined. */
 export function optionalObject(args: AnnotationArgs, key: string, context: string): AnnotationArgs | undefined {
   const v = args[key];
