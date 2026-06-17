@@ -79,7 +79,12 @@ export type AggregateOp<R> =
   | { timeWeightedAverage: NumericColumn<R>; method?: "locf" | "linear" }
   // Toolkit `candlestick_agg(time, price, volume)` -> OHLC + vwap as one object per bucket. Needs a
   // price (`candlestick`) and a `volume` column. No as / fill, and not combinable with gapfill.
-  | { candlestick: NumericColumn<R>; volume: NumericColumn<R> };
+  | { candlestick: NumericColumn<R>; volume: NumericColumn<R> }
+  // Toolkit `stats_agg(value)` -> a 1-D statistical summary as one object per bucket:
+  // average / sum / numVals / stddev / variance / skewness / kurtosis. `stddev` & `variance` are
+  // POPULATION (the Toolkit default) — i.e. like the `stddevPop`/`varPop` ops, not the sample
+  // `stddev`/`variance` ops. No as / fill, not combinable with gapfill. Requires `timescaledb_toolkit`.
+  | { stats: NumericColumn<R> };
 
 /** The `aggregate` spec: result-column name -> aggregate operation. */
 export type AggregateInput<R> = Record<string, AggregateOp<R>>;
@@ -95,6 +100,8 @@ export type AggOutput<R, Op> = Op extends { first: infer C extends keyof R }
       ? number[]
       : Op extends { candlestick: unknown }
         ? { open: number; high: number; low: number; close: number; vwap: number }
+        : Op extends { stats: unknown }
+          ? { average: number; sum: number; numVals: number; stddev: number; variance: number; skewness: number; kurtosis: number }
         : Op extends { fill: Fill }
         ? number
         : Op extends { as: "bigint" }
@@ -473,6 +480,18 @@ export function buildTimeBucketQuery(
       const cs = `candlestick_agg(${time}, ${src}, ${quoteIdent(col(volume))})`;
       select.push(
         `jsonb_build_object('open', open(${cs}), 'high', high(${cs}), 'low', low(${cs}), 'close', close(${cs}), 'vwap', vwap(${cs})) AS ${alias}`,
+      );
+      continue;
+    }
+    if (fn === "stats") {
+      if (outputAs !== undefined || fill !== undefined) throw new Error(`timeBucket: "stats" on "${resultName}" does not support as / fill.`);
+      if (gapfill) throw new Error(`timeBucket: "stats" on "${resultName}" cannot be combined with gapfill.`);
+      // stats_agg(value) is repeated per accessor but Postgres computes it once (common
+      // subexpression); jsonb_build_object returns the 1-D summary as one JS object. stddev /
+      // variance are POPULATION (Toolkit default), matching the stddevPop / varPop ops.
+      const sa = `stats_agg(${src})`;
+      select.push(
+        `jsonb_build_object('average', average(${sa}), 'sum', sum(${sa}), 'numVals', num_vals(${sa}), 'stddev', stddev(${sa}), 'variance', variance(${sa}), 'skewness', skewness(${sa}), 'kurtosis', kurtosis(${sa})) AS ${alias}`,
       );
       continue;
     }
