@@ -60,6 +60,14 @@ export interface DropChunksOptions {
   newerThan?: Interval;
 }
 
+/** Optional bounds for `showChunks`; both omitted lists every chunk. Intervals are relative to now (like `dropChunks`). */
+export interface ShowChunksOptions {
+  /** Only chunks whose time range is entirely older than this interval before now. */
+  olderThan?: Interval;
+  /** Only chunks whose time range is entirely newer than this interval before now (combine with `olderThan` for a window). */
+  newerThan?: Interval;
+}
+
 /** Per-component byte sizes of a hypertable (from `hypertable_detailed_size`). */
 export interface HypertableSize {
   tableBytes: bigint;
@@ -288,6 +296,24 @@ export interface TimescaleManage<HModels extends string = string, CModels extend
 
   /** Run a job now, synchronously, regardless of its schedule — `run_job`. */
   runJob(jobId: number): Promise<void>;
+
+  /**
+   * List a hypertable's chunks — `show_chunks` — as relation names (e.g.
+   * `_timescaledb_internal._hyper_1_2_chunk`), optionally bounded by the `olderThan` / `newerThan`
+   * intervals (relative to now, like `dropChunks`). The returned names are the handles for
+   * `compressChunk` / `decompressChunk`.
+   */
+  showChunks(model: HModels, options?: ShowChunksOptions): Promise<string[]>;
+
+  /**
+   * Convert a single chunk to the columnstore on demand — `compress_chunk`. Pass a chunk name from
+   * `showChunks`. Requires the columnstore to be enabled on the hypertable (via `@timescale.compression`
+   * or `addCompressionPolicy`). Idempotent: a no-op if the chunk is already compressed (`if_not_compressed`).
+   */
+  compressChunk(chunk: string): Promise<void>;
+
+  /** Convert a single chunk back to the rowstore on demand — `decompress_chunk`. Idempotent if already uncompressed (`if_compressed`). */
+  decompressChunk(chunk: string): Promise<void>;
 }
 
 // SQLSTATE 55P03 (lock_not_available): TimescaleDB raises this when a manual
@@ -381,6 +407,22 @@ export function makeManage<HModels extends string = string, CModels extends stri
       throw new Error(`Invalid job id ${JSON.stringify(jobId)}: expected a non-negative integer.`);
     }
     return String(jobId);
+  };
+
+  /**
+   * Validate a chunk name (an optionally schema-qualified relation, as returned by `showChunks`) and
+   * render it as a quoted string literal for the `regclass` argument of compress/decompress — no
+   * `::regclass` cast (constraint 2); the implicit text->regclass resolution handles the rest. The
+   * per-part identifier check makes embedding the value injection-safe.
+   */
+  const chunkLiteral = (chunk: string): string => {
+    const SAFE_QUALIFIED = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$/;
+    if (!SAFE_QUALIFIED.test(chunk)) {
+      throw new Error(
+        `Invalid chunk name ${JSON.stringify(chunk)}: expected an (optionally schema-qualified) relation name from showChunks.`,
+      );
+    }
+    return quoteLiteral(chunk);
   };
 
   /** Resolve a model name to the DB relation name the jobs views key on: a hypertable's table, or a cagg's view name. */
@@ -752,6 +794,33 @@ export function makeManage<HModels extends string = string, CModels extends stri
     async runJob(jobId) {
       // run_job is a PROCEDURE — CALL it; it runs the job synchronously on this connection.
       await client.$executeRawUnsafe(`CALL run_job(${jobIdLiteral(jobId)})`);
+    },
+
+    async showChunks(model, options = {}) {
+      const ref = resolveHypertable(model);
+      const rel = relationLiteral(ref.table, ref.schema);
+      // Bounds are validated Intervals interpolated as typed `INTERVAL '...'` literals (the args are
+      // polymorphic "any" — a bind param would be type-ambiguous, same as dropChunks). Both optional.
+      const bound = (key: string, value: Interval | undefined): string | undefined => {
+        if (value === undefined) return undefined;
+        assertInterval(value);
+        return `${key} => INTERVAL ${quoteLiteral(value)}`;
+      };
+      const args = [rel, bound("older_than", options.olderThan), bound("newer_than", options.newerThan)].filter(
+        (a): a is string => a !== undefined,
+      );
+      const rows = await client.$queryRawUnsafe<{ chunk: string }[]>(
+        `SELECT c::text AS chunk FROM show_chunks(${args.join(", ")}) c ORDER BY c`,
+      );
+      return rows.map((r) => r.chunk);
+    },
+
+    async compressChunk(chunk) {
+      await client.$executeRawUnsafe(`SELECT compress_chunk(${chunkLiteral(chunk)}, if_not_compressed => TRUE)`);
+    },
+
+    async decompressChunk(chunk) {
+      await client.$executeRawUnsafe(`SELECT decompress_chunk(${chunkLiteral(chunk)}, if_compressed => TRUE)`);
     },
   };
 }

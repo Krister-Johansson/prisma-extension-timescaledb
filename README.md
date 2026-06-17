@@ -411,6 +411,14 @@ backoff (default: up to 8 attempts); if the contention persists beyond that budg
 #### Inspecting & dropping chunks
 
 ```ts
+// List chunks (relation names), optionally bounded by interval — feeds compress/decompress/drop.
+const chunks = await prisma.$timescale.showChunks("SensorReading");                 // string[]
+const old    = await prisma.$timescale.showChunks("SensorReading", { olderThan: "30 days" });
+
+// Convert a single chunk to/from the columnstore on demand (needs the columnstore enabled).
+await prisma.$timescale.compressChunk(chunks[0]);
+await prisma.$timescale.decompressChunk(chunks[0]);
+
 // On-demand chunk drop (manual retention) — returns the dropped chunk names.
 const dropped = await prisma.$timescale.dropChunks("SensorReading", { olderThan: "30 days" });
 
@@ -421,10 +429,14 @@ const rows   = await prisma.$timescale.approximateRowCount("SensorReading");    
 const stats  = await prisma.$timescale.compressionStats("SensorReading");       // { totalChunks, compressedChunks, beforeTotalBytes, afterTotalBytes }
 ```
 
-`dropChunks` bounds (`olderThan` / `newerThan`) are intervals **relative to now** (combine both for a
-window), matching `@timescale.retention`'s `dropAfter` — absolute-timestamp cutoffs aren't supported.
-The introspection helpers wrap `hypertable_size`, `hypertable_detailed_size`, `approximate_row_count`,
-and `hypertable_columnstore_stats`.
+`showChunks` returns `show_chunks` relation names (e.g. `_timescaledb_internal._hyper_1_2_chunk`) — pass
+one straight to `compressChunk` / `decompressChunk` (`compress_chunk` / `decompress_chunk`, idempotent).
+Compressing a chunk requires the columnstore enabled on the hypertable (via
+[`@timescale.compression`](#data-compression-timescalecompression) or `addCompressionPolicy`).
+`showChunks` / `dropChunks` bounds (`olderThan` / `newerThan`) are intervals **relative to now** (combine
+both for a window), matching `@timescale.retention`'s `dropAfter` — absolute-timestamp cutoffs aren't
+supported. The introspection helpers wrap `hypertable_size`, `hypertable_detailed_size`,
+`approximate_row_count`, and `hypertable_columnstore_stats`.
 
 #### Resizing chunks (`setChunkInterval`)
 
