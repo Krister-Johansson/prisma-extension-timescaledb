@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.0](https://github.com/Krister-Johansson/prisma-extension-timescaledb/compare/prisma-extension-timescaledb-v0.6.0...prisma-extension-timescaledb-v0.7.0) (2026-06-17)
+
+
+### Features
+
+* continuous-aggregate depth — hierarchical caggs + materialized_only ([#41](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/41)) ([58130d4](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/58130d438084e939ff842379c0f5029128ae2ff7))
+* timeBucket candlestick (OHLC + vwap) ([#43](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/43)) ([3de7c52](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/3de7c527e625042947a21a7ab5ac9149fd0562f7))
+
 ## [0.6.0](https://github.com/Krister-Johansson/prisma-extension-timescaledb/compare/prisma-extension-timescaledb-v0.5.0...prisma-extension-timescaledb-v0.6.0) (2026-06-17)
 
 
