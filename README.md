@@ -24,6 +24,10 @@ Prisma can't model TimescaleDB features in its schema language, and the naive se
 > **Scope:** hypertables, continuous aggregates, retention & compression, reset-safe migrations,
 > typed query helpers. Vector / BM25 are out of scope for now.
 
+**Using a different ORM?** TigerData's official [`@timescaledb/*`](https://github.com/timescale/timescaledb-ts)
+packages cover **TypeORM** and **Sequelize** — this is the **Prisma** counterpart, filling the gap left by
+Prisma's inability to model TimescaleDB in its schema language.
+
 ## 📖 Documentation
 
 Full docs live in the **[wiki](https://github.com/Krister-Johansson/prisma-extension-timescaledb/wiki)**:
