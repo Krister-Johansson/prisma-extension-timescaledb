@@ -260,6 +260,30 @@ const hg = timeBucket({
 });
 type _hg = Expect<Equal<(typeof hg)[number], { bucket: Date; h: number[] | null }>>;
 
+// percentile -> number; `p` is required and the column must be numeric
+const pct = timeBucket({
+  bucket: "1 hour",
+  range: { start, end },
+  aggregate: { p95: { percentile: "temperature", p: 0.95 } },
+});
+type _pct = Expect<Equal<(typeof pct)[number], { bucket: Date; p95: number }>>;
+
+// percentile requires `p`
+timeBucket({
+  bucket: "1 hour",
+  range: { start, end },
+  // @ts-expect-error - percentile requires `p`
+  aggregate: { x: { percentile: "temperature" } },
+});
+
+// percentile on a non-numeric column
+timeBucket({
+  bucket: "1 hour",
+  range: { start, end },
+  // @ts-expect-error - "label" is not a numeric column
+  aggregate: { x: { percentile: "label", p: 0.5 } },
+});
+
 // NB: histogram + `as` and avg + `distinct` are excess properties on a union member, which TS
 // permits through const-generic inference — those combinations are rejected at runtime instead
 // (covered by the unit tests). Only type *mismatches* on known props are caught here.
