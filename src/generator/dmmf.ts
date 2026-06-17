@@ -18,6 +18,7 @@ import { assertInterval } from "../core/interval.js";
 import { parseOrderByTerm } from "../core/compression.js";
 import {
   findAnnotation,
+  optionalBoolean,
   optionalObject,
   optionalString,
   parseAnnotations,
@@ -66,13 +67,17 @@ export function extractTimescaleSchema(dmmf: DMMF.Document): TimescaleSchema {
     }
   }
 
-  // A continuous aggregate's source must itself be a hypertable, otherwise the emitted
-  // `CREATE MATERIALIZED VIEW ... WITH (timescaledb.continuous)` fails at deploy/reset.
+  // A continuous aggregate's source must be a hypertable OR another continuous aggregate (a
+  // hierarchical / "cagg-on-cagg" rollup); anything else fails the emitted CREATE MATERIALIZED VIEW.
   const hypertableNames = new Set(hypertables.map((h) => h.table));
+  const caggNames = new Set(continuousAggregates.map((c) => c.name));
   for (const cagg of continuousAggregates) {
-    if (!hypertableNames.has(cagg.source)) {
+    if (cagg.source === cagg.name) {
+      throw new Error(`@timescale.continuousAggregate on view "${cagg.name}": a continuous aggregate cannot be its own source.`);
+    }
+    if (!hypertableNames.has(cagg.source) && !caggNames.has(cagg.source)) {
       throw new Error(
-        `@timescale.continuousAggregate on view "${cagg.name}": source "${cagg.source}" must also be annotated with @timescale.hypertable.`,
+        `@timescale.continuousAggregate on view "${cagg.name}": source "${cagg.source}" must be a @timescale.hypertable or another @timescale.continuousAggregate.`,
       );
     }
   }
@@ -422,6 +427,7 @@ function buildCagg(
   }
 
   const refresh = buildRefresh(ann, ctx);
+  const materializedOnly = optionalBoolean(ann.args, "materializedOnly", ctx);
   const viewName = dbTable(view);
 
   return {
@@ -436,6 +442,7 @@ function buildCagg(
     groupBy,
     aggregates,
     ...(refresh ? { refresh } : {}),
+    ...(materializedOnly !== undefined ? { materializedOnly } : {}),
   };
 }
 

@@ -215,6 +215,47 @@ model SensorReading {
     // Chunk skipping is emitted after the create_hypertable it depends on.
     expect(objects.indexOf("create_hypertable")).toBeLessThan(objects.indexOf("enable_chunk_skipping"));
   });
+
+  it("orders a hierarchical cagg after the source cagg it depends on (topological, not alphabetical)", async () => {
+    const dmmf = await getDMMF({
+      datamodel: `
+generator client {
+  provider = "prisma-client"
+  output = "../generated/prisma"
+  previewFeatures = ["views"]
+}
+datasource db {
+  provider = "postgresql"
+}
+
+/// @timescale.hypertable(column: "time", chunkInterval: "1 day")
+model SensorReading {
+  time        DateTime
+  temperature Float
+  @@id([time])
+}
+
+/// @timescale.continuousAggregate(source: "Zinner", bucket: "1 day", timeColumn: "bucket")
+view Aouter {
+  bucket  DateTime /// @timescale.bucket
+  avgTemp Float    /// @timescale.aggregate(fn: "avg", column: "avgTemp")
+  @@unique([bucket])
+}
+
+/// @timescale.continuousAggregate(source: "SensorReading", bucket: "1 hour", timeColumn: "time")
+view Zinner {
+  bucket  DateTime /// @timescale.bucket
+  avgTemp Float    /// @timescale.aggregate(fn: "avg", column: "temperature")
+  @@unique([bucket])
+}
+`,
+    });
+    const objects = emitMigrations(extractTimescaleSchema(dmmf))[`${OBJECTS_MIGRATION}/migration.sql`]!;
+    // "Aouter" sorts before "Zinner" alphabetically, but it reads FROM Zinner, so Zinner must be created first.
+    expect(objects.indexOf(`CREATE MATERIALIZED VIEW IF NOT EXISTS "Zinner"`)).toBeLessThan(
+      objects.indexOf(`CREATE MATERIALIZED VIEW IF NOT EXISTS "Aouter"`),
+    );
+  });
 });
 
 describe("emitTypes", () => {

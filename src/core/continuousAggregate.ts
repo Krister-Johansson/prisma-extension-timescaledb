@@ -14,7 +14,7 @@ const AGG_FNS = new Set(["avg", "sum", "min", "max", "count"]);
  * - `down` uses `DROP MATERIALIZED VIEW IF EXISTS` — never plain `DROP VIEW` (constraint 4).
  */
 export function createContinuousAggregateSql(config: CaggConfig): MigrationSql {
-  const { name, source, schema, sourceSchema, bucket, timeColumn, bucketColumn, aggregates, refresh } = config;
+  const { name, source, schema, sourceSchema, bucket, timeColumn, bucketColumn, aggregates, refresh, materializedOnly } = config;
   const groupBy = config.groupBy ?? [];
 
   assertSafeIdent(name, "continuous aggregate name");
@@ -51,8 +51,13 @@ export function createContinuousAggregateSql(config: CaggConfig): MigrationSql {
 
   const groupByCols = [bucketColumn, ...groupBy.map((g) => g.output)].map(quoteIdent).join(", ");
 
+  // `materialized_only` only emitted when set; omitted leaves TimescaleDB's default. `false` =
+  // real-time aggregation. The relopt is a bare boolean (no quoting).
+  const withOpts = ["timescaledb.continuous"];
+  if (materializedOnly !== undefined) withOpts.push(`timescaledb.materialized_only = ${materializedOnly ? "true" : "false"}`);
+
   let up = `CREATE MATERIALIZED VIEW IF NOT EXISTS ${qualifiedIdent(name, schema)}
-  WITH (timescaledb.continuous) AS
+  WITH (${withOpts.join(", ")}) AS
 SELECT
   ${selectLines.join(",\n  ")}
 FROM ${qualifiedIdent(source, sourceSchema)}

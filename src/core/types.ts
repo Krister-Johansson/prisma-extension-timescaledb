@@ -155,4 +155,10 @@ export interface CaggConfig {
   aggregates: readonly AggregateSpec[];
   /** Optional refresh policy; omitted means manual refresh only. */
   refresh?: RefreshPolicy;
+  /**
+   * `timescaledb.materialized_only` setting. Omitted leaves TimescaleDB's default (materialized-only
+   * on 2.18+). `false` enables **real-time aggregation** (materialized data combined with not-yet-
+   * materialized recent rows from the source); `true` returns only materialized data.
+   */
+  materializedOnly?: boolean;
 }
