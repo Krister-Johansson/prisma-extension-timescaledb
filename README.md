@@ -113,6 +113,26 @@ const rows = await prisma.sensorReading.timeBucket({
 
 → Continue in the **[wiki](https://github.com/Krister-Johansson/prisma-extension-timescaledb/wiki)** for the full setup, query, and management docs.
 
+## Shadow database
+
+`prisma migrate dev` / `migrate reset` validate migrations against a temporary **shadow database**,
+and the first migration runs `CREATE EXTENSION timescaledb` — so set **`shadowDatabaseUrl`** (in
+`prisma.config.ts`) to a **TimescaleDB-capable** database, not Prisma's default auto-created one:
+
+```ts
+// prisma.config.ts
+export default defineConfig({
+  datasource: {
+    url: process.env["DATABASE_URL"],
+    shadowDatabaseUrl: process.env["SHADOW_DATABASE_URL"], // a TimescaleDB-capable DB
+  },
+});
+```
+
+> **Tiger Cloud (honest limitation):** Tiger Cloud rejects Prisma's auto-created shadow-database
+> name, so a dedicated `shadowDatabaseUrl` is **mandatory** there — this package can't paper over it.
+> Full details in [Setup → Shadow database](https://github.com/Krister-Johansson/prisma-extension-timescaledb/wiki/Setup#shadow-database).
+
 ## License
 
 MIT © Krister Johansson
