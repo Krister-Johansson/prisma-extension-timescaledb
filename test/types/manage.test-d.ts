@@ -109,6 +109,18 @@ m.runJob(1002); // ok
 loose.listJobs("anything"); // ok — string fallback
 loose.alterJob(1, { scheduled: true }); // ok
 
+// chunk ops: showChunks is hypertable-model-checked and returns names; compress/decompress take a chunk name
+const _chunks: Promise<string[]> = m.showChunks("SensorReading");
+m.showChunks("SensorReading", { olderThan: "30 days", newerThan: "1 day" }); // ok
+void _chunks;
+// @ts-expect-error - "Nope" is not a registered hypertable
+m.showChunks("Nope");
+// @ts-expect-error - olderThan must be a valid interval (branded template)
+m.showChunks("SensorReading", { olderThan: "1 fortnight" });
+m.compressChunk("_timescaledb_internal._hyper_1_2_chunk"); // ok (a chunk name string, not a model)
+m.decompressChunk("_timescaledb_internal._hyper_1_2_chunk"); // ok
+loose.showChunks("anything"); // ok — string fallback
+
 // --- 2) name extraction from a const registry (model ?? table / model ?? name) ---
 const mapped = {
   hypertables: [{ model: "SensorReading", table: "sensor_readings" }],

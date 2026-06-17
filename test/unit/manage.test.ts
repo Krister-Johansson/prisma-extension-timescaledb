@@ -503,6 +503,12 @@ describe("makeManage job control", () => {
     expect(calls[0]!.params).toEqual([]);
   });
 
+  it("alterJob resume emits scheduled => TRUE", async () => {
+    const { client, calls } = fakeClient();
+    await makeManage(client).alterJob(1000, { scheduled: true });
+    expect(calls[0]!.sql).toBe("SELECT alter_job(1000, scheduled => TRUE, if_exists => TRUE)");
+  });
+
   it("alterJob builds interval/int literals and binds nextStart + config (jsonb)", async () => {
     const { client, calls } = fakeClient();
     const next = new Date("2030-01-01T00:00:00Z");
@@ -538,5 +544,69 @@ describe("makeManage job control", () => {
 
   it("runJob rejects a non-integer job id", async () => {
     await expect(makeManage(fakeClient().client).runJob(1.5)).rejects.toThrow(/Invalid job id/);
+  });
+});
+
+describe("makeManage chunk operations", () => {
+  it("showChunks() with no bounds lists all chunks and maps the ::text names", async () => {
+    const { client, queries } = fakeClient([
+      { chunk: "_timescaledb_internal._hyper_1_1_chunk" },
+      { chunk: "_timescaledb_internal._hyper_1_2_chunk" },
+    ]);
+    const chunks = await makeManage(client).showChunks("SensorReading");
+    expect(queries).toHaveLength(1);
+    expect(queries[0]!.sql).toBe(
+      `SELECT c::text AS chunk FROM show_chunks('"SensorReading"') c ORDER BY c`,
+    );
+    expect(chunks).toEqual([
+      "_timescaledb_internal._hyper_1_1_chunk",
+      "_timescaledb_internal._hyper_1_2_chunk",
+    ]);
+  });
+
+  it("showChunks bounds become typed INTERVAL literals (no cast); both combine into a window", async () => {
+    const { client, queries } = fakeClient([]);
+    await makeManage(client).showChunks("SensorReading", { olderThan: "30 days" });
+    expect(queries[0]!.sql).toBe(
+      `SELECT c::text AS chunk FROM show_chunks('"SensorReading"', older_than => INTERVAL '30 days') c ORDER BY c`,
+    );
+    await makeManage(client).showChunks("SensorReading", { olderThan: "1 day", newerThan: "30 days" });
+    expect(queries[1]!.sql).toBe(
+      `SELECT c::text AS chunk FROM show_chunks('"SensorReading"', older_than => INTERVAL '1 day', newer_than => INTERVAL '30 days') c ORDER BY c`,
+    );
+    expect(queries[0]!.sql).not.toContain("::regclass");
+  });
+
+  it("showChunks resolves @@map / @@schema relation and rejects a bad interval", async () => {
+    const { client, queries } = fakeClient([]);
+    const hypertableByModel = new Map([["SensorReading", { table: "sensor_readings", schema: "metrics" }]]);
+    await makeManage(client, new Map(), { hypertableByModel }).showChunks("SensorReading");
+    expect(queries[0]!.sql).toContain(`show_chunks('"metrics"."sensor_readings"')`);
+    await expect(makeManage(client).showChunks("SensorReading", { olderThan: "1 fortnight" as never })).rejects.toThrow(
+      /Invalid interval/,
+    );
+  });
+
+  it("compressChunk / decompressChunk emit idempotent calls with the chunk as a quoted literal", async () => {
+    const { client, calls } = fakeClient();
+    const chunk = "_timescaledb_internal._hyper_1_2_chunk";
+    const m = makeManage(client);
+    await m.compressChunk(chunk);
+    expect(calls[0]!.sql).toBe(
+      `SELECT compress_chunk('_timescaledb_internal._hyper_1_2_chunk', if_not_compressed => TRUE)`,
+    );
+    expect(calls[0]!.sql).not.toContain("::regclass");
+    await m.decompressChunk(chunk);
+    expect(calls[1]!.sql).toBe(
+      `SELECT decompress_chunk('_timescaledb_internal._hyper_1_2_chunk', if_compressed => TRUE)`,
+    );
+  });
+
+  it("compress/decompress reject an unsafe or malformed chunk name", async () => {
+    const m = makeManage(fakeClient().client);
+    await expect(m.compressChunk("x'; DROP TABLE y; --")).rejects.toThrow(/Invalid chunk name/);
+    await expect(m.compressChunk("a.b.c")).rejects.toThrow(/Invalid chunk name/); // too many parts
+    await expect(m.compressChunk("")).rejects.toThrow(/Invalid chunk name/);
+    await expect(m.decompressChunk("has space")).rejects.toThrow(/Invalid chunk name/);
   });
 });
