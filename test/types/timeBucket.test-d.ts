@@ -284,6 +284,34 @@ timeBucket({
   aggregate: { x: { percentile: "label", p: 0.5 } },
 });
 
+// counter_agg (rate / delta) + time-weighted average -> number
+const ctr = timeBucket({
+  bucket: "1 hour",
+  range: { start, end },
+  aggregate: {
+    reqRate: { rate: "temperature" },
+    reqDelta: { delta: "temperature" },
+    twa: { timeWeightedAverage: "temperature", method: "linear" },
+  },
+});
+type _ctr = Expect<Equal<(typeof ctr)[number], { bucket: Date; reqRate: number; reqDelta: number; twa: number }>>;
+
+// method must be a known literal
+timeBucket({
+  bucket: "1 hour",
+  range: { start, end },
+  // @ts-expect-error - method must be "locf" | "linear"
+  aggregate: { x: { timeWeightedAverage: "temperature", method: "ewma" } },
+});
+
+// rate on a non-numeric column
+timeBucket({
+  bucket: "1 hour",
+  range: { start, end },
+  // @ts-expect-error - "label" is not a numeric column
+  aggregate: { x: { rate: "label" } },
+});
+
 // NB: histogram + `as` and avg + `distinct` are excess properties on a union member, which TS
 // permits through const-generic inference — those combinations are rejected at runtime instead
 // (covered by the unit tests). Only type *mismatches* on known props are caught here.

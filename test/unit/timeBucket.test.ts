@@ -408,4 +408,39 @@ describe("buildTimeBucketQuery", () => {
       /does not support as \/ fill \/ by \/ distinct \/ p/,
     );
   });
+
+  it("counter rate / delta wrap counter_agg over the time column", () => {
+    const { sql } = buildTimeBucketQuery("SensorReading", "time", {
+      ...base,
+      aggregate: { r: { rate: "temperature" }, d: { delta: "temperature" } },
+    });
+    expect(sql).toContain(`rate(counter_agg("time", "temperature")) AS "r"`);
+    expect(sql).toContain(`delta(counter_agg("time", "temperature")) AS "d"`);
+  });
+
+  it("timeWeightedAverage wraps average(time_weight(method, time, col)); default LOCF, linear opt-in", () => {
+    const def = buildTimeBucketQuery("SensorReading", "time", {
+      ...base,
+      aggregate: { twa: { timeWeightedAverage: "temperature" } },
+    });
+    expect(def.sql).toContain(`average(time_weight('LOCF', "time", "temperature")) AS "twa"`);
+    const lin = buildTimeBucketQuery("SensorReading", "time", {
+      ...base,
+      aggregate: { twa: { timeWeightedAverage: "temperature", method: "linear" } },
+    });
+    expect(lin.sql).toContain(`average(time_weight('Linear', "time", "temperature")) AS "twa"`);
+  });
+
+  it("rejects a bad method, and method / p / as on the wrong function", () => {
+    const bad = (aggregate: Record<string, Record<string, unknown>>) =>
+      buildTimeBucketQuery("SensorReading", "time", { ...base, aggregate });
+    expect(() => bad({ x: { timeWeightedAverage: "temperature", method: "ewma" } })).toThrow(
+      /method must be "locf" or "linear"/,
+    );
+    expect(() => bad({ x: { avg: "temperature", method: "locf" } })).toThrow(
+      /"method" is only valid on timeWeightedAverage/,
+    );
+    expect(() => bad({ x: { rate: "temperature", p: 0.5 } })).toThrow(/"p" is only valid on percentile/);
+    expect(() => bad({ x: { rate: "temperature", as: "string" } })).toThrow(/"rate" on "x" does not support as/);
+  });
 });
