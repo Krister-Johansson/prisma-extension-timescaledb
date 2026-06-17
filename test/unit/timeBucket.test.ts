@@ -443,4 +443,30 @@ describe("buildTimeBucketQuery", () => {
     expect(() => bad({ x: { rate: "temperature", p: 0.5 } })).toThrow(/"p" is only valid on percentile/);
     expect(() => bad({ x: { rate: "temperature", as: "string" } })).toThrow(/"rate" on "x" does not support as/);
   });
+
+  it("candlestick emits jsonb_build_object over a single candlestick_agg(time, price, volume)", () => {
+    const { sql } = buildTimeBucketQuery("SensorReading", "time", {
+      ...base,
+      aggregate: { c: { candlestick: "price", volume: "vol" } },
+    });
+    expect(sql).toContain(`jsonb_build_object('open', open(candlestick_agg("time", "price", "vol"))`);
+    expect(sql).toContain(`'close', close(candlestick_agg("time", "price", "vol"))`);
+    expect(sql).toContain(`'vwap', vwap(candlestick_agg("time", "price", "vol"))) AS "c"`);
+  });
+
+  it("rejects candlestick without volume, with gapfill, and volume on a non-candlestick", () => {
+    expect(() =>
+      buildTimeBucketQuery("SensorReading", "time", { ...base, aggregate: { c: { candlestick: "price" } } }),
+    ).toThrow(/candlestick "c" requires a volume column/);
+    expect(() =>
+      buildTimeBucketQuery("SensorReading", "time", {
+        ...base,
+        gapfill: true,
+        aggregate: { c: { candlestick: "price", volume: "vol" } },
+      }),
+    ).toThrow(/cannot be combined with gapfill/);
+    expect(() =>
+      buildTimeBucketQuery("SensorReading", "time", { ...base, aggregate: { x: { avg: "temperature", volume: "vol" } } }),
+    ).toThrow(/"volume" is only valid on candlestick/);
+  });
 });

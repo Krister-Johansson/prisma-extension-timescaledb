@@ -312,6 +312,27 @@ timeBucket({
   aggregate: { x: { rate: "label" } },
 });
 
+// candlestick -> an OHLC + vwap object
+const cs = timeBucket({
+  bucket: "1 hour",
+  range: { start, end },
+  aggregate: { candle: { candlestick: "temperature", volume: "temperature" } },
+});
+type _cs = Expect<
+  Equal<
+    (typeof cs)[number],
+    { bucket: Date; candle: { open: number; high: number; low: number; close: number; vwap: number } }
+  >
+>;
+
+// candlestick requires a volume column
+timeBucket({
+  bucket: "1 hour",
+  range: { start, end },
+  // @ts-expect-error - candlestick requires `volume`
+  aggregate: { c: { candlestick: "temperature" } },
+});
+
 // NB: histogram + `as` and avg + `distinct` are excess properties on a union member, which TS
 // permits through const-generic inference — those combinations are rejected at runtime instead
 // (covered by the unit tests). Only type *mismatches* on known props are caught here.
