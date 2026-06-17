@@ -66,10 +66,10 @@ describe.skipIf(!DOCKER_OK)("timeBucket stats_agg / 1-D summary (real TimescaleD
     expect(s.sum).toBe(60);
     expect(s.numVals).toBe(3);
     expect(s.average).toBeCloseTo(20, 6);
-    // Population (Toolkit default): variance = ((10-20)^2 + 0 + (30-20)^2) / 3 = 200/3 ≈ 66.667;
-    // stddev = sqrt(200/3) ≈ 8.165. Symmetric data → skewness 0.
-    expect(s.variance).toBeCloseTo(66.667, 2);
-    expect(s.stddev).toBeCloseTo(8.165, 2);
+    // Sample (Toolkit default): variance = ((10-20)^2 + 0 + (30-20)^2) / (3-1) = 200/2 = 100;
+    // stddev = sqrt(100) = 10. Symmetric data → skewness 0.
+    expect(s.variance).toBeCloseTo(100, 4);
+    expect(s.stddev).toBeCloseTo(10, 4);
     expect(s.skewness).toBeCloseTo(0, 5);
     // kurtosis convention (raw vs excess) is a Toolkit detail — just assert it computed.
     expect(typeof s.kurtosis).toBe("number");

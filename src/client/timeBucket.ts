@@ -82,8 +82,8 @@ export type AggregateOp<R> =
   | { candlestick: NumericColumn<R>; volume: NumericColumn<R> }
   // Toolkit `stats_agg(value)` -> a 1-D statistical summary as one object per bucket:
   // average / sum / numVals / stddev / variance / skewness / kurtosis. `stddev` & `variance` are
-  // POPULATION (the Toolkit default) — i.e. like the `stddevPop`/`varPop` ops, not the sample
-  // `stddev`/`variance` ops. No as / fill, not combinable with gapfill. Requires `timescaledb_toolkit`.
+  // SAMPLE (the Toolkit default), matching the package's sample `stddev`/`variance` ops. No as /
+  // fill, not combinable with gapfill. Requires `timescaledb_toolkit`.
   | { stats: NumericColumn<R> };
 
 /** The `aggregate` spec: result-column name -> aggregate operation. */
@@ -488,7 +488,7 @@ export function buildTimeBucketQuery(
       if (gapfill) throw new Error(`timeBucket: "stats" on "${resultName}" cannot be combined with gapfill.`);
       // stats_agg(value) is repeated per accessor but Postgres computes it once (common
       // subexpression); jsonb_build_object returns the 1-D summary as one JS object. stddev /
-      // variance are POPULATION (Toolkit default), matching the stddevPop / varPop ops.
+      // variance are SAMPLE (Toolkit default), matching the package's sample stddev / variance ops.
       const sa = `stats_agg(${src})`;
       select.push(
         `jsonb_build_object('average', average(${sa}), 'sum', sum(${sa}), 'numVals', num_vals(${sa}), 'stddev', stddev(${sa}), 'variance', variance(${sa}), 'skewness', skewness(${sa}), 'kurtosis', kurtosis(${sa})) AS ${alias}`,
