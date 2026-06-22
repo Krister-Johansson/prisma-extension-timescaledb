@@ -7,7 +7,9 @@ export default defineConfig({
     include: ["test/unit/**/*.test.ts"],
     coverage: {
       provider: "v8",
-      reporter: ["text", "text-summary", "html", "lcov"],
+      // json-summary + json feed the PR coverage comment (vitest-coverage-report-action);
+      // lcov feeds Codecov; html/text are for local/CI artifact inspection.
+      reporter: ["text", "text-summary", "html", "lcov", "json-summary", "json"],
       reportsDirectory: "coverage",
       include: ["src/**/*.ts"],
       exclude: [

@@ -1,10 +1,16 @@
 # prisma-extension-timescaledb
 
 [![npm](https://img.shields.io/npm/v/prisma-extension-timescaledb)](https://www.npmjs.com/package/prisma-extension-timescaledb)
-[![CI](https://github.com/Krister-Johansson/prisma-extension-timescaledb/actions/workflows/ci.yml/badge.svg)](https://github.com/Krister-Johansson/prisma-extension-timescaledb/actions/workflows/ci.yml)
-[![Socket Badge](https://socket.dev/api/badge/npm/package/prisma-extension-timescaledb)](https://socket.dev/npm/package/prisma-extension-timescaledb)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
+[![npm downloads](https://img.shields.io/npm/dm/prisma-extension-timescaledb)](https://www.npmjs.com/package/prisma-extension-timescaledb)
+[![node](https://img.shields.io/node/v/prisma-extension-timescaledb)](https://www.npmjs.com/package/prisma-extension-timescaledb)
+[![types](https://img.shields.io/npm/types/prisma-extension-timescaledb)](https://www.npmjs.com/package/prisma-extension-timescaledb)
 ![Prisma](https://img.shields.io/badge/Prisma-%3E%3D7.0.0-2D3748)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
+
+[![CI](https://github.com/Krister-Johansson/prisma-extension-timescaledb/actions/workflows/ci.yml/badge.svg)](https://github.com/Krister-Johansson/prisma-extension-timescaledb/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/Krister-Johansson/prisma-extension-timescaledb/branch/main/graph/badge.svg)](https://codecov.io/gh/Krister-Johansson/prisma-extension-timescaledb)
+[![Socket Badge](https://socket.dev/api/badge/npm/package/prisma-extension-timescaledb)](https://socket.dev/npm/package/prisma-extension-timescaledb)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/Krister-Johansson/prisma-extension-timescaledb/badge)](https://scorecard.dev/viewer/?uri=github.com/Krister-Johansson/prisma-extension-timescaledb)
 
 Type-safe **[TimescaleDB](https://www.tigerdata.com/) / TigerData** time-series support for
 Prisma — **reset-safe migrations**, hypertables, continuous aggregates, and typed query helpers.
