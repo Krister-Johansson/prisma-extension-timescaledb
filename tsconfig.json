@@ -1,5 +1,8 @@
 {
   "compilerOptions": {
+    // TS 6 hard-errors on the deprecated `baseUrl` that tsup's dts pipeline injects.
+    // Acknowledge it until the toolchain stops setting it (option removed in TS 7).
+    "ignoreDeprecations": "6.0",
     "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
@@ -13,6 +16,9 @@
     "skipLibCheck": true,
     "verbatimModuleSyntax": true,
     "noUncheckedIndexedAccess": true,
+    // Explicit so tsup's dts pass resolves the Node built-ins (`node:fs`, `node:path`)
+    // under TS 6; src only relies on Node ambient types.
+    "types": ["node"],
     "outDir": "dist",
     "rootDir": "src"
   },
