@@ -38,6 +38,14 @@ jobs:
           name: coverage
           path: coverage/
           if-no-files-found: error
+      - name: Upload coverage to Codecov
+        if: matrix.node == 20
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          files: ./coverage/lcov.info
+          token: ${{ secrets.CODECOV_TOKEN }}
+          # Best-effort: never fail CI on an upload hiccup or a not-yet-set token.
+          fail_ci_if_error: false
 
   integration:
     name: integration (real TimescaleDB)
