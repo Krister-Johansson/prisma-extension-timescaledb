@@ -1,0 +1,27 @@
+version: 2
+updates:
+  # Keep the SHA-pinned GitHub Actions current — also keeps Scorecard's
+  # Pinned-Dependencies green over time. Grouped into one PR/week to stay low-noise.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci
+
+  # npm dependencies. Dev and runtime grouped separately; weekly + capped to stay quiet.
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      npm-development:
+        dependency-type: development
+      npm-production:
+        dependency-type: production
+    commit-message:
+      prefix: chore
