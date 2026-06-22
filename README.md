@@ -11,6 +11,7 @@
 [![codecov](https://codecov.io/gh/Krister-Johansson/prisma-extension-timescaledb/branch/main/graph/badge.svg)](https://codecov.io/gh/Krister-Johansson/prisma-extension-timescaledb)
 [![Socket Badge](https://socket.dev/api/badge/npm/package/prisma-extension-timescaledb)](https://socket.dev/npm/package/prisma-extension-timescaledb)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/Krister-Johansson/prisma-extension-timescaledb/badge)](https://scorecard.dev/viewer/?uri=github.com/Krister-Johansson/prisma-extension-timescaledb)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/13331/badge)](https://www.bestpractices.dev/projects/13331)
 
 Type-safe **[TimescaleDB](https://www.tigerdata.com/) / TigerData** time-series support for
 Prisma — **reset-safe migrations**, hypertables, continuous aggregates, and typed query helpers.
