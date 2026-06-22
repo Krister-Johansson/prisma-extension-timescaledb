@@ -64,3 +64,29 @@ jobs:
       - run: npm run build
       # ubuntu-latest runners ship Docker, so Testcontainers can run the reset-safety proof.
       - run: npm run test:integration
+
+  coverage-comment:
+    name: coverage comment
+    needs: build-test
+    # PRs only — there's no PR to comment on for pushes to main. Kept as its own job
+    # so the pull-requests:write token never covers a job that runs project code
+    # (build-test stays contents:read). It consumes the coverage artifact only.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - name: Download coverage report
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: coverage
+          path: coverage
+      - name: Comment coverage summary on the PR
+        uses: davelosert/vitest-coverage-report-action@3c054a2d2e2ca45446417ad5d6d5eb33092af8f1 # v2.12.1
+        with:
+          json-summary-path: coverage/coverage-summary.json
+          json-final-path: coverage/coverage-final.json
