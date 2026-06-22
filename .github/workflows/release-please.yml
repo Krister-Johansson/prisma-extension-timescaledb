@@ -8,14 +8,18 @@ on:
   # re-trigger: npm publish errors out as a no-op if the version is already on the registry.
   workflow_dispatch:
 
+# Least-privilege at the top level (satisfies Scorecard's Token-Permissions check); the
+# single release job elevates only what release-please + npm provenance actually need.
 permissions:
-  contents: write
-  pull-requests: write
-  id-token: write # npm provenance (supply-chain attestation) via OIDC
+  contents: read
 
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # release commits, tags, and the GitHub release
+      pull-requests: write # maintain the release PR
+      id-token: write # npm provenance (supply-chain attestation) via OIDC
     env:
       # Surfaced so the publish steps can gate on its presence. Empty when the secret is
       # unset, which makes the steps below skip — npm publish stays OFF until you add it.

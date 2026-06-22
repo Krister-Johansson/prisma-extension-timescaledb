@@ -32,6 +32,10 @@ jobs:
         with:
           results_file: results.sarif
           results_format: sarif
+          # A PAT with Administration:read lets Scorecard read branch-protection rules
+          # (the default GITHUB_TOKEN can't, which is why Branch-Protection errors). Falls
+          # back to GITHUB_TOKEN until a SCORECARD_TOKEN secret is added — nothing breaks.
+          repo_token: ${{ secrets.SCORECARD_TOKEN || secrets.GITHUB_TOKEN }}
           # Publish to the OpenSSF API so the README badge resolves.
           publish_results: true
 
