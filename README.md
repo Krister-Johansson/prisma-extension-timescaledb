@@ -2,6 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/prisma-extension-timescaledb)](https://www.npmjs.com/package/prisma-extension-timescaledb)
 [![CI](https://github.com/Krister-Johansson/prisma-extension-timescaledb/actions/workflows/ci.yml/badge.svg)](https://github.com/Krister-Johansson/prisma-extension-timescaledb/actions/workflows/ci.yml)
+[![Socket Badge](https://socket.dev/api/badge/npm/package/prisma-extension-timescaledb)](https://socket.dev/npm/package/prisma-extension-timescaledb)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 ![Prisma](https://img.shields.io/badge/Prisma-%3E%3D7.0.0-2D3748)
 
