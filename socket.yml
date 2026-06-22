@@ -1,0 +1,31 @@
+# Socket.dev configuration — https://docs.socket.dev/docs/socket-yml
+# Takes effect once the Socket GitHub App is installed on this repo.
+#
+# Context: this package's own code carries no Socket "Package Alerts". The
+# dependency alerts shown on socket.dev are inherited from the Prisma trees we
+# declare as peers (prisma, @prisma/client) plus the one runtime dep
+# (@prisma/generator-helper) — i.e. dev/CLI tooling that never ships to
+# consumers. The published surface is `dist/` + `CHANGELOG.md` only, and
+# `npm audit --omit=dev` reports 0 vulnerabilities.
+version: 2
+
+# Only run pull-request alert scans when a dependency manifest actually changes.
+# Socket only ever ingests manifest files (never application source), so
+# docs- or source-only PRs don't need a scan.
+triggerPaths:
+  - "package.json"
+  - "package-lock.json"
+
+githubApp:
+  enabled: true
+  pullRequestAlertsEnabled: true
+  dependencyOverviewEnabled: true
+  projectReportsEnabled: true
+
+# We deliberately do NOT blanket-disable supply-chain issue types via
+# `issueRules`: that is global per-type and would also hide a genuinely
+# malicious future dependency. Known false positives — e.g. the
+# "AI-detected possible typosquat → ts-deepmerge" hit on `deepmerge-ts`, which
+# is Prisma's own dependency (@prisma/internals → @prisma/config) — should be
+# triaged per-alert with a `@SocketSecurity ignore` pull-request comment:
+#   https://docs.socket.dev/docs/ignoring-pull-request-alerts
