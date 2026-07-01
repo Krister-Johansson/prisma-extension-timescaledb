@@ -557,10 +557,12 @@ function assertInEveryUniqueKey(model: DMMF.Model, fieldName: string, what: stri
     ...model.uniqueIndexes.map((u) => u.fields),
     ...model.fields.filter((f) => f.isUnique).map((f) => [f.name]), // single-field @unique
   ];
-  const missingFrom = keyFieldSets.find((fields) => !fields.includes(fieldName));
-  if (missingFrom) {
+  // Report every offending constraint at once, not just the first — a model with several bad
+  // unique indexes should be fixable in one pass, not one error per regenerate.
+  const missing = keyFieldSets.filter((fields) => !fields.includes(fieldName));
+  if (missing.length > 0) {
     throw new Error(
-      `${ctx}: ${what} must be included in every primary key / unique constraint (TimescaleDB requires all partitioning columns in unique indexes); it is missing from [${missingFrom.join(", ")}].`,
+      `${ctx}: ${what} must be included in every primary key / unique constraint (TimescaleDB requires all partitioning columns in unique indexes); it is missing from: ${missing.map((fields) => `[${fields.join(", ")}]`).join(", ")}.`,
     );
   }
 }

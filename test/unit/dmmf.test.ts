@@ -952,7 +952,7 @@ model SensorReading {
   time     DateTime
   deviceId Int      @id
 }`),
-    ).rejects.toThrow(/column "time" must be included in every primary key \/ unique constraint.*missing from \[deviceId\]/s);
+    ).rejects.toThrow(/column "time" must be included in every primary key \/ unique constraint.*missing from: \[deviceId\]/s);
   });
 
   it("rejects a time column present in @@id but missing from a @@unique", async () => {
@@ -966,7 +966,7 @@ model SensorReading {
   @@id([deviceId, time])
   @@unique([serial])
 }`),
-    ).rejects.toThrow(/column "time" must be included in every primary key \/ unique constraint.*missing from \[serial\]/s);
+    ).rejects.toThrow(/column "time" must be included in every primary key \/ unique constraint.*missing from: \[serial\]/s);
   });
 
   it("rejects a time column missing from a single-field @unique", async () => {
@@ -979,7 +979,23 @@ model SensorReading {
   serial   String   @unique
   @@id([deviceId, time])
 }`),
-    ).rejects.toThrow(/column "time" must be included in every primary key \/ unique constraint.*missing from \[serial\]/s);
+    ).rejects.toThrow(/column "time" must be included in every primary key \/ unique constraint.*missing from: \[serial\]/s);
+  });
+
+  it("reports every offending constraint at once, not just the first", async () => {
+    await expect(
+      extract(`
+/// @timescale.hypertable(column: "time")
+model SensorReading {
+  time     DateTime
+  deviceId Int
+  serial   String
+  mac      String
+  @@id([deviceId, time])
+  @@unique([serial])
+  @@unique([mac])
+}`),
+    ).rejects.toThrow(/missing from: \[serial\], \[mac\]/);
   });
 
   it("accepts a time column included in every constraint", async () => {
