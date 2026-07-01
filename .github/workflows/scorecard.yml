@@ -1,6 +1,6 @@
 # Thin caller for the shared OpenSSF Scorecard workflow. The triggers must live
 # here (cron cannot be defined in a reusable workflow).
-# Replace dbbed055bad959646f34cb7b5bee812ee063bfcc / v1.0.0 with the latest
+# Replace 0ecc2e4800d4a489a6fba3170a290cc01b32e286 / v1.0.0 with the latest
 # shared-configs release (see AGENTS.md step 4).
 name: Scorecard supply-chain security
 
@@ -22,7 +22,7 @@ permissions: read-all
 
 jobs:
   scorecard:
-    uses: Krister-Johansson/shared-configs/.github/workflows/scorecard.yml@dbbed055bad959646f34cb7b5bee812ee063bfcc # v1.0.0
+    uses: Krister-Johansson/shared-configs/.github/workflows/scorecard.yml@0ecc2e4800d4a489a6fba3170a290cc01b32e286 # v1.1.0
     permissions:
       security-events: write # SARIF upload to code scanning
       id-token: write # publish results to the OpenSSF API (badge)

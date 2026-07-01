@@ -1,5 +1,5 @@
 # Thin caller for the shared release-please + npm publish workflow.
-# Replace dbbed055bad959646f34cb7b5bee812ee063bfcc / v1.0.0 with the latest
+# Replace 0ecc2e4800d4a489a6fba3170a290cc01b32e286 / v1.0.0 with the latest
 # shared-configs release (see AGENTS.md step 4).
 #
 # publish-strategy 'oidc' needs a one-time Trusted Publisher on npmjs.com
@@ -21,7 +21,7 @@ permissions:
 
 jobs:
   release:
-    uses: Krister-Johansson/shared-configs/.github/workflows/release-please.yml@dbbed055bad959646f34cb7b5bee812ee063bfcc # v1.0.0
+    uses: Krister-Johansson/shared-configs/.github/workflows/release-please.yml@0ecc2e4800d4a489a6fba3170a290cc01b32e286 # v1.1.0
     permissions:
       contents: write # release commits, tags, and the GitHub release
       pull-requests: write # maintain the release PR
