@@ -11,8 +11,9 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { startHarness, type Harness } from "./harness.js";
+import { startHarness, type Harness, type TestPrismaClient } from "./harness.js";
 import { timescaledb } from "../../src/client/index.js";
+import type { TimescaleJob } from "../../src/client/manage.js";
 
 const DOCKER_OK = (() => {
   try {
@@ -51,8 +52,7 @@ view SensorHourly {
 
 describe.skipIf(!DOCKER_OK)("job control + introspection (runtime)", () => {
   let h: Harness;
-  // deno-lint-ignore no-explicit-any
-  let prisma: any;
+  let prisma: TestPrismaClient;
   let base: { $disconnect(): Promise<void> };
 
   beforeAll(async () => {
@@ -72,9 +72,8 @@ describe.skipIf(!DOCKER_OK)("job control + introspection (runtime)", () => {
     await h?.stop();
   });
 
-  // deno-lint-ignore no-explicit-any
-  const jobByProc = async (model: string, proc: string): Promise<any> =>
-    (await prisma.$timescale.listJobs(model)).find((j: { procName: string }) => j.procName === proc);
+  const jobByProc = async (model: string, proc: string): Promise<TimescaleJob | undefined> =>
+    (await prisma.$timescale.listJobs(model)).find((j: TimescaleJob) => j.procName === proc);
 
   it("lists jobs and filters by model (hypertable vs continuous aggregate)", async () => {
     const retention = await jobByProc("SensorReading", "policy_retention");

@@ -802,3 +802,135 @@ model Device {
     ]);
   });
 });
+
+describe("extractTimescaleSchema — unknown annotations and arguments fail loudly", () => {
+  // Every case here used to be SILENTLY ignored (verified against the pre-fix generator),
+  // leaving the user without a hypertable / policy / view column and no hint why.
+
+  it("rejects a case-typo'd model annotation with a suggestion", async () => {
+    await expect(
+      extract(`
+/// @timescale.hyperTable(column: "time")
+model SensorReading {
+  time     DateTime
+  deviceId Int
+  @@id([deviceId, time])
+}`),
+    ).rejects.toThrow(/unknown annotation @timescale\.hyperTable.*did you mean @timescale\.hypertable\?/s);
+  });
+
+  it("rejects a misspelled model annotation, listing the valid names", async () => {
+    await expect(
+      extract(`
+/// @timescale.hypertable(column: "time")
+/// @timescale.retension(dropAfter: "30 days")
+model SensorReading {
+  time     DateTime
+  deviceId Int
+  @@id([deviceId, time])
+}`),
+    ).rejects.toThrow(/unknown annotation @timescale\.retension.*hypertable, retention, compression, continuousAggregate/s);
+  });
+
+  it("rejects unknown argument keys with a case suggestion", async () => {
+    await expect(
+      extract(`
+/// @timescale.hypertable(column: "time", chunkinterval: "1 day")
+model SensorReading {
+  time     DateTime
+  deviceId Int
+  @@id([deviceId, time])
+}`),
+    ).rejects.toThrow(/unknown argument "chunkinterval".*did you mean "chunkInterval"\?/s);
+  });
+
+  it("rejects a case-typo'd field annotation on a cagg view", async () => {
+    await expect(
+      extract(`
+/// @timescale.hypertable(column: "time")
+model SensorReading {
+  time        DateTime
+  deviceId    Int
+  temperature Float
+  @@id([deviceId, time])
+}
+
+/// @timescale.continuousAggregate(source: "SensorReading", bucket: "1 hour", timeColumn: "time")
+view SensorHourly {
+  bucket   DateTime /// @timescale.bucket
+  deviceId Int      /// @timescale.groupby
+  avgTemp  Float    /// @timescale.aggregate(fn: "avg", column: "temperature")
+  @@unique([deviceId, bucket])
+}`),
+    ).rejects.toThrow(/unknown annotation @timescale\.groupby.*did you mean @timescale\.groupBy\?/s);
+  });
+
+  it("rejects unknown cagg arguments (materializedonly) and unknown nested refresh keys", async () => {
+    const cagg = (extraArgs: string) =>
+      extract(`
+/// @timescale.hypertable(column: "time")
+model SensorReading {
+  time        DateTime
+  deviceId    Int
+  temperature Float
+  @@id([deviceId, time])
+}
+
+/// @timescale.continuousAggregate(source: "SensorReading", bucket: "1 hour", timeColumn: "time"${extraArgs})
+view SensorHourly {
+  bucket  DateTime /// @timescale.bucket
+  avgTemp Float    /// @timescale.aggregate(fn: "avg", column: "temperature")
+  @@unique([bucket])
+}`);
+    await expect(cagg(`, materializedonly: false`)).rejects.toThrow(
+      /unknown argument "materializedonly".*did you mean "materializedOnly"\?/s,
+    );
+    await expect(
+      cagg(`, refresh: { startOffset: "1 month", endOffset: "1 hour", scheduleInterval: "1 hour", schedual: "1 hour" }`),
+    ).rejects.toThrow(/unknown argument "schedual".*startOffset, endOffset, scheduleInterval/s);
+  });
+
+  it("rejects annotations that take no arguments when given any", async () => {
+    await expect(
+      extract(`
+/// @timescale.hypertable(column: "time")
+model SensorReading {
+  time        DateTime
+  deviceId    Int
+  temperature Float
+  @@id([deviceId, time])
+}
+
+/// @timescale.continuousAggregate(source: "SensorReading", bucket: "1 hour", timeColumn: "time")
+view SensorHourly {
+  bucket  DateTime /// @timescale.bucket(column: "time")
+  avgTemp Float    /// @timescale.aggregate(fn: "avg", column: "temperature")
+  @@unique([bucket])
+}`),
+    ).rejects.toThrow(/@timescale\.bucket takes no arguments/);
+  });
+
+  it("rejects field-level annotations outside a @timescale.continuousAggregate view", async () => {
+    await expect(
+      extract(`
+/// @timescale.hypertable(column: "time")
+model SensorReading {
+  time     DateTime /// @timescale.bucket
+  deviceId Int
+  @@id([deviceId, time])
+}`),
+    ).rejects.toThrow(/field-level annotations are only valid on a @timescale\.continuousAggregate view/);
+  });
+
+  it("rejects a field-level annotation used at model level with a placement hint", async () => {
+    await expect(
+      extract(`
+/// @timescale.groupBy
+model SensorReading {
+  time     DateTime
+  deviceId Int
+  @@id([deviceId, time])
+}`),
+    ).rejects.toThrow(/@timescale\.groupBy is a field-level annotation/);
+  });
+});

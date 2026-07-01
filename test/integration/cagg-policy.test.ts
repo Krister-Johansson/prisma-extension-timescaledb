@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { startHarness, type Harness } from "./harness.js";
+import { startHarness, type Harness, type TestPrismaClient } from "./harness.js";
 import { timescaledb } from "../../src/client/index.js";
 
 const DOCKER_OK = (() => {
@@ -32,8 +32,7 @@ const policy = { startOffset: "1 month", endOffset: "1 hour", scheduleInterval: 
 
 describe.skipIf(!DOCKER_OK)("continuous-aggregate refresh policy (runtime)", () => {
   let h: Harness;
-  // deno-lint-ignore no-explicit-any
-  let prisma: any;
+  let prisma: TestPrismaClient;
   let base: { $disconnect(): Promise<void> };
 
   beforeAll(async () => {

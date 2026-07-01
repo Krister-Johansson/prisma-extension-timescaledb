@@ -7,7 +7,7 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { startHarness, type Harness } from "./harness.js";
+import { startHarness, type Harness, type TestPrismaClient } from "./harness.js";
 import { timescaledb } from "../../src/client/index.js";
 
 const DOCKER_OK = (() => {
@@ -54,8 +54,7 @@ const INIT_SQL = `CREATE TABLE "Reading" (
 
 describe.skipIf(!DOCKER_OK)("physical `bucket` column (real TimescaleDB)", () => {
   let h: Harness;
-  // deno-lint-ignore no-explicit-any
-  let prisma: any;
+  let prisma: TestPrismaClient;
   let base: { $disconnect(): Promise<void> };
 
   beforeAll(async () => {
@@ -64,6 +63,9 @@ describe.skipIf(!DOCKER_OK)("physical `bucket` column (real TimescaleDB)", () =>
     h = await startHarness({ models: MODELS, initSql: INIT_SQL });
     h.prisma(["generate"]);
     h.prisma(["migrate", "deploy"]);
+    // Replay from scratch (idempotent replay): the colliding-column artifacts under test must
+    // also survive the reset cycle, like every other migration-produced artifact.
+    h.prisma(["migrate", "reset", "--force"]);
 
     const { PrismaClient } = await import(pathToFileURL(join(h.projectDir, "client", "client.ts")).href);
     const { PrismaPg } = await import("@prisma/adapter-pg");
