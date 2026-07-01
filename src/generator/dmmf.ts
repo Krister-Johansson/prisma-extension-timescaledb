@@ -45,7 +45,10 @@ const AGG_FNS = new Set<AggregateSpec["fn"]>(["avg", "sum", "min", "max", "count
 // no policy, a column missing from the generated view) and only surfaces as a runtime mystery.
 const MODEL_ANNOTATIONS = ["hypertable", "retention", "compression", "continuousAggregate"] as const;
 const FIELD_ANNOTATIONS = ["bucket", "groupBy", "aggregate"] as const;
-const ANNOTATION_ARGS: Record<string, readonly string[]> = {
+type AnnotationName = (typeof MODEL_ANNOTATIONS)[number] | (typeof FIELD_ANNOTATIONS)[number];
+// Keyed by the name union so adding an annotation without its args entry is a COMPILE error
+// (a string-keyed map would fall through to "takes no arguments" at runtime instead).
+const ANNOTATION_ARGS: Record<AnnotationName, readonly string[]> = {
   hypertable: ["column", "chunkInterval", "partitionColumn", "partitions", "chunkSkipping"],
   retention: ["dropAfter"],
   compression: ["after", "segmentBy", "orderBy"],
@@ -64,7 +67,7 @@ function caseSuggestion(name: string, allowed: Iterable<string>): string | undef
 }
 
 /** Reject an unknown annotation name at its level, suggesting the fix (case typo / wrong level). */
-function assertKnownAnnotationName(name: string, level: "model" | "field", ctx: string): void {
+function assertKnownAnnotationName(name: string, level: "model" | "field", ctx: string): asserts name is AnnotationName {
   const known: readonly string[] = level === "model" ? MODEL_ANNOTATIONS : FIELD_ANNOTATIONS;
   if (known.includes(name)) return;
   const other: readonly string[] = level === "model" ? FIELD_ANNOTATIONS : MODEL_ANNOTATIONS;
@@ -114,8 +117,9 @@ export function extractTimescaleSchema(dmmf: DMMF.Document): TimescaleSchema {
     // so a typo fails generation instead of silently no-oping (H2 in the review).
     for (const a of annotations) {
       const ctx = `model "${model.name}"`;
-      assertKnownAnnotationName(a.name, "model", ctx);
-      assertKnownArgs(a.name, a.args, ANNOTATION_ARGS[a.name] ?? [], `@timescale.${a.name} on ${ctx}`);
+      const name = a.name;
+      assertKnownAnnotationName(name, "model", ctx);
+      assertKnownArgs(name, a.args, ANNOTATION_ARGS[name], `@timescale.${name} on ${ctx}`);
     }
     const isCagg = findAnnotation(annotations, "continuousAggregate") !== undefined;
     for (const field of model.fields) {
@@ -128,8 +132,9 @@ export function extractTimescaleSchema(dmmf: DMMF.Document): TimescaleSchema {
         );
       }
       for (const a of fieldAnns) {
-        assertKnownAnnotationName(a.name, "field", fctx);
-        assertKnownArgs(a.name, a.args, ANNOTATION_ARGS[a.name] ?? [], `@timescale.${a.name} on ${fctx}`);
+        const name = a.name;
+        assertKnownAnnotationName(name, "field", fctx);
+        assertKnownArgs(name, a.args, ANNOTATION_ARGS[name], `@timescale.${name} on ${fctx}`);
       }
     }
 

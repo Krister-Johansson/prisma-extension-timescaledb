@@ -63,6 +63,9 @@ describe.skipIf(!DOCKER_OK)("physical `bucket` column (real TimescaleDB)", () =>
     h = await startHarness({ models: MODELS, initSql: INIT_SQL });
     h.prisma(["generate"]);
     h.prisma(["migrate", "deploy"]);
+    // Replay from scratch (idempotent replay): the colliding-column artifacts under test must
+    // also survive the reset cycle, like every other migration-produced artifact.
+    h.prisma(["migrate", "reset", "--force"]);
 
     const { PrismaClient } = await import(pathToFileURL(join(h.projectDir, "client", "client.ts")).href);
     const { PrismaPg } = await import("@prisma/adapter-pg");
