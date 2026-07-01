@@ -40,6 +40,65 @@ export interface TimescaleSchema {
 const TIME_TYPES = new Set(["DateTime"]);
 const AGG_FNS = new Set<AggregateSpec["fn"]>(["avg", "sum", "min", "max", "count"]);
 
+// The complete annotation surface. Anything outside these sets is a typo the user needs to hear
+// about NOW: an unknown name or argument key silently no-ops otherwise (no hypertable conversion,
+// no policy, a column missing from the generated view) and only surfaces as a runtime mystery.
+const MODEL_ANNOTATIONS = ["hypertable", "retention", "compression", "continuousAggregate"] as const;
+const FIELD_ANNOTATIONS = ["bucket", "groupBy", "aggregate"] as const;
+const ANNOTATION_ARGS: Record<string, readonly string[]> = {
+  hypertable: ["column", "chunkInterval", "partitionColumn", "partitions", "chunkSkipping"],
+  retention: ["dropAfter"],
+  compression: ["after", "segmentBy", "orderBy"],
+  continuousAggregate: ["source", "bucket", "timeColumn", "refresh", "materializedOnly"],
+  bucket: [],
+  groupBy: [],
+  aggregate: ["fn", "column"],
+};
+const REFRESH_ARGS = ["startOffset", "endOffset", "scheduleInterval"] as const;
+
+/** Case-insensitive lookup: the allowed name a typo probably meant, or undefined. */
+function caseSuggestion(name: string, allowed: Iterable<string>): string | undefined {
+  const lower = name.toLowerCase();
+  for (const candidate of allowed) if (candidate.toLowerCase() === lower) return candidate;
+  return undefined;
+}
+
+/** Reject an unknown annotation name at its level, suggesting the fix (case typo / wrong level). */
+function assertKnownAnnotationName(name: string, level: "model" | "field", ctx: string): void {
+  const known: readonly string[] = level === "model" ? MODEL_ANNOTATIONS : FIELD_ANNOTATIONS;
+  if (known.includes(name)) return;
+  const other: readonly string[] = level === "model" ? FIELD_ANNOTATIONS : MODEL_ANNOTATIONS;
+  if (other.includes(name)) {
+    throw new Error(
+      level === "model"
+        ? `${ctx}: @timescale.${name} is a field-level annotation — place it on the ${name === "bucket" ? "view's bucket field" : "view field"} (\`/// @timescale.${name}\`), not the model.`
+        : `${ctx}: @timescale.${name} is a model-level annotation — place it on the model/view, not a field.`,
+    );
+  }
+  const suggestion = caseSuggestion(name, [...known, ...other]);
+  throw new Error(
+    `${ctx}: unknown annotation @timescale.${name}` +
+      (suggestion !== undefined
+        ? ` (did you mean @timescale.${suggestion}?).`
+        : ` (valid ${level}-level annotations: ${known.join(", ")}).`),
+  );
+}
+
+/** Reject unknown argument keys on a known annotation, suggesting the case fix where obvious. */
+function assertKnownArgs(name: string, args: Record<string, unknown>, allowed: readonly string[], ctx: string): void {
+  for (const key of Object.keys(args)) {
+    if (allowed.includes(key)) continue;
+    if (allowed.length === 0) {
+      throw new Error(`${ctx}: @timescale.${name} takes no arguments (got ${JSON.stringify(key)}).`);
+    }
+    const suggestion = caseSuggestion(key, allowed);
+    throw new Error(
+      `${ctx}: unknown argument ${JSON.stringify(key)} for @timescale.${name}` +
+        (suggestion !== undefined ? ` (did you mean ${JSON.stringify(suggestion)}?).` : ` (allowed: ${allowed.join(", ")}).`),
+    );
+  }
+}
+
 /** Extract and validate all TimescaleDB configs from a Prisma DMMF document. */
 export function extractTimescaleSchema(dmmf: DMMF.Document): TimescaleSchema {
   const models = dmmf.datamodel.models;
@@ -50,6 +109,30 @@ export function extractTimescaleSchema(dmmf: DMMF.Document): TimescaleSchema {
 
   for (const model of models) {
     const annotations = parseAnnotations(model.documentation);
+
+    // Validate the full annotation surface FIRST — names and argument keys, at both levels —
+    // so a typo fails generation instead of silently no-oping (H2 in the review).
+    for (const a of annotations) {
+      const ctx = `model "${model.name}"`;
+      assertKnownAnnotationName(a.name, "model", ctx);
+      assertKnownArgs(a.name, a.args, ANNOTATION_ARGS[a.name] ?? [], `@timescale.${a.name} on ${ctx}`);
+    }
+    const isCagg = findAnnotation(annotations, "continuousAggregate") !== undefined;
+    for (const field of model.fields) {
+      const fieldAnns = parseAnnotations(field.documentation);
+      if (fieldAnns.length === 0) continue;
+      const fctx = `"${model.name}.${field.name}"`;
+      if (!isCagg) {
+        throw new Error(
+          `@timescale.${fieldAnns[0]!.name} on ${fctx}: field-level annotations are only valid on a @timescale.continuousAggregate view.`,
+        );
+      }
+      for (const a of fieldAnns) {
+        assertKnownAnnotationName(a.name, "field", fctx);
+        assertKnownArgs(a.name, a.args, ANNOTATION_ARGS[a.name] ?? [], `@timescale.${a.name} on ${fctx}`);
+      }
+    }
+
     if (findAnnotation(annotations, "hypertable")) {
       hypertables.push(buildHypertable(model, annotations, byName));
     } else {
@@ -456,6 +539,7 @@ function buildRefresh(ann: ReturnType<typeof parseAnnotations>[number], ctx: str
   const obj = optionalObject(ann.args, "refresh", ctx);
   if (!obj) return undefined;
   const rctx = `${ctx} refresh`;
+  assertKnownArgs("continuousAggregate", obj, REFRESH_ARGS, rctx);
   const startOffset = requireString(obj, "startOffset", rctx);
   const endOffset = requireString(obj, "endOffset", rctx);
   const scheduleInterval = requireString(obj, "scheduleInterval", rctx);
