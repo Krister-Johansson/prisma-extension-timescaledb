@@ -7,3 +7,6 @@ coverage/
 
 # integration test temp projects
 .tmp-int-*/
+
+# local working notes
+todo.md
