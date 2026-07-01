@@ -86,6 +86,48 @@ describe("whereToSql", () => {
     expect(whereToSql({ label: { endsWith: "z" } }, harness().ctx)).toBe(`"label" LIKE $1 ESCAPE '\\'`);
   });
 
+  it("mode: insensitive lowers both sides for equality, inequality, lists, and comparisons", () => {
+    // Prisma applies insensitive mode to the whole string filter, not just the LIKE operators.
+    const a = harness();
+    expect(whereToSql({ label: { equals: "Foo", mode: "insensitive" } }, a.ctx)).toBe(
+      `LOWER("label") = LOWER($1)`,
+    );
+    expect(a.params).toEqual(["Foo"]);
+    expect(whereToSql({ label: { not: "Foo", mode: "insensitive" } }, harness().ctx)).toBe(
+      `LOWER("label") <> LOWER($1)`,
+    );
+    expect(whereToSql({ label: { in: ["a", "B"], mode: "insensitive" } }, harness().ctx)).toBe(
+      `LOWER("label") IN (LOWER($1), LOWER($2))`,
+    );
+    expect(whereToSql({ label: { notIn: ["a"], mode: "insensitive" } }, harness().ctx)).toBe(
+      `LOWER("label") NOT IN (LOWER($1))`,
+    );
+    expect(whereToSql({ label: { gt: "m", mode: "insensitive" } }, harness().ctx)).toBe(
+      `LOWER("label") > LOWER($1)`,
+    );
+  });
+
+  it("mode: insensitive propagates into a nested not (Prisma puts mode on the outer filter)", () => {
+    expect(whereToSql({ label: { not: { equals: "Foo" }, mode: "insensitive" } }, harness().ctx)).toBe(
+      `NOT (LOWER("label") = LOWER($1))`,
+    );
+  });
+
+  it("mode: insensitive keeps NULL and empty-list semantics", () => {
+    expect(whereToSql({ label: { equals: null, mode: "insensitive" } }, harness().ctx)).toBe(`"label" IS NULL`);
+    expect(whereToSql({ label: { not: null, mode: "insensitive" } }, harness().ctx)).toBe(`"label" IS NOT NULL`);
+    expect(whereToSql({ label: { in: [], mode: "insensitive" } }, harness().ctx)).toBe("false");
+  });
+
+  it("mode: insensitive rejects non-string values with a clear error", () => {
+    expect(() => whereToSql({ deviceId: { equals: 5, mode: "insensitive" } }, harness().ctx)).toThrow(
+      /insensitive.*"deviceId".*string/,
+    );
+    expect(() => whereToSql({ deviceId: { in: [1, 2], mode: "insensitive" } }, harness().ctx)).toThrow(
+      /insensitive.*"deviceId".*string/,
+    );
+  });
+
   it("AND / OR / NOT", () => {
     expect(whereToSql({ AND: [{ deviceId: 1 }, { temperature: { gte: 20 } }] }, harness().ctx)).toBe(
       `("deviceId" = $1 AND "temperature" >= $2)`,
