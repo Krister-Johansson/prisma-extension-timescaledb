@@ -181,9 +181,19 @@ function fieldClause(field: string, value: unknown, ctx: WhereCtx): string {
   return operatorMapToSql(c, field, value as Record<string, unknown>, ctx);
 }
 
-/** AND together every operator clause in a filter object (e.g. `{ gte, lt }`). `mode` applies to LIKE ops. */
-function operatorMapToSql(col: string, field: string, filter: Record<string, unknown>, ctx: WhereCtx): string {
-  const mode = filter["mode"] === "insensitive" ? "insensitive" : undefined;
+/**
+ * AND together every operator clause in a filter object (e.g. `{ gte, lt }`). `mode: "insensitive"`
+ * applies to the whole string filter (equality, lists, comparisons, LIKE ops — matching Prisma) and
+ * is inherited by a nested `not`, since Prisma only allows `mode` on the outer filter.
+ */
+function operatorMapToSql(
+  col: string,
+  field: string,
+  filter: Record<string, unknown>,
+  ctx: WhereCtx,
+  inherited?: "insensitive",
+): string {
+  const mode = filter["mode"] === "insensitive" ? "insensitive" : inherited;
   const parts: string[] = [];
   for (const [op, v] of Object.entries(filter)) {
     if (v === undefined || op === "mode") continue;
@@ -202,35 +212,49 @@ function operatorClause(
   mode: "insensitive" | undefined,
   ctx: WhereCtx,
 ): string {
+  // One comparison clause; under mode: "insensitive" both sides are lowered (LOWER(col) op LOWER($n)),
+  // which is exact case-insensitive equality/ordering. Deliberate divergence from Prisma: its engine
+  // compiles insensitive equals to an UNESCAPED ILIKE, so a value containing % or _ pattern-matches
+  // (prisma/prisma#19506). Here those characters are literal — equals means equals. Verified against
+  // Prisma 7.8 in test/integration/where-insensitive.test.ts.
+  const cmp = (sqlOp: string): string => {
+    const value = scalar(v, field, op);
+    if (mode === "insensitive") {
+      assertInsensitiveString(value, field, op);
+      return `LOWER(${col}) ${sqlOp} LOWER(${ctx.push(value)})`;
+    }
+    return `${col} ${sqlOp} ${ctx.push(value)}`;
+  };
   switch (op) {
     case "equals":
-      return v === null ? `${col} IS NULL` : `${col} = ${ctx.push(scalar(v, field, op))}`;
+      return v === null ? `${col} IS NULL` : cmp("=");
     case "not":
       if (v === null) return `${col} IS NOT NULL`;
-      if (isScalar(v)) return `${col} <> ${ctx.push(v)}`;
+      if (isScalar(v)) return cmp("<>");
       if (Array.isArray(v)) {
         throw new Error(`timeBucket: "not" on "${field}" cannot be an array — use { not: { in: [...] } } or notIn.`);
       }
       // Negate a nested filter object. NOT (...) reproduces Prisma's findMany semantics exactly,
       // including NULL handling: under negation NULL rows are excluded (SQL three-valued logic —
-      // NOT(unknown) is unknown — verified against Prisma). Recurses for deeper nesting. An empty
-      // inner filter (`not: {}` / only `mode`) is a no-op (like an empty top-level NOT), not `NOT ()`.
+      // NOT(unknown) is unknown — verified against Prisma). Recurses for deeper nesting, passing the
+      // outer `mode` down (Prisma's nested filter has no `mode` of its own). An empty inner filter
+      // (`not: {}` / only `mode`) is a no-op (like an empty top-level NOT), not `NOT ()`.
       {
-        const inner = operatorMapToSql(col, field, v as Record<string, unknown>, ctx);
+        const inner = operatorMapToSql(col, field, v as Record<string, unknown>, ctx, mode);
         return inner ? `NOT (${inner})` : "";
       }
     case "in":
-      return inClause(col, v, false, field, ctx);
+      return inClause(col, v, false, field, mode, ctx);
     case "notIn":
-      return inClause(col, v, true, field, ctx);
+      return inClause(col, v, true, field, mode, ctx);
     case "lt":
-      return `${col} < ${ctx.push(scalar(v, field, op))}`;
+      return cmp("<");
     case "lte":
-      return `${col} <= ${ctx.push(scalar(v, field, op))}`;
+      return cmp("<=");
     case "gt":
-      return `${col} > ${ctx.push(scalar(v, field, op))}`;
+      return cmp(">");
     case "gte":
-      return `${col} >= ${ctx.push(scalar(v, field, op))}`;
+      return cmp(">=");
     case "contains":
     case "startsWith":
     case "endsWith":
@@ -242,14 +266,36 @@ function operatorClause(
   }
 }
 
-/** Build an `IN` / `NOT IN` clause; an empty list short-circuits to `false` / `true` (Prisma semantics). */
-function inClause(col: string, v: unknown, negate: boolean, field: string, ctx: WhereCtx): string {
+/**
+ * Build an `IN` / `NOT IN` clause; an empty list short-circuits to `false` / `true` (Prisma
+ * semantics). Under mode: "insensitive" both the column and every list value are lowered.
+ */
+function inClause(
+  col: string,
+  v: unknown,
+  negate: boolean,
+  field: string,
+  mode: "insensitive" | undefined,
+  ctx: WhereCtx,
+): string {
   if (!Array.isArray(v)) {
     throw new Error(`timeBucket: "${negate ? "notIn" : "in"}" on "${field}" requires an array.`);
   }
   if (v.length === 0) return negate ? "true" : "false";
+  if (mode === "insensitive") {
+    for (const x of v) assertInsensitiveString(x, field, negate ? "notIn" : "in");
+    const list = v.map((x) => `LOWER(${ctx.push(x)})`).join(", ");
+    return `LOWER(${col}) ${negate ? "NOT IN" : "IN"} (${list})`;
+  }
   const list = v.map((x) => ctx.push(x)).join(", ");
   return `${col} ${negate ? "NOT IN" : "IN"} (${list})`;
+}
+
+/** Assert a value used under mode: "insensitive" is a string (Prisma only allows mode on String fields). */
+function assertInsensitiveString(v: unknown, field: string, op: string): void {
+  if (typeof v !== "string") {
+    throw new Error(`timeBucket: mode "insensitive" with "${op}" on "${field}" requires string values.`);
+  }
 }
 
 /** Build a `LIKE` / `ILIKE` clause for contains/startsWith/endsWith, escaping the user value's wildcards. */
