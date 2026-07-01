@@ -213,7 +213,10 @@ function operatorClause(
   ctx: WhereCtx,
 ): string {
   // One comparison clause; under mode: "insensitive" both sides are lowered (LOWER(col) op LOWER($n)),
-  // which is exact case-insensitive equality/ordering with no LIKE-wildcard hazards.
+  // which is exact case-insensitive equality/ordering. Deliberate divergence from Prisma: its engine
+  // compiles insensitive equals to an UNESCAPED ILIKE, so a value containing % or _ pattern-matches
+  // (prisma/prisma#19506). Here those characters are literal — equals means equals. Verified against
+  // Prisma 7.8 in test/integration/where-insensitive.test.ts.
   const cmp = (sqlOp: string): string => {
     const value = scalar(v, field, op);
     if (mode === "insensitive") {

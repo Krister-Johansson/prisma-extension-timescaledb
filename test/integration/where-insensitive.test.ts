@@ -64,6 +64,8 @@ describe.skipIf(!DOCKER_OK)("timeBucket mode: insensitive (real TimescaleDB)", (
         { time: new Date("2026-06-15T10:15:00Z"), id: 2, label: "foo" },
         { time: new Date("2026-06-15T10:25:00Z"), id: 3, label: "Bar" },
         { time: new Date("2026-06-15T10:35:00Z"), id: 4, label: null }, // NULL label
+        { time: new Date("2026-06-15T10:45:00Z"), id: 5, label: "10%" }, // literal LIKE wildcard
+        { time: new Date("2026-06-15T10:55:00Z"), id: 6, label: "10x" }, // ILIKE-wildcard bait for "10%"
       ],
     });
   });
@@ -89,18 +91,28 @@ describe.skipIf(!DOCKER_OK)("timeBucket mode: insensitive (real TimescaleDB)", (
 
   it("in / notIn lower every list value; notIn excludes NULL", async () => {
     await parity({ label: { in: ["FOO", "bar"], mode: "insensitive" } }, 3); // FOO, foo, Bar
-    await parity({ label: { notIn: ["foo"], mode: "insensitive" } }, 1); // Bar; NULL excluded
+    await parity({ label: { notIn: ["foo"], mode: "insensitive" } }, 3); // Bar, 10%, 10x; NULL excluded
   });
 
   it("scalar not negates case-insensitively and excludes NULL", async () => {
-    await parity({ label: { not: "FOO", mode: "insensitive" } }, 1); // Bar
+    await parity({ label: { not: "FOO", mode: "insensitive" } }, 3); // Bar, 10%, 10x
   });
 
   it("comparisons order case-insensitively (parity with Prisma's engine)", async () => {
-    await parity({ label: { gt: "BZZ", mode: "insensitive" } }, 2); // foo/FOO > bzz; bar is not
+    await parity({ label: { gt: "BZZ", mode: "insensitive" } }, 2); // foo/FOO > bzz; bar/10% /10x are not
   });
 
   it("outer mode propagates into a nested not", async () => {
-    await parity({ label: { not: { equals: "foo" }, mode: "insensitive" } }, 1); // Bar
+    await parity({ label: { not: { equals: "foo" }, mode: "insensitive" } }, 3); // Bar, 10%, 10x
+  });
+
+  it("insensitive equals treats % and _ literally (deliberate divergence from Prisma's unescaped ILIKE)", async () => {
+    // "10%" matches ONLY the literal "10%" row here. Prisma's engine compiles insensitive equals
+    // to an unescaped ILIKE, so its "10%" also pattern-matches "10x" (prisma/prisma#19506) — a
+    // documented wart we intentionally do NOT reproduce. Both behaviors are pinned: if the Prisma
+    // assertion below ever drops to 1, the upstream bug is fixed and this can fold into parity().
+    const where = { label: { equals: "10%", mode: "insensitive" } };
+    expect(await count(where)).toBe(1); // literal: just the "10%" row
+    expect(await prisma.reading.count({ where })).toBe(2); // Prisma's ILIKE also catches "10x"
   });
 });
