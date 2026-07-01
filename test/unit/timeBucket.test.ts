@@ -16,7 +16,7 @@ describe("buildTimeBucketQuery", () => {
     expect(sql).toContain(`avg("temperature")::double precision AS "avgTemp"`);
     expect(sql).toContain(`count("temperature")::int AS "n"`);
     expect(sql).toContain(`FROM "SensorReading"`);
-    expect(sql).toContain(`GROUP BY "bucket", "deviceId"`);
+    expect(sql).toContain(`GROUP BY time_bucket($1, "time"), "deviceId"`);
     expect(sql).not.toContain("::regclass");
     expect(params).toEqual(["1 hour", range.start, range.end]);
   });
@@ -95,6 +95,39 @@ describe("buildTimeBucketQuery", () => {
     ).toThrow(/unsupported where operator/);
   });
 
+  it("groups by the bucket expression, never the output alias (a physical `bucket` column must not capture it)", () => {
+    // Postgres resolves an unqualified GROUP BY name to an INPUT column before an output alias,
+    // so GROUP BY "bucket" breaks on any table that has a real column named "bucket".
+    const plain = buildTimeBucketQuery("SensorReading", "time", { ...base, groupBy: ["deviceId"] });
+    expect(plain.sql).toContain(`GROUP BY time_bucket($1, "time"), "deviceId"`);
+    const gap = buildTimeBucketQuery("SensorReading", "time", { ...base, gapfill: true });
+    expect(gap.sql).toContain(`GROUP BY time_bucket_gapfill($1, "time")`);
+    // @map: group by the source DB column, not the Prisma-field alias.
+    const mapped = buildTimeBucketQuery(
+      "sensor_readings",
+      "ts",
+      { ...base, groupBy: ["deviceId"] },
+      { deviceId: "device_id", time: "ts" },
+    );
+    expect(mapped.sql).toContain(`GROUP BY time_bucket($1, "ts"), "device_id"`);
+  });
+
+  it("rejects output-column collisions (reserved bucket name, groupBy/aggregate duplicates)", () => {
+    expect(() =>
+      buildTimeBucketQuery("SensorReading", "time", { ...base, aggregate: { bucket: { avg: "temperature" } } }),
+    ).toThrow(/reserved "bucket"/);
+    expect(() => buildTimeBucketQuery("SensorReading", "time", { ...base, groupBy: ["bucket"] })).toThrow(
+      /reserved "bucket"/,
+    );
+    expect(() =>
+      buildTimeBucketQuery("SensorReading", "time", {
+        ...base,
+        groupBy: ["deviceId"],
+        aggregate: { deviceId: { avg: "temperature" } },
+      }),
+    ).toThrow(/duplicate output column/);
+  });
+
   it("resolves @map columns to DB names while aliasing results to Prisma field names", () => {
     const { sql, params } = buildTimeBucketQuery(
       "sensor_readings",
@@ -107,7 +140,7 @@ describe("buildTimeBucketQuery", () => {
     expect(sql).toContain(`"device_id" AS "deviceId"`); // DB column selected, Prisma name aliased
     expect(sql).toContain(`avg("temperature")::double precision AS "avgTemp"`); // unmapped column = identity
     expect(sql).toContain(`AND ("device_id" = $4)`); // where key resolved to DB column
-    expect(sql).toContain(`GROUP BY "bucket", "deviceId"`); // group by the output alias
+    expect(sql).toContain(`GROUP BY time_bucket($1, "ts"), "device_id"`); // group by the source expression
     expect(params).toEqual(["1 hour", range.start, range.end, 1]);
   });
 
@@ -289,7 +322,7 @@ describe("buildTimeBucketQuery", () => {
 
   it("orderBy a single key sets the direction over the output alias", () => {
     const { sql } = buildTimeBucketQuery("SensorReading", "time", { ...base, orderBy: { bucket: "desc" } });
-    expect(sql).toContain(`GROUP BY "bucket" ORDER BY "bucket" DESC`);
+    expect(sql).toContain(`GROUP BY time_bucket($1, "time") ORDER BY "bucket" DESC`);
   });
 
   it("orderBy an aggregate + limit builds top-N (LIMIT inlined as an integer)", () => {

@@ -119,7 +119,7 @@ SELECT
   avg("temperature") AS "avgTemp",
   max("temperature") AS "maxTemp"
 FROM "SensorReading"
-GROUP BY "bucket", "deviceId"
+GROUP BY time_bucket('1 hour', "time"), "deviceId"
 WITH NO DATA;
 
 SELECT add_continuous_aggregate_policy('"SensorHourly"',
@@ -153,8 +153,34 @@ SELECT add_continuous_aggregate_policy('"SensorHourly"',
 
   it("supports a cagg with no groupBy columns", () => {
     const { up } = createContinuousAggregateSql({ ...base, groupBy: [] });
-    expect(up).toContain("GROUP BY \"bucket\"");
+    expect(up).toContain(`GROUP BY time_bucket('1 hour', "time")`);
     expect(up).not.toContain('"deviceId"');
+  });
+
+  it("groups by source expressions, never output aliases (a source column named like the alias must not capture it)", () => {
+    // Postgres resolves an unqualified GROUP BY name to an INPUT column before an output alias,
+    // so GROUP BY "bucket" breaks when the source hypertable has a real "bucket" column.
+    const { up } = createContinuousAggregateSql({
+      ...base,
+      groupBy: [{ source: "device_id", output: "deviceId" }],
+    });
+    expect(up).toContain(`GROUP BY time_bucket('1 hour', "time"), "device_id"`);
+    expect(up).not.toContain(`GROUP BY "bucket"`);
+  });
+
+  it("rejects duplicate output columns (bucket / groupBy / aggregate names must be distinct)", () => {
+    expect(() =>
+      createContinuousAggregateSql({
+        ...base,
+        aggregates: [{ name: "bucket", fn: "avg", column: "temperature" }],
+      }),
+    ).toThrow(/output column "bucket"/);
+    expect(() =>
+      createContinuousAggregateSql({
+        ...base,
+        groupBy: [{ source: "deviceId", output: "avgTemp" }],
+      }),
+    ).toThrow(/output column "avgTemp"/);
   });
 
   it("rejects empty aggregates and unsupported functions", () => {

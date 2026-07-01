@@ -357,13 +357,31 @@ export function buildTimeBucketQuery(
   const time = quoteIdent(timeColumn);
 
   // The bucketing expression: plain time_bucket, gapfill (bounds inferred from the range WHERE), or
-  // a 3-arg time_bucket with timezone / origin / offset (see bucketExpression).
+  // a 3-arg time_bucket with timezone / origin / offset (see bucketExpression). Kept for the GROUP BY
+  // too: grouping by the "bucket" alias would bind to an INPUT column of that name if the table has
+  // one (Postgres resolves GROUP BY names input-first), breaking every query on such a model.
   const gapfill = args.gapfill === true;
-  const select: string[] = [`${bucketExpression(time, args)} AS "bucket"`];
+  const bucketExpr = bucketExpression(time, args);
+  const select: string[] = [`${bucketExpr} AS "bucket"`];
+
+  // Every output column name must be unique — "bucket" is claimed by the bucket expression, and a
+  // groupBy/aggregate duplicate would silently clobber a result key (or make ORDER BY ambiguous).
+  const outputNames = new Set<string>(["bucket"]);
+  const claimOutput = (name: string, what: string): void => {
+    if (outputNames.has(name)) {
+      throw new Error(
+        name === "bucket"
+          ? `timeBucket: ${what} "bucket" collides with the reserved "bucket" output column.`
+          : `timeBucket: duplicate output column ${JSON.stringify(name)} (${what}).`,
+      );
+    }
+    outputNames.add(name);
+  };
 
   const groupCols = args.groupBy ?? [];
   for (const g of groupCols) {
     assertSafeIdent(g, "groupBy column");
+    claimOutput(g, "groupBy column");
     select.push(`${quoteIdent(col(g))} AS ${quoteIdent(g)}`);
   }
 
@@ -373,6 +391,7 @@ export function buildTimeBucketQuery(
   }
   for (const [resultName, op] of aggregateEntries) {
     assertSafeIdent(resultName, "aggregate result column");
+    claimOutput(resultName, "aggregate result");
     // Split the optional selectors (none of which are function names) from the function entry. The
     // runtime view is loose (`unknown`), so narrow each before use — this also hardens non-TS callers.
     // `p` (percentile fraction) and `method` (time-weight) are pulled out like the others; `min`/`max`/
@@ -554,7 +573,8 @@ export function buildTimeBucketQuery(
   });
   if (whereSql) where += ` AND (${whereSql})`;
 
-  const groupBy = [`"bucket"`, ...groupCols.map((g) => quoteIdent(g))].join(", ");
+  // Group by the bucket EXPRESSION and the source DB columns, never the output aliases (see above).
+  const groupBy = [bucketExpr, ...groupCols.map((g) => quoteIdent(col(g)))].join(", ");
 
   // ORDER BY: default to the bucket ascending; otherwise the caller's spec over the output aliases
   // (the bucket, a groupBy column, or an aggregate name). An array gives multi-key precedence.
