@@ -94,9 +94,10 @@ view SensorHourly {
 describe("extractTimescaleSchema — hypertable errors", () => {
   const htModel = (ann: string) => `/// ${ann}
 model M {
-  id    Int      @id
+  id    Int
   time  DateTime
   label String
+  @@id([id, time])
 }`;
 
   it("missing column arg", async () => {
@@ -744,10 +745,11 @@ describe("extractTimescaleSchema — relations", () => {
 /// @timescale.hypertable(column: "time", chunkInterval: "1 day")
 model Reading {
   time     DateTime
-  id       Int     @id
+  id       Int
   deviceId Int?
   device   Device? @relation(fields: [deviceId], references: [id])
   tags     Tag[]
+  @@id([id, time])
 }
 model Device {
   id       Int       @id
@@ -755,21 +757,22 @@ model Device {
   readings Reading[]
 }
 model Tag {
-  id        Int     @id
-  label     String
-  readingId Int
-  reading   Reading @relation(fields: [readingId], references: [id])
+  id          Int      @id
+  label       String
+  readingId   Int
+  readingTime DateTime
+  reading     Reading  @relation(fields: [readingId, readingTime], references: [id, time])
 }
 `);
     expect(result.hypertables[0]?.relations).toEqual([
       { field: "device", targetModel: "Device", table: "Device", list: false, on: [{ related: "id", outer: "deviceId" }], fk: ["deviceId"] },
-      { field: "tags", targetModel: "Tag", table: "Tag", list: true, on: [{ related: "readingId", outer: "id" }] },
+      { field: "tags", targetModel: "Tag", table: "Tag", list: true, on: [{ related: "readingId", outer: "id" }, { related: "readingTime", outer: "time" }] },
     ]);
     // Non-hypertable models' relations are emitted under relationsByModel (keyed by Prisma name),
     // so timeBucket where can resolve relation filters nested through them.
     expect(result.relationsByModel).toEqual({
       Device: [{ field: "readings", targetModel: "Reading", table: "Reading", list: true, on: [{ related: "deviceId", outer: "id" }] }],
-      Tag: [{ field: "reading", targetModel: "Reading", table: "Reading", list: false, on: [{ related: "id", outer: "readingId" }], fk: ["readingId"] }],
+      Tag: [{ field: "reading", targetModel: "Reading", table: "Reading", list: false, on: [{ related: "id", outer: "readingId" }, { related: "time", outer: "readingTime" }], fk: ["readingId", "readingTime"] }],
     });
   });
 
@@ -778,9 +781,10 @@ model Tag {
 /// @timescale.hypertable(column: "time")
 model Reading {
   time     DateTime
-  id       Int     @id
+  id       Int
   deviceId Int?
   device   Device? @relation(fields: [deviceId], references: [id])
+  @@id([id, time])
 }
 model Device {
   id       Int       @id @map("device_id")
@@ -932,5 +936,62 @@ model SensorReading {
   @@id([deviceId, time])
 }`),
     ).rejects.toThrow(/@timescale\.groupBy is a field-level annotation/);
+  });
+});
+
+describe("extractTimescaleSchema — time column must be in every PK / unique constraint", () => {
+  // TimescaleDB requires ALL partitioning columns in every unique index; a time column outside the
+  // PK passes generation but fails `migrate deploy` with an opaque "cannot create a unique index
+  // without the column ...". Space partitions already got this guard — the time column now does too.
+
+  it("rejects a time column missing from the primary key", async () => {
+    await expect(
+      extract(`
+/// @timescale.hypertable(column: "time")
+model SensorReading {
+  time     DateTime
+  deviceId Int      @id
+}`),
+    ).rejects.toThrow(/column "time" must be included in every primary key \/ unique constraint.*missing from \[deviceId\]/s);
+  });
+
+  it("rejects a time column present in @@id but missing from a @@unique", async () => {
+    await expect(
+      extract(`
+/// @timescale.hypertable(column: "time")
+model SensorReading {
+  time     DateTime
+  deviceId Int
+  serial   String
+  @@id([deviceId, time])
+  @@unique([serial])
+}`),
+    ).rejects.toThrow(/column "time" must be included in every primary key \/ unique constraint.*missing from \[serial\]/s);
+  });
+
+  it("rejects a time column missing from a single-field @unique", async () => {
+    await expect(
+      extract(`
+/// @timescale.hypertable(column: "time")
+model SensorReading {
+  time     DateTime
+  deviceId Int
+  serial   String   @unique
+  @@id([deviceId, time])
+}`),
+    ).rejects.toThrow(/column "time" must be included in every primary key \/ unique constraint.*missing from \[serial\]/s);
+  });
+
+  it("accepts a time column included in every constraint", async () => {
+    const { hypertables } = await extract(`
+/// @timescale.hypertable(column: "time")
+model SensorReading {
+  time     DateTime
+  deviceId Int
+  serial   String
+  @@id([deviceId, time])
+  @@unique([serial, time])
+}`);
+    expect(hypertables).toHaveLength(1);
   });
 });

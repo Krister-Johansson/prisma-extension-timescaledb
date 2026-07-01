@@ -342,9 +342,10 @@ datasource db {
 /// @timescale.hypertable(column: "time", chunkInterval: "1 day")
 model Reading {
   time     DateTime
-  id       Int     @id
+  id       Int
   deviceId Int?
   device   Device? @relation(fields: [deviceId], references: [id])
+  @@id([id, time])
 }
 model Device {
   id       Int       @id
