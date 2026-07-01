@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.9.0](https://github.com/Krister-Johansson/prisma-extension-timescaledb/compare/prisma-extension-timescaledb-v0.8.0...prisma-extension-timescaledb-v0.9.0) (2026-07-01)
+
+
+### Features
+
+* **generator:** fail loudly on unknown annotations + no-any cleanup + CodeRabbit config ([#61](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/61)) ([c7a4253](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/c7a42537239348110ae5bf3ac6d8c06f8593c594))
+* **generator:** validate the time column is in every PK / unique constraint ([#62](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/62)) ([7b9dc85](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/7b9dc85acf30ce94a37d1892300302cd73a7b612))
+
+
+### Bug Fixes
+
+* **client:** honor mode: insensitive for equals/not/in/notIn/comparisons in timeBucket where ([#59](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/59)) ([6cb98b9](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/6cb98b96c51b1906c7c5985431b207bd434d854e))
+* **client:** match Prisma semantics for top-level NOT array in timeBucket where ([#57](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/57)) ([4161c6b](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/4161c6b4bd1ce2fe6cda80c87bd43040e8c94f15))
+* group by expressions, not output aliases, in timeBucket and cagg SQL ([#60](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/60)) ([be39f05](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/be39f05de0a37fbd43e2f023d32d4ac637ec14ed))
+
 ## [0.8.0](https://github.com/Krister-Johansson/prisma-extension-timescaledb/compare/prisma-extension-timescaledb-v0.7.0...prisma-extension-timescaledb-v0.8.0) (2026-06-17)
 
 
