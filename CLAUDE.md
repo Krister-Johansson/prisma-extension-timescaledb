@@ -63,6 +63,10 @@ zero errors. This must be covered by an integration test (`test/integration/`).
 ## Conventions
 
 - Language: TypeScript, `strict: true`, `module`/`moduleResolution`: `NodeNext`.
+- **No explicit `any` unless absolutely necessary.** Prefer `unknown` + narrowing or a real
+  type. Where `any` is genuinely unavoidable, centralize it behind ONE documented alias
+  (see `TestPrismaClient` in `test/integration/harness.ts` — the runtime-generated per-test
+  client has no compile-time types) instead of scattering `any` declarations.
 - Single package with internal modules `src/core`, `src/generator`, `src/client`.
   (Not a monorepo.)
 - `@prisma/client` and `prisma` are **peerDependencies** (`>=7.0.0`), pinned in

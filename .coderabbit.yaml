@@ -1,0 +1,24 @@
+# CodeRabbit configuration — tames review volume so a burst of small PRs
+# doesn't hit the hourly review rate limit.
+# Schema/docs: https://docs.coderabbit.ai/configuration/auto-review
+#
+# NOTE: this file takes precedence over the organization UI settings for this
+# repo, so the review profile is restated here.
+reviews:
+  profile: chill
+  # Quieter bot = fewer GitHub notification emails: no "currently reviewing"
+  # status comments and no walkthrough poems. The review findings themselves
+  # are unaffected.
+  review_status: false
+  poem: false
+  auto_review:
+    enabled: true
+    # One auto review when the PR opens. Pushes that address review comments
+    # do NOT re-trigger a review — when the fixes are ready for a re-check,
+    # request one explicitly by commenting "@coderabbitai review".
+    auto_incremental_review: false
+    # Machine-generated PRs with nothing meaningful to review.
+    ignore_title_keywords:
+      - "chore(main): release"
+    ignore_usernames:
+      - "dependabot[bot]"
