@@ -34,6 +34,15 @@ export interface Harness {
   stop(): Promise<void>;
 }
 
+/**
+ * The extended PrismaClient of a temp test project. Its client is GENERATED at runtime inside the
+ * project dir, so no compile-time types exist for it — this alias is the repo's one sanctioned
+ * explicit `any` (policy: no `any` unless absolutely necessary). Integration tests type their
+ * dynamically imported client with this instead of a local `any`.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- runtime-generated client, no static types exist
+export type TestPrismaClient = any;
+
 /** Ensure the package (incl. the generator binary) is built. */
 export function ensureBuilt(): void {
   if (!existsSync(GENERATOR_PROVIDER)) {

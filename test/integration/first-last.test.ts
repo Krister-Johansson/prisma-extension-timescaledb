@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { startHarness, type Harness } from "./harness.js";
+import { startHarness, type Harness, type TestPrismaClient } from "./harness.js";
 import { timescaledb } from "../../src/client/index.js";
 
 const DOCKER_OK = (() => {
@@ -43,8 +43,7 @@ const range = { start: new Date("2026-06-15T00:00:00Z"), end: new Date("2026-06-
 
 describe.skipIf(!DOCKER_OK)("timeBucket first / last (real TimescaleDB)", () => {
   let h: Harness;
-  // deno-lint-ignore no-explicit-any
-  let prisma: any;
+  let prisma: TestPrismaClient;
   let base: { $disconnect(): Promise<void> };
 
   beforeAll(async () => {
