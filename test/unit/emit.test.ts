@@ -111,7 +111,7 @@ describe("emitMigrations", () => {
         avg("temperature") AS "avgTemp",
         max("temperature") AS "maxTemp"
       FROM "SensorReading"
-      GROUP BY "bucket", "deviceId"
+      GROUP BY time_bucket('1 hour', "time"), "deviceId"
       WITH NO DATA;
 
       SELECT add_continuous_aggregate_policy('"SensorHourly"',

@@ -42,14 +42,31 @@ export function createContinuousAggregateSql(config: CaggConfig): MigrationSql {
     assertSafeIdent(agg.column, "aggregate source column");
   }
 
+  // Reject duplicate output columns up front — CREATE MATERIALIZED VIEW would fail at deploy time
+  // with a far less helpful "column specified more than once".
+  const seenOutputs = new Set<string>([bucketColumn]);
+  for (const output of [...groupBy.map((g) => g.output), ...aggregates.map((a) => a.name)]) {
+    if (seenOutputs.has(output)) {
+      throw new Error(
+        `Continuous aggregate "${name}": output column ${JSON.stringify(output)} is declared more than once (the bucket column, groupBy outputs, and aggregate names must be distinct).`,
+      );
+    }
+    seenOutputs.add(output);
+  }
+
   // SELECT: time_bucket first, then group-by passthroughs, then the aggregates.
+  const bucketExpr = `time_bucket(${quoteLiteral(bucket)}, ${quoteIdent(timeColumn)})`;
   const selectLines = [
-    `time_bucket(${quoteLiteral(bucket)}, ${quoteIdent(timeColumn)}) AS ${quoteIdent(bucketColumn)}`,
+    `${bucketExpr} AS ${quoteIdent(bucketColumn)}`,
     ...groupBy.map((g) => `${quoteIdent(g.source)} AS ${quoteIdent(g.output)}`),
     ...aggregates.map((a) => `${a.fn}(${quoteIdent(a.column)}) AS ${quoteIdent(a.name)}`),
   ];
 
-  const groupByCols = [bucketColumn, ...groupBy.map((g) => g.output)].map(quoteIdent).join(", ");
+  // Group by the bucket EXPRESSION and the SOURCE columns, never the output aliases: Postgres
+  // resolves an unqualified GROUP BY name to an input column first, so an alias that matches a
+  // real source-table column (e.g. a physical "bucket" column) would capture the GROUP BY and
+  // fail the CREATE with "must appear in the GROUP BY clause".
+  const groupByCols = [bucketExpr, ...groupBy.map((g) => quoteIdent(g.source))].join(", ");
 
   // `materialized_only` only emitted when set; omitted leaves TimescaleDB's default. `false` =
   // real-time aggregation. The relopt is a bare boolean (no quoting).
