@@ -96,6 +96,19 @@ describe("whereToSql", () => {
     expect(whereToSql({ NOT: { deviceId: 1 } }, harness().ctx)).toBe(`NOT ("deviceId" = $1)`);
   });
 
+  it("NOT array negates each element and ANDs them (matches Prisma: all must be false)", () => {
+    // Prisma compiles NOT: [A, B] as (NOT A) AND (NOT B) — never NOT (A AND B).
+    expect(whereToSql({ NOT: [{ deviceId: 1 }, { deviceId: 2 }] }, harness().ctx)).toBe(
+      `(NOT ("deviceId" = $1) AND NOT ("deviceId" = $2))`,
+    );
+    // A single-element array is equivalent to the object form.
+    expect(whereToSql({ NOT: [{ deviceId: 1 }] }, harness().ctx)).toBe(`NOT ("deviceId" = $1)`);
+    // Elements that resolve to no constraint drop out instead of producing NOT ().
+    expect(whereToSql({ NOT: [{ deviceId: undefined }, { deviceId: 2 }] }, harness().ctx)).toBe(
+      `NOT ("deviceId" = $1)`,
+    );
+  });
+
   it("empty OR matches nothing (false); empty AND / NOT impose no constraint", () => {
     expect(whereToSql({ OR: [] }, harness().ctx)).toBe("false");
     expect(whereToSql({ AND: [] }, harness().ctx)).toBe("");

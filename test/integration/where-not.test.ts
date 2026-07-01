@@ -91,4 +91,13 @@ describe.skipIf(!DOCKER_OK)("timeBucket nested not (real TimescaleDB)", () => {
     // NOT(device >= 2) → device < 2 → device=1 (ids 1,2); device=2 and the NULL row excluded.
     expect(await count({ device: { not: { gte: 2 } } })).toBe(2);
   });
+
+  it("top-level NOT array matches Prisma findMany (every condition must be false)", async () => {
+    // (NOT device=1) AND (NOT device=3) → only device=2 (id 3). The buggy NOT (A AND B)
+    // reading would instead match every non-NULL row (a row can't equal both values).
+    const where = { NOT: [{ device: 1 }, { device: 3 }] };
+    expect(await count(where)).toBe(1);
+    // Parity with Prisma's own engine on the same filter.
+    expect(await count(where)).toBe(await prisma.reading.count({ where }));
+  });
 });

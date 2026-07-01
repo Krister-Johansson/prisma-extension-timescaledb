@@ -62,8 +62,14 @@ export function whereToSql(where: Record<string, unknown> | undefined, ctx: Wher
       const s = combine(asArray(value), ctx, "OR");
       if (s) clauses.push(s);
     } else if (key === "NOT") {
-      const s = combine(asArray(value), ctx, "AND");
-      if (s) clauses.push(`NOT (${s})`);
+      // Prisma semantics: every listed condition must be false — negate each element
+      // individually and AND them (NOT: [A, B] => (NOT A) AND (NOT B), not NOT (A AND B)).
+      const parts = asArray(value)
+        .map((w) => whereToSql(w as Record<string, unknown>, ctx))
+        .filter(Boolean)
+        .map((s) => `NOT (${s})`);
+      if (parts.length === 1) clauses.push(parts[0]!);
+      else if (parts.length > 1) clauses.push(`(${parts.join(" AND ")})`);
     } else {
       const relation = ctx.rel?.get(key);
       const s = relation ? relationClause(key, value, relation, ctx) : fieldClause(key, value, ctx);
