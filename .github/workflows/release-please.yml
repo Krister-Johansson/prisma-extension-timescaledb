@@ -1,54 +1,32 @@
+# Thin caller for the shared release-please + npm publish workflow.
+# The actual jobs live in Krister-Johansson/shared-configs; dependabot keeps
+# the pinned version fresh.
+#
+# publish-strategy 'oidc' needs a one-time Trusted Publisher on npmjs.com
+# (Package → Settings → Trusted Publisher):
+#   Provider: GitHub Actions · Organization: Krister-Johansson
+#   Repository: <this repo> · Workflow filename: release-please.yml
 name: release-please
 
 on:
   push:
     branches: [main]
-  # Manual re-publish of the current version on main — e.g. when an auto-publish failed AFTER the
-  # GitHub release was already created (so release_created is no longer true on a re-run). Safe to
-  # re-trigger: npm publish errors out as a no-op if the version is already on the registry.
+  # Manual re-publish of the current version on main — e.g. when an auto-publish
+  # failed AFTER the GitHub release was created. Safe: npm publish fails harmlessly
+  # if the version is already on the registry.
   workflow_dispatch:
 
-# Least-privilege at the top level (satisfies Scorecard's Token-Permissions check); the
-# single release job elevates only what release-please + npm provenance actually need.
 permissions:
   contents: read
 
 jobs:
-  release-please:
-    runs-on: ubuntu-latest
+  release:
+    uses: Krister-Johansson/shared-configs/.github/workflows/release-please.yml@d3f276e6ea20fdfe5faa202d06c83d4435e101f0 # v1.1.1
     permissions:
       contents: write # release commits, tags, and the GitHub release
       pull-requests: write # maintain the release PR
-      id-token: write # npm provenance (supply-chain attestation) via OIDC
-    env:
-      # Surfaced so the publish steps can gate on its presence. Empty when the secret is
-      # unset, which makes the steps below skip — npm publish stays OFF until you add it.
+      id-token: write # npm Trusted Publishing / provenance
+    with:
+      publish-strategy: oidc # or "npm-token" (then add the NPM_TOKEN secret)
+    secrets:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-    steps:
-      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
-        id: release
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          # Manifest mode: config in release-please-config.json + .release-please-manifest.json.
-          # Maintains a release PR that bumps the version and updates CHANGELOG.md from
-          # Conventional Commits; merging that PR creates the git tag + GitHub release.
-
-      # ── npm publish — runs when a release was just created (or this workflow is manually
-      # dispatched to re-publish the current version on main) AND an NPM_TOKEN secret is configured.
-      # No secret => these steps skip, so publishing stays off until the secret is added.
-      # prepublishOnly (build + tests + attw) runs as the pre-publish gate.
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        if: ${{ (steps.release.outputs.release_created || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')) && env.NPM_TOKEN != '' }}
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        if: ${{ (steps.release.outputs.release_created || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')) && env.NPM_TOKEN != '' }}
-        with:
-          node-version: 20
-          registry-url: "https://registry.npmjs.org"
-      - run: npm ci
-        if: ${{ (steps.release.outputs.release_created || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')) && env.NPM_TOKEN != '' }}
-      - run: npm publish --provenance --access public
-        if: ${{ (steps.release.outputs.release_created || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')) && env.NPM_TOKEN != '' }}
-        env:
-          NODE_AUTH_TOKEN: ${{ env.NPM_TOKEN }}

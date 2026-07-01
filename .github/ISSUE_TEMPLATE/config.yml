@@ -1,0 +1,7 @@
+# Every change starts as an issue (issue-first workflow), so keep blank issues
+# available for anything the forms don't cover.
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/Krister-Johansson/prisma-extension-timescaledb/security/advisories/new
+    about: Report vulnerabilities privately via GitHub Security Advisories — never in a public issue.

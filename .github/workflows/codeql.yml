@@ -1,3 +1,7 @@
+# Thin caller for the shared CodeQL workflow. The triggers must live here
+# (cron cannot be defined in a reusable workflow).
+# The actual jobs live in Krister-Johansson/shared-configs; dependabot keeps
+# the pinned version fresh.
 name: CodeQL
 
 on:
@@ -8,27 +12,13 @@ on:
   schedule:
     - cron: "31 7 * * 2"
 
-# Least-privilege default; the analyze job adds only the write scope it needs.
 permissions:
   contents: read
 
 jobs:
-  analyze:
-    name: Analyze (JavaScript/TypeScript)
-    runs-on: ubuntu-latest
+  codeql:
+    uses: Krister-Johansson/shared-configs/.github/workflows/codeql.yml@d3f276e6ea20fdfe5faa202d06c83d4435e101f0 # v1.1.1
     permissions:
       security-events: write # upload results to code scanning
       actions: read
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
-        with:
-          languages: javascript-typescript
-      # No build step: CodeQL analyzes JS/TS sources directly.
-      - name: Perform CodeQL analysis
-        uses: github/codeql-action/analyze@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
-        with:
-          category: "/language:javascript-typescript"
+      contents: read

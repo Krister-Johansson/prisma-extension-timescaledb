@@ -1,3 +1,6 @@
+# Build/test matrix comes from the shared reusable workflow in
+# Krister-Johansson/shared-configs (dependabot keeps the pinned version fresh);
+# the integration and coverage-comment jobs are repo-specific and live here.
 name: CI
 
 on:
@@ -5,47 +8,18 @@ on:
     branches: [main]
   pull_request:
 
-# Least-privilege default token; no job here needs write access.
+# Least-privilege default token; jobs elevate only what they need.
 permissions:
   contents: read
 
 jobs:
-  build-test:
-    name: build + unit/type tests (node ${{ matrix.node }})
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        node: [20, 22]
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version: ${{ matrix.node }}
-          cache: npm
-      - run: npm ci
-      - run: npm run build
-      - run: npm run typecheck
-      - run: npm run coverage      # runs unit tests + enforces coverage thresholds
-      - run: npm run test:types
-      - run: npm run attw
-      - name: Upload coverage report
-        if: matrix.node == 20
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: coverage
-          path: coverage/
-          if-no-files-found: error
-      - name: Upload coverage to Codecov
-        if: matrix.node == 20
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
-        with:
-          files: ./coverage/lcov.info
-          token: ${{ secrets.CODECOV_TOKEN }}
-          # Best-effort: never fail CI on an upload hiccup or a not-yet-set token.
-          fail_ci_if_error: false
+  ci:
+    uses: Krister-Johansson/shared-configs/.github/workflows/ci.yml@d3f276e6ea20fdfe5faa202d06c83d4435e101f0 # v1.1.1
+    with:
+      post-test-scripts: "test:types attw"
+      upload-coverage-artifact: true
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
   integration:
     name: integration (real TimescaleDB)
@@ -67,10 +41,10 @@ jobs:
 
   coverage-comment:
     name: coverage comment
-    needs: build-test
+    needs: ci
     # PRs only — there's no PR to comment on for pushes to main. Kept as its own job
     # so the pull-requests:write token never covers a job that runs project code
-    # (build-test stays contents:read). It consumes the coverage artifact only.
+    # (the build-test matrix stays contents:read). It consumes the coverage artifact only.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     permissions:
