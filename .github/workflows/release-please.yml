@@ -1,6 +1,6 @@
 # Thin caller for the shared release-please + npm publish workflow.
-# Replace 0ecc2e4800d4a489a6fba3170a290cc01b32e286 / v1.0.0 with the latest
-# shared-configs release (see AGENTS.md step 4).
+# The actual jobs live in Krister-Johansson/shared-configs; dependabot keeps
+# the pinned version fresh.
 #
 # publish-strategy 'oidc' needs a one-time Trusted Publisher on npmjs.com
 # (Package → Settings → Trusted Publisher):
