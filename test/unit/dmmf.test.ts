@@ -1011,3 +1011,41 @@ model SensorReading {
     expect(hypertables).toHaveLength(1);
   });
 });
+
+describe("extractTimescaleSchema — parse errors carry model/field context", () => {
+  // The annotation parser is deliberately DMMF-free, so its errors ("Malformed annotation
+  // argument ...") name only the offending text. In a large schema that means grepping —
+  // the DMMF layer must say which model/field the bad annotation sits on.
+
+  it("names the model for a malformed model-level annotation", async () => {
+    await expect(
+      extract(`
+/// @timescale.hypertable(column "time")
+model SensorReading {
+  time     DateTime
+  deviceId Int
+  @@id([deviceId, time])
+}`),
+    ).rejects.toThrow(/on model "SensorReading".*Malformed annotation argument/s);
+  });
+
+  it("names the view field for a malformed field-level annotation", async () => {
+    await expect(
+      extract(`
+/// @timescale.hypertable(column: "time")
+model SensorReading {
+  time        DateTime
+  deviceId    Int
+  temperature Float
+  @@id([deviceId, time])
+}
+
+/// @timescale.continuousAggregate(source: "SensorReading", bucket: "1 hour", timeColumn: "time")
+view SensorHourly {
+  bucket  DateTime /// @timescale.bucket
+  avgTemp Float    /// @timescale.aggregate(fn "avg", column: "temperature")
+  @@unique([bucket])
+}`),
+    ).rejects.toThrow(/on "SensorHourly\.avgTemp".*Malformed annotation argument/s);
+  });
+});
