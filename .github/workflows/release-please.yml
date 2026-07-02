@@ -21,7 +21,7 @@ permissions:
 
 jobs:
   release:
-    uses: Krister-Johansson/shared-configs/.github/workflows/release-please.yml@d3f276e6ea20fdfe5faa202d06c83d4435e101f0 # v1.1.1
+    uses: Krister-Johansson/shared-configs/.github/workflows/release-please.yml@aee270c33b8c3d957f818a22b8f3fa1f6b987e9d # v1.1.3
     permissions:
       contents: write # release commits, tags, and the GitHub release
       pull-requests: write # maintain the release PR
