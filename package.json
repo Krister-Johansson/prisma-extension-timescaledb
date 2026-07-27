@@ -74,16 +74,16 @@
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.2",
     "@prisma/adapter-pg": "^7.8.0",
-    "@prisma/client": "7.8.0",
+    "@prisma/client": "7.9.0",
     "@prisma/internals": "^7.8.0",
     "@types/node": "^26.0.0",
     "@types/pg": "^8.20.0",
     "@vitest/coverage-v8": "^4.1.9",
     "pg": "^8.21.0",
-    "prisma": "7.8.0",
+    "prisma": "7.9.0",
     "testcontainers": "^12.0.2",
     "tsup": "^8.5.0",
-    "typescript": "^6.0.3",
+    "typescript": "^7.0.2",
     "vitest": "^4.1.9"
   },
   "engines": {
