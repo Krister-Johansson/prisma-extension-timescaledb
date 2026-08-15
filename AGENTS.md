@@ -5,13 +5,13 @@ This repo follows the shared setup from
 These rules are binding for AI agents working here; CONTRIBUTING.md is the
 human-facing version.
 
-> **Also read [CLAUDE.md](CLAUDE.md)** — it holds the TimescaleDB/Prisma-specific
+> **Also read [CLAUDE.md](CLAUDE.md)**: it holds the TimescaleDB/Prisma-specific
 > constraints (idempotent DDL, reset-safety, DMMF isolation, ...). Nothing below
 > overrides it.
 
 ## Workflow rules
 
-### 1. Issue-first — no code without an issue
+### 1. Issue-first: no code without an issue
 
 Every piece of work starts as a GitHub issue describing the problem or feature.
 If none exists, create one before touching code:
@@ -25,7 +25,7 @@ description. The CI job `linked issue` fails PRs that don't.
 
 ### 2. Test-driven development (TDD)
 
-1. Write the test first — unit (`test/unit`), type-level (`test/types`), or
+1. Write the test first: unit (`test/unit`), type-level (`test/types`), or
    integration (`test/integration`, Testcontainers), whichever fits the change.
 2. Run it and **confirm it fails** for the expected reason.
 3. Implement the minimal change that makes it pass.
@@ -39,7 +39,7 @@ proving reset-safety (see CLAUDE.md).
 
 Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/)
 (`feat:`, `fix:`, `docs:`, `chore:`, `test:`, `refactor:`; `!`/`BREAKING CHANGE:` for
-majors). They drive automated releases via release-please — a wrong type means a
+majors). They drive automated releases via release-please, so a wrong type means a
 wrong version bump.
 
 ### 4. Branch and verify
@@ -48,7 +48,7 @@ wrong version bump.
 - Before pushing, run the local CI equivalent:
   `npm run build && npm run typecheck && npm run coverage && npm run test:types && npm run attw`
   (integration tests need Docker: `npm run test:integration`).
-- All changes land through PRs — `main` is protected; CI must be green.
+- All changes land through PRs. `main` is protected and CI must be green.
 - **Agents never merge PRs and never enable auto-merge.** CodeRabbit's review
   must complete (it is not a required status check, so auto-merge would not
   wait for it), and the merge itself is a human decision. When everything is
