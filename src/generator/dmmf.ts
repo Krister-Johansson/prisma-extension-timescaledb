@@ -23,6 +23,7 @@ import {
   optionalString,
   parseAnnotations,
   requireString,
+  type ParsedAnnotation,
 } from "./annotations.js";
 
 export interface TimescaleSchema {
@@ -102,6 +103,21 @@ function assertKnownArgs(name: string, args: Record<string, unknown>, allowed: r
   }
 }
 
+/**
+ * Parse a doc string's annotations, prefixing any parser error with WHERE it happened. The parser
+ * is deliberately DMMF-free, so its errors ("Malformed annotation argument ...") name only the
+ * offending text — useless in a large schema without the model/field it sits on.
+ */
+function parseAnnotationsOn(doc: string | null | undefined, where: string): ReturnType<typeof parseAnnotations> {
+  try {
+    return parseAnnotations(doc);
+  } catch (e) {
+    throw new Error(`Invalid @timescale annotation on ${where}: ${e instanceof Error ? e.message : String(e)}`, {
+      cause: e,
+    });
+  }
+}
+
 /** Extract and validate all TimescaleDB configs from a Prisma DMMF document. */
 export function extractTimescaleSchema(dmmf: DMMF.Document): TimescaleSchema {
   const models = dmmf.datamodel.models;
@@ -111,7 +127,7 @@ export function extractTimescaleSchema(dmmf: DMMF.Document): TimescaleSchema {
   const continuousAggregates: CaggConfig[] = [];
 
   for (const model of models) {
-    const annotations = parseAnnotations(model.documentation);
+    const annotations = parseAnnotationsOn(model.documentation, `model "${model.name}"`);
 
     // Validate the full annotation surface FIRST — names and argument keys, at both levels —
     // so a typo fails generation instead of silently no-oping (H2 in the review).
@@ -122,10 +138,14 @@ export function extractTimescaleSchema(dmmf: DMMF.Document): TimescaleSchema {
       assertKnownArgs(name, a.args, ANNOTATION_ARGS[name], `@timescale.${name} on ${ctx}`);
     }
     const isCagg = findAnnotation(annotations, "continuousAggregate") !== undefined;
+    // Parsed once here (with location context) and handed to buildCagg below — re-parsing there
+    // would be redundant work and its errors could never fire (this loop already threw).
+    const fieldAnnotations = new Map<string, ParsedAnnotation[]>();
     for (const field of model.fields) {
-      const fieldAnns = parseAnnotations(field.documentation);
-      if (fieldAnns.length === 0) continue;
       const fctx = `"${model.name}.${field.name}"`;
+      const fieldAnns = parseAnnotationsOn(field.documentation, fctx);
+      if (fieldAnns.length === 0) continue;
+      fieldAnnotations.set(field.name, fieldAnns);
       if (!isCagg) {
         throw new Error(
           `@timescale.${fieldAnns[0]!.name} on ${fctx}: field-level annotations are only valid on a @timescale.continuousAggregate view.`,
@@ -151,7 +171,7 @@ export function extractTimescaleSchema(dmmf: DMMF.Document): TimescaleSchema {
       }
     }
     if (findAnnotation(annotations, "continuousAggregate")) {
-      continuousAggregates.push(buildCagg(model, annotations, byName));
+      continuousAggregates.push(buildCagg(model, annotations, byName, fieldAnnotations));
     }
   }
 
@@ -434,6 +454,7 @@ function buildCagg(
   view: DMMF.Model,
   annotations: ReturnType<typeof parseAnnotations>,
   byName: Map<string, DMMF.Model>,
+  fieldAnnotations: ReadonlyMap<string, ParsedAnnotation[]>,
 ): CaggConfig {
   const ctx = `@timescale.continuousAggregate on view "${view.name}"`;
   const ann = findAnnotation(annotations, "continuousAggregate")!;
@@ -466,7 +487,8 @@ function buildCagg(
   const aggregates: AggregateSpec[] = [];
 
   for (const field of view.fields) {
-    const fieldAnns = parseAnnotations(field.documentation);
+    // Parsed (and syntax-validated, with location context) by the caller's field loop.
+    const fieldAnns = fieldAnnotations.get(field.name) ?? [];
     const fctx = `@timescale field on "${view.name}.${field.name}"`;
 
     if (findAnnotation(fieldAnns, "bucket")) {
