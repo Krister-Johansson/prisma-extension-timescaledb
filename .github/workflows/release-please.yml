@@ -14,6 +14,8 @@
 # Trusted Publisher):
 #   Provider: GitHub Actions · Organization: Krister-Johansson
 #   Repository: prisma-extension-timescaledb · Workflow filename: release-please.yml
+#   Allowed actions: npm publish (mandatory for configurations created on or
+#   after 2026-05-20)
 name: release-please
 
 on:
@@ -34,6 +36,7 @@ jobs:
     permissions:
       contents: write # release commits, tags, and the GitHub release
       pull-requests: write # maintain the release PR
+      issues: write # release-please labels PRs; labeling uses the issues API
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
@@ -75,6 +78,9 @@ jobs:
               process.exit(1);
             }
           " "$V"
-      - run: npm ci
+      # --ignore-scripts: dependency lifecycle scripts must not run in the job
+      # holding the OIDC signing identity. The full prepublishOnly gate (build,
+      # unit and type tests, attw) passes without them — verified in #91.
+      - run: npm ci --ignore-scripts
       # prepublishOnly (build + unit + type tests + attw) runs as the pre-publish gate.
       - run: npm publish --access public

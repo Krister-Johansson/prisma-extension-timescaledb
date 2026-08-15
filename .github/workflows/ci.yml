@@ -77,16 +77,20 @@ jobs:
       - run: npm run test:integration
 
   # Every PR must track a GitHub issue (issue-first workflow). Machine PRs
-  # (dependabot, release-please) are exempt. The exemption keys on the PR
-  # AUTHOR, not github.actor: a maintainer updating a dependabot branch must
-  # not un-skip this required check (hit during the #75 triage). Skipped jobs
-  # count as passing for the ruleset, so this is safe to require.
+  # (dependabot, release-please) are exempt. The exemptions key on facts an
+  # outside author cannot fake: the PR author for dependabot (not
+  # github.actor — a maintainer updating a dependabot branch must not
+  # un-skip this required check, hit during the #75 triage), and a
+  # same-repo release-please branch for release PRs (creating one needs
+  # write access; a title is author-controlled). Skipped jobs count as
+  # passing for the ruleset, so this is safe to require.
   require-issue-link:
     name: ci / linked issue
     if: >
       github.event_name == 'pull_request' &&
       github.event.pull_request.user.login != 'dependabot[bot]' &&
-      !startsWith(github.event.pull_request.title, 'chore(main): release')
+      !(github.event.pull_request.head.repo.full_name == github.repository &&
+        startsWith(github.event.pull_request.head.ref, 'release-please--'))
     runs-on: ubuntu-latest
     steps:
       - name: Check that the PR closes an issue
