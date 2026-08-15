@@ -60,7 +60,7 @@ representative at an online or offline event.
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
 reported to the maintainer, [@Krister-Johansson](https://github.com/Krister-Johansson),
-through GitHub. If the report concerns the maintainer, use GitHub's
+through GitHub. Do not use public issues for conduct reports. If the report concerns the maintainer, use GitHub's
 [report abuse](https://github.com/contact/report-abuse) form instead.
 All complaints will be reviewed and investigated promptly and fairly.
 
