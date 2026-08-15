@@ -80,7 +80,7 @@ This repo uses [Conventional Commits](https://www.conventionalcommits.org/);
 
 1. Branch off `main`.
 2. Make sure CI passes locally:
-   `npm run build && npm run typecheck && npm test && npm run test:types && npm run attw`
+   `npm run build && npm run typecheck && npm run coverage && npm run test:types && npm run attw`
    (and `npm run test:integration` if Docker is available).
 3. Open the PR with a clear description that references its issue
    (`Closes #<number>`). CI (build, unit and type tests, and the

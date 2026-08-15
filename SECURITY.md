@@ -23,7 +23,8 @@ with provenance, so you can check both integrity and origin:
 npm audit signatures
 ```
 
-The command verifies the registry signatures and Sigstore provenance
+The command needs npm 9.5.0 or newer and installed dependencies
+(`npm install` or `npm ci`). It verifies the registry signatures and Sigstore provenance
 attestations of your installed packages, `prisma-extension-timescaledb`
 included, and reports how many packages have verified attestations. You can
 also inspect the provenance on the package's npm page, which shows the source
