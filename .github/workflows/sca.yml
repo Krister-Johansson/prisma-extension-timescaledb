@@ -21,4 +21,6 @@ jobs:
         with:
           node-version: 24
       - name: Audit production dependencies (fail on high or critical)
-        run: npm audit --omit=dev --audit-level=high
+        # --registry pins the advisory source: a PR-supplied .npmrc must not be
+        # able to point the audit at a registry that returns no advisories.
+        run: npm audit --registry=https://registry.npmjs.org/ --omit=dev --audit-level=high
