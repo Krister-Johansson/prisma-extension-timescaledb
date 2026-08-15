@@ -49,6 +49,10 @@ wrong version bump.
   `npm run build && npm run typecheck && npm run coverage && npm run test:types && npm run attw`
   (integration tests need Docker: `npm run test:integration`).
 - All changes land through PRs — `main` is protected; CI must be green.
+- **Agents never merge PRs and never enable auto-merge.** CodeRabbit's review
+  must complete (it is not a required status check, so auto-merge would not
+  wait for it), and the merge itself is a human decision. When everything is
+  green, report the PR as ready to merge.
 
 ## Release model (do not do these manually)
 
