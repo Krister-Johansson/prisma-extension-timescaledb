@@ -13,40 +13,47 @@
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/Krister-Johansson/prisma-extension-timescaledb/badge)](https://scorecard.dev/viewer/?uri=github.com/Krister-Johansson/prisma-extension-timescaledb)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/13331/badge)](https://www.bestpractices.dev/projects/13331)
 
-Type-safe **[TimescaleDB](https://www.tigerdata.com/) / TigerData** time-series support for
-Prisma — **reset-safe migrations**, hypertables, continuous aggregates, and typed query helpers.
+Type-safe [TimescaleDB](https://www.tigerdata.com/) / TigerData time-series
+support for Prisma: reset-safe migrations, hypertables, continuous aggregates,
+and typed query helpers.
 
-📖 **[Documentation](https://github.com/Krister-Johansson/prisma-extension-timescaledb/wiki)** · 📦 **[npm](https://www.npmjs.com/package/prisma-extension-timescaledb)** · 🚀 **[NestJS example](https://github.com/Krister-Johansson/prisma-extension-timescaledb-nestjs-example)**
+[Documentation](https://github.com/Krister-Johansson/prisma-extension-timescaledb/wiki) ·
+[npm](https://www.npmjs.com/package/prisma-extension-timescaledb) ·
+[NestJS example](https://github.com/Krister-Johansson/prisma-extension-timescaledb-nestjs-example)
 
-Prisma can't model TimescaleDB features in its schema language, and the naive setup
-**breaks on `prisma migrate reset` / `migrate dev`**. This package fixes that with:
+Prisma cannot model TimescaleDB features in its schema language, and the naive
+setup breaks on `prisma migrate reset` and `migrate dev`. This package fixes
+that with:
 
-- 🧱 **Hypertables & continuous aggregates** from `///` schema annotations
-- 🧹 **Retention policies** — drop old chunks automatically
-- 🗜️ **Columnstore compression** — compress old chunks automatically (TimescaleDB hypercore)
-- ♻️ **Reset-safe migrations** — survive `prisma migrate reset` (proven on real TimescaleDB)
-- 🔎 **Typed `timeBucket(...)` queries** — result-row inference, compile-time column checks,
-  gap-filling, and Toolkit hyperfunctions (percentiles, counters, OHLC, …)
-- 🛟 **Generator-optional** — the client extension works from a manual config too
+- Hypertables and continuous aggregates from `///` schema annotations
+- Retention policies that drop old chunks automatically
+- Columnstore compression for old chunks (TimescaleDB hypercore)
+- Reset-safe migrations that survive `prisma migrate reset`, proven against a
+  real TimescaleDB in CI
+- Typed `timeBucket(...)` queries with result-row inference, compile-time
+  column checks, gap-filling, and Toolkit hyperfunctions (percentiles,
+  counters, OHLC, and more)
+- A generator-optional client extension that also works from a manual config
 
-> **Scope:** hypertables, continuous aggregates, retention & compression, reset-safe migrations,
-> typed query helpers. Vector / BM25 are out of scope for now.
+Scope: hypertables, continuous aggregates, retention and compression,
+reset-safe migrations, typed query helpers. Vector and BM25 search are out of
+scope for now.
 
-**Using a different ORM?** TigerData's official [`@timescaledb/*`](https://github.com/timescale/timescaledb-ts)
-packages cover **TypeORM** and **Sequelize** — this is the **Prisma** counterpart, filling the gap left by
-Prisma's inability to model TimescaleDB in its schema language.
+Using a different ORM? TigerData's official
+[`@timescaledb/*`](https://github.com/timescale/timescaledb-ts) packages cover
+TypeORM and Sequelize. This package is the Prisma counterpart.
 
-## 📖 Documentation
+## Documentation
 
-Full docs live in the **[wiki](https://github.com/Krister-Johansson/prisma-extension-timescaledb/wiki)**:
+Full docs live in the [wiki](https://github.com/Krister-Johansson/prisma-extension-timescaledb/wiki):
 
-- [Setup](https://github.com/Krister-Johansson/prisma-extension-timescaledb/wiki/Setup) — requirements, `prisma.config.ts`, the generate → migrate flow, shadow database
-- [Hypertables](https://github.com/Krister-Johansson/prisma-extension-timescaledb/wiki/Hypertables) — chunk interval, space partitioning, chunk skipping
-- [Continuous aggregates](https://github.com/Krister-Johansson/prisma-extension-timescaledb/wiki/Continuous-Aggregates) — refresh, real-time & hierarchical caggs
-- [Retention & compression](https://github.com/Krister-Johansson/prisma-extension-timescaledb/wiki/Retention-and-Compression)
-- [timeBucket queries](https://github.com/Krister-Johansson/prisma-extension-timescaledb/wiki/timeBucket-Queries) — where, relation filters, `orderBy`/`limit`, gap-filling, time zones
-- [Aggregates & hyperfunctions](https://github.com/Krister-Johansson/prisma-extension-timescaledb/wiki/Aggregates-and-Hyperfunctions) — every function, exact output, Toolkit hyperfunctions
-- [`$timescale` management](https://github.com/Krister-Johansson/prisma-extension-timescaledb/wiki/Management) — refresh, chunk ops, resize, background jobs
+- [Setup](https://github.com/Krister-Johansson/prisma-extension-timescaledb/wiki/Setup): requirements, `prisma.config.ts`, the generate then migrate flow, shadow database
+- [Hypertables](https://github.com/Krister-Johansson/prisma-extension-timescaledb/wiki/Hypertables): chunk interval, space partitioning, chunk skipping
+- [Continuous aggregates](https://github.com/Krister-Johansson/prisma-extension-timescaledb/wiki/Continuous-Aggregates): refresh, real-time and hierarchical caggs
+- [Retention and compression](https://github.com/Krister-Johansson/prisma-extension-timescaledb/wiki/Retention-and-Compression)
+- [timeBucket queries](https://github.com/Krister-Johansson/prisma-extension-timescaledb/wiki/timeBucket-Queries): where, relation filters, `orderBy` and `limit`, gap-filling, time zones
+- [Aggregates and hyperfunctions](https://github.com/Krister-Johansson/prisma-extension-timescaledb/wiki/Aggregates-and-Hyperfunctions): every function, exact output, Toolkit hyperfunctions
+- [`$timescale` management](https://github.com/Krister-Johansson/prisma-extension-timescaledb/wiki/Management): refresh, chunk ops, resize, background jobs
 - [Annotation reference](https://github.com/Krister-Johansson/prisma-extension-timescaledb/wiki/Annotation-Reference) · [Without the generator](https://github.com/Krister-Johansson/prisma-extension-timescaledb/wiki/Without-the-Generator) · [Troubleshooting](https://github.com/Krister-Johansson/prisma-extension-timescaledb/wiki/Troubleshooting)
 
 ## Install
@@ -57,11 +64,16 @@ npm install -D prisma @prisma/client
 npm install @prisma/adapter-pg            # or your preferred driver adapter
 ```
 
-Requires **Prisma 7** and a **TimescaleDB-capable PostgreSQL** (for the database *and* the
-Prisma shadow database — locally, the [`timescale/timescaledb`](https://hub.docker.com/r/timescale/timescaledb)
-image works). Compression needs TimescaleDB ≥ 2.18; the Toolkit hyperfunctions need
-`timescaledb_toolkit` (the `timescale/timescaledb-ha` image, or Tiger Cloud). See
+Requires Prisma 7 and a TimescaleDB-capable PostgreSQL, for both the database
+and the Prisma shadow database. Locally, the
+[`timescale/timescaledb`](https://hub.docker.com/r/timescale/timescaledb)
+image works. Compression needs TimescaleDB 2.18 or newer; the Toolkit
+hyperfunctions need `timescaledb_toolkit` (the `timescale/timescaledb-ha`
+image, or Tiger Cloud). See
 [Setup](https://github.com/Krister-Johansson/prisma-extension-timescaledb/wiki/Setup).
+
+Releases are published from CI with npm provenance; `npm audit signatures`
+verifies them. [SECURITY.md](./SECURITY.md) has the details.
 
 ## Quick start
 
@@ -127,18 +139,21 @@ const rows = await prisma.sensorReading.timeBucket({
 // rows: Array<{ bucket: Date; deviceId: number; avgTemp: number }>
 ```
 
-→ Continue in the **[wiki](https://github.com/Krister-Johansson/prisma-extension-timescaledb/wiki)** for the full setup, query, and management docs.
+The [wiki](https://github.com/Krister-Johansson/prisma-extension-timescaledb/wiki)
+continues with the full setup, query, and management docs.
 
 ## Examples
 
-A runnable **NestJS** app — hypertables, continuous aggregates and `timeBucket` queries wired up end to end:
-**[prisma-extension-timescaledb-nestjs-example](https://github.com/Krister-Johansson/prisma-extension-timescaledb-nestjs-example)**.
+A runnable NestJS app with hypertables, continuous aggregates, and
+`timeBucket` queries wired up end to end:
+[prisma-extension-timescaledb-nestjs-example](https://github.com/Krister-Johansson/prisma-extension-timescaledb-nestjs-example).
 
 ## Shadow database
 
-`prisma migrate dev` / `migrate reset` validate migrations against a temporary **shadow database**,
-and the first migration runs `CREATE EXTENSION timescaledb` — so set **`shadowDatabaseUrl`** (in
-`prisma.config.ts`) to a **TimescaleDB-capable** database, not Prisma's default auto-created one:
+`prisma migrate dev` and `migrate reset` validate migrations against a
+temporary shadow database, and the first migration runs
+`CREATE EXTENSION timescaledb`. Set `shadowDatabaseUrl` in `prisma.config.ts`
+to a TimescaleDB-capable database, not Prisma's default auto-created one:
 
 ```ts
 // prisma.config.ts
@@ -150,9 +165,10 @@ export default defineConfig({
 });
 ```
 
-> **Tiger Cloud (honest limitation):** Tiger Cloud rejects Prisma's auto-created shadow-database
-> name, so a dedicated `shadowDatabaseUrl` is **mandatory** there — this package can't paper over it.
-> Full details in [Setup → Shadow database](https://github.com/Krister-Johansson/prisma-extension-timescaledb/wiki/Setup#shadow-database).
+Tiger Cloud rejects Prisma's auto-created shadow-database name, so a dedicated
+`shadowDatabaseUrl` is mandatory there; this package cannot paper over it.
+Full details in
+[Setup → Shadow database](https://github.com/Krister-Johansson/prisma-extension-timescaledb/wiki/Setup#shadow-database).
 
 ## License
 
