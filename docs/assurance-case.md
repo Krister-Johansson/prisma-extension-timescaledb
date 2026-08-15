@@ -59,12 +59,17 @@ The realistic threats are:
   values are always bound as `$`-parameters, and column names are resolved
   through the generated registry and identifier-checked before quoting. The
   query text that reaches `$queryRawUnsafe` contains placeholders, not
-  values.
+  values. The bucket size itself can come from caller data too; it is
+  validated by `assertInterval` before the query is built, then bound as the
+  first parameter.
 - Relation filters become correlated `EXISTS` subqueries built from
   registered relation metadata; an unsupported operator or an unregistered
   relation throws instead of degrading into string concatenation.
-- Management methods in the `$timescale` namespace follow the same rule:
-  identifiers quoted through `core/sql.ts`, values as parameters.
+- Management methods in the `$timescale` namespace quote identifiers through
+  `core/sql.ts` and bind filter values as parameters. Interval options (for
+  example a policy's `drop_after`) are the one exception: they are validated
+  against the interval grammar, then rendered as escaped SQL literals, so
+  invalid input throws before any SQL is built.
 
 ### 3. A published release is what the repository built
 

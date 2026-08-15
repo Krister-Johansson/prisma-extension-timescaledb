@@ -87,8 +87,11 @@ emitted SQL must keep that test green.
 
 Three code rules matter throughout:
 
-- All quoting and escaping goes through `core/sql.ts`. Values in runtime
-  queries are never interpolated; they are always bound as parameters.
+- All quoting and escaping goes through `core/sql.ts`. In `timeBucket` and
+  `where` queries, values are never interpolated; they are always bound as
+  parameters. Management methods bind filter values as parameters too, but
+  pass interval options as SQL literals that are validated first and escaped
+  through `quoteLiteral`.
 - Prisma's DMMF is an internal, non-SemVer API, so only `generator/dmmf.ts`
   touches it. A breaking Prisma bump lands in one file.
 - TypeScript is `strict`, and explicit `any` is avoided; the one documented

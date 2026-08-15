@@ -8,7 +8,8 @@ themselves are listed in the [assurance case](./assurance-case.md).
 
 Dependabot opens weekly grouped update pull requests for npm dependencies and
 GitHub Actions. Socket and the OpenSSF Scorecard provide outside views of the
-same surface, and Socket checks run on every pull request.
+same surface; Socket scans pull requests that change the dependency manifests
+(`package.json`, `package-lock.json`), which is the only surface it ingests.
 
 Remediation thresholds, counted from when an advisory becomes known:
 
@@ -58,11 +59,17 @@ such finding gets a statement here with the advisory ID, the affected
 component, the verdict, and the reasoning, and the corresponding alert is
 dismissed with the same justification so the two records match.
 
-Current statements: none recorded yet. As of 2026-08-15 the open advisories in
-the dependency tree (undici, protobufjs, valibot) are all dev-scope,
-transitive under the Prisma and Testcontainers toolchain, and are being
-removed by the pending dependabot upgrade PRs rather than assessed away. None
-affect the published package, which has one runtime dependency.
+Current statements: none. There are no open component vulnerabilities
+assessed as not affecting the project (last reviewed 2026-08-15). Recent
+history of the process, for the record: the dev-scope undici
+(GHSA-8xcm-r25x-g524 and related), protobufjs (GHSA-j3f2-48v5-ccww), and
+valibot (GHSA-5qjj-4xww-7phc) advisories were removed by the dependency
+upgrades in [#82](https://github.com/Krister-Johansson/prisma-extension-timescaledb/pull/82),
+and brace-expansion (GHSA-3jxr-9vmj-r5cp and related) by
+[#89](https://github.com/Krister-Johansson/prisma-extension-timescaledb/pull/89),
+rather than assessed away. One dev-scope low remains open: esbuild
+(GHSA-g7r4-m6w7-qqqr, Windows-only dev-server file read), pinned inside
+tsup's dependency range and tracked for the next tsup upgrade.
 
 ## Static analysis (SAST)
 
