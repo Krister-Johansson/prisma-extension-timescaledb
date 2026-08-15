@@ -18,6 +18,11 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      # TypeScript 7 breaks tsup and vitest, which consume the TypeScript 6
+      # compiler API (see issue #79). Remove once the toolchain supports TS 7.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
     groups:
       npm-development:
         dependency-type: development
