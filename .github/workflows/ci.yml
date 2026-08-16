@@ -1,6 +1,13 @@
-# Build/test matrix comes from the shared reusable workflow in
-# Krister-Johansson/shared-configs (dependabot keeps the pinned version fresh);
-# the integration and coverage-comment jobs are repo-specific and live here.
+# CI for this repository: build, typecheck, and the test suite with coverage
+# thresholds on Node 20 and 22, the type-level and published-types checks, the
+# issue-link check, the real-TimescaleDB integration suite, and the PR
+# coverage comment.
+#
+# Owned here since #90 (previously a thin caller into the shared-configs
+# reusable CI, now deprecated). The job names deliberately match the branch
+# ruleset's required status-check contexts ("ci / build + test (node NN)",
+# "ci / linked issue", "integration (real TimescaleDB)"), so the ruleset
+# needs no change.
 name: CI
 
 on:
@@ -13,13 +20,43 @@ permissions:
   contents: read
 
 jobs:
-  ci:
-    uses: Krister-Johansson/shared-configs/.github/workflows/ci.yml@b0186b7fb41009fc90457c1367869317c30fbfaf # v1.3.0
-    with:
-      post-test-scripts: "test:types attw"
-      upload-coverage-artifact: true
-    secrets:
-      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+  build-test:
+    name: ci / build + test (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["20", "22"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run typecheck
+      - run: npm run coverage
+      - run: npm run test:types
+      - run: npm run attw
+      - name: Upload coverage artifact
+        # First matrix entry only — one artifact is enough for the comment job.
+        if: strategy.job-index == 0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage
+          path: coverage/
+          if-no-files-found: error
+      - name: Upload coverage to Codecov
+        if: strategy.job-index == 0
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          files: ./coverage/lcov.info
+          token: ${{ secrets.CODECOV_TOKEN }}
+          # Best-effort: never fail CI on an upload hiccup.
+          fail_ci_if_error: false
 
   integration:
     name: integration (real TimescaleDB)
@@ -39,9 +76,37 @@ jobs:
       # ubuntu-latest runners ship Docker, so Testcontainers can run the reset-safety proof.
       - run: npm run test:integration
 
+  # Every PR must track a GitHub issue (issue-first workflow). Machine PRs
+  # (dependabot, release-please) are exempt. The exemptions key on facts an
+  # outside author cannot fake: the PR author for dependabot (not
+  # github.actor — a maintainer updating a dependabot branch must not
+  # un-skip this required check, hit during the #75 triage), and a
+  # same-repo release-please branch for release PRs (creating one needs
+  # write access; a title is author-controlled). Skipped jobs count as
+  # passing for the ruleset, so this is safe to require.
+  require-issue-link:
+    name: ci / linked issue
+    if: >
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.user.login != 'dependabot[bot]' &&
+      !(github.event.pull_request.head.repo.full_name == github.repository &&
+        startsWith(github.event.pull_request.head.ref, 'release-please--'))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check that the PR closes an issue
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          if printf '%s' "$PR_BODY" | grep -qiE '(close[sd]?|fix(e[sd])?|resolve[sd]?):? +([a-z0-9._-]+/[a-z0-9._-]+)?#[0-9]+'; then
+            echo "PR references an issue."
+          else
+            echo "::error::Every PR must track a GitHub issue. Add 'Closes #<issue-number>' to the PR description."
+            exit 1
+          fi
+
   coverage-comment:
     name: coverage comment
-    needs: ci
+    needs: build-test
     # PRs only — there's no PR to comment on for pushes to main. Kept as its own job
     # so the pull-requests:write token never covers a job that runs project code
     # (the build-test matrix stays contents:read). It consumes the coverage artifact only.

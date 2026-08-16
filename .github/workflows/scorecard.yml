@@ -1,7 +1,11 @@
-# Thin caller for the shared OpenSSF Scorecard workflow. The triggers must live
-# here (cron cannot be defined in a reusable workflow).
-# The actual jobs live in Krister-Johansson/shared-configs; dependabot keeps
-# the pinned version fresh.
+# OpenSSF Scorecard analysis: publishes the score behind the README badge and
+# uploads findings to code scanning.
+#
+# Owned here since #90 (previously a thin caller into shared-configs, now
+# deprecated).
+# publish_results notes: the Scorecard API rejects runs from workflows with
+# top-level env vars, defaults, or workflow-level write permissions — keep this
+# file free of those.
 name: Scorecard supply-chain security
 
 on:
@@ -9,24 +13,51 @@ on:
   branch_protection_rule:
   # Weekly, so the published score and README badge stay current.
   schedule:
-    - cron: "27 7 * * 1"
+    - cron: '27 7 * * 1'
   push:
     branches: [main]
   # Allow re-scanning on demand (Actions tab → Run workflow).
   workflow_dispatch:
 
-# Least-privilege by default; the reusable workflow's job elevates what it needs.
-# Do NOT add top-level env/defaults/write permissions — the Scorecard publish API
-# rejects workflows that have them.
+# Least-privilege by default; the analysis job elevates only what it needs.
 permissions:
   contents: read
 
 jobs:
-  scorecard:
-    uses: Krister-Johansson/shared-configs/.github/workflows/scorecard.yml@b0186b7fb41009fc90457c1367869317c30fbfaf # v1.3.0
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
     permissions:
-      contents: read # job permissions replace read-all; the scan needs repo reads
+      contents: read # the scan needs repo reads
       security-events: write # SARIF upload to code scanning
       id-token: write # publish results to the OpenSSF API (badge)
-    secrets:
-      SCORECARD_TOKEN: ${{ secrets.SCORECARD_TOKEN }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Run analysis
+        uses: ossf/scorecard-action@4eaacf0543bb3f2c246792bd56e8cdeffafb205a # v2.4.3
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          # A PAT with Administration:read lets Scorecard read branch-protection
+          # rules (the default GITHUB_TOKEN cannot). Falls back to GITHUB_TOKEN.
+          repo_token: ${{ secrets.SCORECARD_TOKEN || secrets.GITHUB_TOKEN }}
+          # Publish to the OpenSSF API so the README badge resolves.
+          publish_results: true
+
+      # Retain the SARIF for manual inspection / debugging.
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: SARIF file
+          path: results.sarif
+          retention-days: 5
+
+      # Surface findings under Security → Code scanning.
+      - name: Upload to code-scanning
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
+        with:
+          sarif_file: results.sarif
