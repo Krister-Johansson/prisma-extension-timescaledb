@@ -10,6 +10,11 @@ Dependabot opens weekly grouped update pull requests for npm dependencies and
 GitHub Actions. Socket and the OpenSSF Scorecard provide outside views of the
 same surface; Socket scans pull requests that change the dependency manifests
 (`package.json`, `package-lock.json`), which is the only surface it ingests.
+On top of that, every pull request runs a `dependency audit` check (`npm
+audit` against the production tree, with the advisory registry pinned to
+registry.npmjs.org) that fails on high or critical advisories, and the check
+is required by the branch ruleset, so a change cannot merge while it
+introduces a known-vulnerable production dependency.
 
 Remediation thresholds, counted from when an advisory becomes known:
 
