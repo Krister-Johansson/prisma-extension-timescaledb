@@ -1,32 +1,86 @@
-# Thin caller for the shared release-please + npm publish workflow.
-# The actual jobs live in Krister-Johansson/shared-configs; dependabot keeps
-# the pinned version fresh.
+# Release automation: release-please (manifest mode) maintains the release PR
+# from Conventional Commits; merging it creates the tag and GitHub release, and
+# the publish job ships to npm through Trusted Publishing (OIDC, provenance
+# automatic, no token).
 #
-# publish-strategy 'oidc' needs a one-time Trusted Publisher on npmjs.com
-# (Package → Settings → Trusted Publisher):
+# Owned here since #90 (previously a thin caller into shared-configs, now
+# deprecated). The release-please step uses the RELEASE_PLEASE_TOKEN secret (a
+# fine-grained PAT: contents + pull-requests, read/write, this repo only) with
+# a GITHUB_TOKEN fallback. With the PAT, the events release-please creates are
+# real user events, so CI runs on release PRs (no close/reopen needed) and
+# release-published workflows (sbom.yml) fire.
+#
+# npm Trusted Publisher setup (one-time, on npmjs.com — Package → Settings →
+# Trusted Publisher):
 #   Provider: GitHub Actions · Organization: Krister-Johansson
-#   Repository: <this repo> · Workflow filename: release-please.yml
+#   Repository: prisma-extension-timescaledb · Workflow filename: release-please.yml
+#   Allowed actions: npm publish (mandatory for configurations created on or
+#   after 2026-05-20)
 name: release-please
 
 on:
   push:
     branches: [main]
   # Manual re-publish of the current version on main — e.g. when an auto-publish
-  # failed AFTER the GitHub release was created. Safe: npm publish fails harmlessly
-  # if the version is already on the registry.
+  # failed AFTER the GitHub release was created. Safe: npm publish fails
+  # harmlessly if the version is already on the registry.
   workflow_dispatch:
 
+# Least-privilege at the top level; each job elevates only what it needs.
 permissions:
   contents: read
 
 jobs:
-  release:
-    uses: Krister-Johansson/shared-configs/.github/workflows/release-please.yml@b0186b7fb41009fc90457c1367869317c30fbfaf # v1.3.0
+  release-please:
+    runs-on: ubuntu-latest
     permissions:
       contents: write # release commits, tags, and the GitHub release
       pull-requests: write # maintain the release PR
-      id-token: write # npm Trusted Publishing / provenance
-    with:
-      publish-strategy: oidc # or "npm-token" (then add the NPM_TOKEN secret)
-    secrets:
-      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      issues: write # release-please labels PRs; labeling uses the issues API
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        id: release
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          # Manifest mode: release-please-config.json + .release-please-manifest.json.
+
+  publish:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # OIDC token for Trusted Publishing
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false # never cache in release builds
+      # Trusted Publishing requires npm >= 11.5.1. Recent Node 24.x bundles a
+      # satisfying npm, so no self-install is needed (and none would be
+      # hash-pinnable); assert the floor instead of assuming it.
+      - name: Assert npm >= 11.5.1 (Trusted Publishing floor)
+        run: |
+          V="$(npm --version)"
+          node -e "
+            const need = [11, 5, 1];
+            const got = process.argv[1].split('.').map(Number);
+            const cmp = got[0] - need[0] || got[1] - need[1] || got[2] - need[2];
+            if (cmp < 0) {
+              console.error('npm ' + process.argv[1] + ' is below the Trusted Publishing floor 11.5.1');
+              process.exit(1);
+            }
+          " "$V"
+      # --ignore-scripts: dependency lifecycle scripts must not run in the job
+      # holding the OIDC signing identity. The full prepublishOnly gate (build,
+      # unit and type tests, attw) passes without them — verified in #91.
+      - run: npm ci --ignore-scripts
+      # prepublishOnly (build + unit + type tests + attw) runs as the pre-publish gate.
+      - run: npm publish --access public
