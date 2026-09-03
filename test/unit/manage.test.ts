@@ -172,19 +172,18 @@ describe("makeManage retention policies", () => {
 });
 
 describe("makeManage compression policies", () => {
-  it("addCompressionPolicy enables the columnstore then adds the policy (two statements)", async () => {
+  it("addCompressionPolicy enables the columnstore and adds the policy in ONE atomic DO block", async () => {
+    // One statement, one transaction: two autocommitted statements left the columnstore
+    // reconfigured with no policy when the CALL failed (verified empirically on 2.27.2).
     const { client, calls } = fakeClient();
     await makeManage(client).addCompressionPolicy("SensorReading", {
       after: "7 days",
       segmentBy: "deviceId",
       orderBy: "time DESC",
     });
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(1);
     expect(calls[0]!.sql).toBe(
-      `ALTER TABLE "SensorReading" SET (timescaledb.enable_columnstore = true, timescaledb.segmentby = '"deviceId"', timescaledb.orderby = '"time" DESC')`,
-    );
-    expect(calls[1]!.sql).toBe(
-      `CALL add_columnstore_policy('"SensorReading"', after => INTERVAL '7 days', if_not_exists => TRUE)`,
+      `DO $$ BEGIN ALTER TABLE "SensorReading" SET (timescaledb.enable_columnstore = true, timescaledb.segmentby = '"deviceId"', timescaledb.orderby = '"time" DESC'); CALL add_columnstore_policy('"SensorReading"', after => INTERVAL '7 days', if_not_exists => TRUE); END $$`,
     );
   });
 
@@ -199,17 +198,14 @@ describe("makeManage compression policies", () => {
       orderBy: [{ column: "time", direction: "desc", nulls: "last" }],
     });
     expect(calls[0]!.sql).toBe(
-      `ALTER TABLE "metrics"."sensor_readings" SET (timescaledb.enable_columnstore = true, timescaledb.segmentby = '"device_id"', timescaledb.orderby = '"ts" DESC NULLS LAST')`,
-    );
-    expect(calls[1]!.sql).toBe(
-      `CALL add_columnstore_policy('"metrics"."sensor_readings"', after => INTERVAL '7 days', if_not_exists => TRUE)`,
+      `DO $$ BEGIN ALTER TABLE "metrics"."sensor_readings" SET (timescaledb.enable_columnstore = true, timescaledb.segmentby = '"device_id"', timescaledb.orderby = '"ts" DESC NULLS LAST'); CALL add_columnstore_policy('"metrics"."sensor_readings"', after => INTERVAL '7 days', if_not_exists => TRUE); END $$`,
     );
   });
 
   it("omits segmentby / orderby when not provided (enable columnstore only)", async () => {
     const { client, calls } = fakeClient();
     await makeManage(client).addCompressionPolicy("SensorReading", { after: "30 days" });
-    expect(calls[0]!.sql).toBe(`ALTER TABLE "SensorReading" SET (timescaledb.enable_columnstore = true)`);
+    expect(calls[0]!.sql).toContain(`ALTER TABLE "SensorReading" SET (timescaledb.enable_columnstore = true);`);
   });
 
   it("removeCompressionPolicy emits an idempotent CALL remove", async () => {
@@ -378,6 +374,36 @@ describe("makeManage chunk skipping", () => {
       /Invalid/,
     );
   });
+
+  it("enableChunkSkipping enforces the generator's guards when the registry carries the metadata", async () => {
+    const hypertableByModel = new Map([
+      [
+        "SensorReading",
+        {
+          table: "SensorReading",
+          column: "time",
+          columns: { deviceId: "device_id" },
+          segmentBy: ["device_id"],
+          partitionColumn: "region",
+        },
+      ],
+    ]);
+    const m = makeManage(fakeClient().client, new Map(), { hypertableByModel });
+    // The time dimension and the hash space-partition column already prune chunks.
+    await expect(m.enableChunkSkipping("SensorReading", "time")).rejects.toThrow(/time\/partitioning column/);
+    await expect(m.enableChunkSkipping("SensorReading", "region")).rejects.toThrow(/hash space-partition column/);
+    // Skipping a compression segmentBy column returns wrong results (checked on the @map DB name).
+    await expect(m.enableChunkSkipping("SensorReading", "deviceId")).rejects.toThrow(/segmentBy column/);
+  });
+
+  it("disableChunkSkipping stays unguarded so a bad enable can always be undone", async () => {
+    const hypertableByModel = new Map([
+      ["SensorReading", { table: "SensorReading", column: "time", segmentBy: ["deviceId"] }],
+    ]);
+    const { client, calls } = fakeClient();
+    await makeManage(client, new Map(), { hypertableByModel }).disableChunkSkipping("SensorReading", "deviceId");
+    expect(calls[0]!.sql).toContain("disable_chunk_skipping");
+  });
 });
 
 describe("makeManage chunk interval", () => {
@@ -466,11 +492,23 @@ describe("makeManage job introspection", () => {
       { job_id: 1001, total_runs: null, total_successes: null, total_failures: null },
     ]);
     const stats = await makeManage(client).jobStats();
-    expect(queries[0]!.sql).toContain("FROM timescaledb_information.job_stats");
-    expect(queries[0]!.sql).toContain("COALESCE(total_runs, 0)::bigint AS total_runs");
+    expect(queries[0]!.sql).toContain("FROM timescaledb_information.job_stats s");
+    expect(queries[0]!.sql).toContain("COALESCE(s.total_runs, 0)::bigint AS total_runs");
     expect(stats[0]!.totalRuns).toBe(5n);
     expect(stats[1]!.totalRuns).toBe(0n);
     expect(stats[1]!.totalFailures).toBe(0n);
+  });
+
+  it("jobStats joins to the jobs view: cagg models filter (and report) the VIEW name, not the materialization hypertable", async () => {
+    // job_stats reports _timescaledb_internal._materialized_hypertable_N for cagg jobs
+    // (verified empirically on 2.27.2), so a direct filter always matched zero rows.
+    const { client, queries } = fakeClient([]);
+    const viewByModel = new Map([["SensorHourly", { name: "sensor_hourly" }]]);
+    await makeManage(client, viewByModel).jobStats("SensorHourly");
+    expect(queries[0]!.sql).toContain("LEFT JOIN timescaledb_information.jobs j ON j.job_id = s.job_id");
+    expect(queries[0]!.sql).toContain("SELECT s.job_id, j.hypertable_name");
+    expect(queries[0]!.sql).toContain("WHERE j.hypertable_name = $1");
+    expect(queries[0]!.params).toEqual(["sensor_hourly"]);
   });
 
   it("jobErrors() reads job_errors directly; jobErrors(model) joins to jobs for the filter", async () => {
@@ -530,7 +568,14 @@ describe("makeManage job control", () => {
     await expect(m.alterJob(-1, { scheduled: false })).rejects.toThrow(/Invalid job id/);
     await expect(m.alterJob(1.5, { scheduled: false })).rejects.toThrow(/Invalid job id/);
     await expect(m.alterJob(1000, { scheduleInterval: "1 fortnight" as never })).rejects.toThrow(/Invalid interval/);
-    await expect(m.alterJob(1000, { maxRetries: -1 })).rejects.toThrow(/non-negative integer/);
+    await expect(m.alterJob(1000, { maxRetries: -2 })).rejects.toThrow(/integer >= -1/);
+    await expect(m.alterJob(1000, { maxRetries: 1.5 })).rejects.toThrow(/integer >= -1/);
+  });
+
+  it("alterJob accepts maxRetries: -1 (TimescaleDB's unlimited-retries sentinel and policy default)", async () => {
+    const { client, calls } = fakeClient();
+    await makeManage(client).alterJob(1000, { maxRetries: -1 });
+    expect(calls[0]!.sql).toBe("SELECT alter_job(1000, max_retries => -1, if_exists => TRUE)");
   });
 
   it("deleteJob and runJob emit the right SQL (run_job via CALL)", async () => {
