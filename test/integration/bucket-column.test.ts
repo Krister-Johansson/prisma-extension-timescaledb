@@ -113,7 +113,7 @@ describe.skipIf(!DOCKER_OK)("physical `bucket` column (real TimescaleDB)", () =>
   });
 
   it("the cagg over the colliding source refreshes and reads back", async () => {
-    await prisma.$timescale.refreshContinuousAggregate("ReadingHourly");
+    await prisma.$timescale().refreshContinuousAggregate("ReadingHourly");
     const rows = await prisma.readingHourly.findMany();
     expect(rows).toHaveLength(1);
     expect(rows[0].avgValue).toBe(20);

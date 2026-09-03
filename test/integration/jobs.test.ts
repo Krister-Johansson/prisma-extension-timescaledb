@@ -1,4 +1,4 @@
-// Background-job control + introspection at runtime, on real TimescaleDB: $timescale.listJobs /
+// Background-job control + introspection at runtime, on real TimescaleDB: $timescale().listJobs /
 // jobStats / jobErrors / alterJob / runJob / deleteJob. The schema declares a retention policy
 // (job -> SensorReading) and a cagg refresh policy (job -> SensorHourly), so we can exercise both
 // the model filter (hypertable vs cagg) and the full job lifecycle.
@@ -73,7 +73,7 @@ describe.skipIf(!DOCKER_OK)("job control + introspection (runtime)", () => {
   });
 
   const jobByProc = async (model: string, proc: string): Promise<TimescaleJob | undefined> =>
-    (await prisma.$timescale.listJobs(model)).find((j: TimescaleJob) => j.procName === proc);
+    (await prisma.$timescale().listJobs(model)).find((j: TimescaleJob) => j.procName === proc);
 
   it("lists jobs and filters by model (hypertable vs continuous aggregate)", async () => {
     const retention = await jobByProc("SensorReading", "policy_retention");
@@ -85,17 +85,17 @@ describe.skipIf(!DOCKER_OK)("job control + introspection (runtime)", () => {
     expect(refresh.hypertableName).toBe("SensorHourly");
 
     // The model filter excludes the other relation's jobs and the built-in (relation-less) jobs.
-    const onlyRetention = await prisma.$timescale.listJobs("SensorReading");
+    const onlyRetention = await prisma.$timescale().listJobs("SensorReading");
     expect(onlyRetention.every((j: { hypertableName: string }) => j.hypertableName === "SensorReading")).toBe(true);
   });
 
   it("alterJob pauses, resumes, and reschedules a policy", async () => {
     const before = await jobByProc("SensorReading", "policy_retention");
 
-    await prisma.$timescale.alterJob(before.jobId, { scheduled: false });
+    await prisma.$timescale().alterJob(before.jobId, { scheduled: false });
     expect((await jobByProc("SensorReading", "policy_retention")).scheduled).toBe(false);
 
-    await prisma.$timescale.alterJob(before.jobId, { scheduled: true, scheduleInterval: "2 days" });
+    await prisma.$timescale().alterJob(before.jobId, { scheduled: true, scheduleInterval: "2 days" });
     const after = await jobByProc("SensorReading", "policy_retention");
     expect(after.scheduled).toBe(true);
     expect(after.scheduleInterval).toBe("2 days");
@@ -104,18 +104,18 @@ describe.skipIf(!DOCKER_OK)("job control + introspection (runtime)", () => {
   it("runJob runs a job synchronously and jobStats returns bigint counts", async () => {
     const retention = await jobByProc("SensorReading", "policy_retention");
     // Retention on recent/empty data is a safe no-op; it must not throw.
-    await prisma.$timescale.runJob(retention.jobId);
+    await prisma.$timescale().runJob(retention.jobId);
 
-    const [stats] = await prisma.$timescale.jobStats("SensorReading");
+    const [stats] = await prisma.$timescale().jobStats("SensorReading");
     expect(stats.jobId).toBe(retention.jobId);
     expect(typeof stats.totalRuns).toBe("bigint");
     // jobErrors is queryable (no failures expected) and returns an array.
-    expect(Array.isArray(await prisma.$timescale.jobErrors("SensorReading"))).toBe(true);
+    expect(Array.isArray(await prisma.$timescale().jobErrors("SensorReading"))).toBe(true);
   });
 
   it("deleteJob removes a job", async () => {
     const retention = await jobByProc("SensorReading", "policy_retention");
-    await prisma.$timescale.deleteJob(retention.jobId);
+    await prisma.$timescale().deleteJob(retention.jobId);
     expect(await jobByProc("SensorReading", "policy_retention")).toBeUndefined();
   });
 });

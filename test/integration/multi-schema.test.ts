@@ -136,7 +136,7 @@ describe.skipIf(!DOCKER_OK)("@@schema / multiSchema (generated migrations + runt
         { h: "2026-06-15T10:00:00.000Z", d: 2, avg: 15 },
       ]);
 
-      await prisma.$timescale.refreshContinuousAggregate("SensorHourly");
+      await prisma.$timescale().refreshContinuousAggregate("SensorHourly");
       const hourly = await prisma.sensorHourly.findMany({ orderBy: [{ deviceId: "asc" }, { bucket: "asc" }] });
       expect(
         hourly.map((r: { deviceId: number; avgTemp: number }) => ({ d: r.deviceId, avg: Number(r.avgTemp) })),

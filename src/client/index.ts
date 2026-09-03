@@ -11,7 +11,7 @@ import {
   type TimeBucketMethod,
   type TimeBucketRuntimeArgs,
 } from "./timeBucket.js";
-import { makeManage, type RawClient } from "./manage.js";
+import { makeManage, type RawClient, type TimescaleManage } from "./manage.js";
 
 /** Manual configuration accepted by `timescaledb()` (also satisfied by the generated registry). */
 export interface TimescaleConfig {
@@ -128,6 +128,12 @@ export function timescaledb<const C extends TimescaleConfig = TimescaleConfig>(c
     return (ctx.$parent as UnsafeRawClient).$queryRawUnsafe(sql, ...params);
   } as unknown as TimeBucketMethod;
 
+  // One namespace per executing client, keyed weakly so transaction clients can be collected.
+  const manageCache = new WeakMap<
+    object,
+    TimescaleManage<NamesOrString<HypertableModelNames<C>>, NamesOrString<CaggModelNames<C>>>
+  >();
+
   return Prisma.defineExtension((client) =>
     client.$extends({
       name: "prisma-extension-timescaledb",
@@ -135,11 +141,28 @@ export function timescaledb<const C extends TimescaleConfig = TimescaleConfig>(c
         $allModels: { timeBucket },
       },
       client: {
-        $timescale: makeManage<NamesOrString<HypertableModelNames<C>>, NamesOrString<CaggModelNames<C>>>(
-          client as unknown as RawClient,
-          caggViewByModel,
-          { hypertableByModel },
-        ),
+        /**
+         * The management namespace, bound to the client it is called on. A METHOD, not a
+         * property: Prisma serves client-extension values unbound, so a prebuilt namespace
+         * object would close over the base client forever — inside `$transaction(async (tx) =>
+         * ...)` its SQL would escape the transaction onto a separate pooled connection, and it
+         * would bypass extensions chained after this one. Called as `tx.$timescale()`, plain
+         * JS method binding hands us the transaction client, so the SQL joins the transaction
+         * and flows through the full extension chain.
+         */
+        $timescale(this: unknown) {
+          const ctx = Prisma.getExtensionContext(this) as object;
+          let manage = manageCache.get(ctx);
+          if (!manage) {
+            manage = makeManage<NamesOrString<HypertableModelNames<C>>, NamesOrString<CaggModelNames<C>>>(
+              ctx as unknown as RawClient,
+              caggViewByModel,
+              { hypertableByModel },
+            );
+            manageCache.set(ctx, manage);
+          }
+          return manage;
+        },
       },
     }),
   );
