@@ -1,9 +1,11 @@
 // Continuous aggregate SQL builder (SPEC §2.3 / CLAUDE.md constraints 3, 4).
-import type { CaggConfig, MigrationSql } from "./types.js";
+import type { AggregateSpec, CaggConfig, MigrationSql } from "./types.js";
 import { assertInterval } from "./interval.js";
 import { assertSafeIdent, qualifiedIdent, quoteIdent, quoteLiteral, relationLiteral } from "./sql.js";
 
-const AGG_FNS = new Set(["avg", "sum", "min", "max", "count"]);
+/** The supported continuous-aggregate functions. Shared with the generator's annotation
+ * validation (src/generator/dmmf.ts) so the two lists cannot drift. */
+export const AGG_FNS: ReadonlySet<AggregateSpec["fn"]> = new Set(["avg", "sum", "min", "max", "count"] as const);
 
 /**
  * Build the continuous aggregate create + optional refresh policy SQL.
