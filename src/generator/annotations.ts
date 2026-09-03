@@ -6,6 +6,8 @@
 //   @timescale.<name>                       -> { name, args: {} }
 //   @timescale.<name>(<key>: <value>, ...)  -> { name, args }
 //   value := "string" | { <key>: <value>, ... } | bare-token
+// The `(` must follow the name with no whitespace (like Prisma's own attributes), so
+// parenthesized prose elsewhere in the doc comment is never mistaken for an argument list.
 //
 // Examples:
 //   @timescale.hypertable(column: "time", chunkInterval: "1 day")
@@ -36,8 +38,11 @@ export function parseAnnotations(doc: string | null | undefined): ParsedAnnotati
     if (name === undefined) continue;
 
     let args: AnnotationArgs = {};
-    let i = NAME_RE.lastIndex;
-    while (i < doc.length && /\s/.test(doc[i] ?? "")) i++;
+    const i = NAME_RE.lastIndex;
+    // The argument list must open IMMEDIATELY after the name, like Prisma's own attributes
+    // (`@map("x")`). Skipping whitespace here used to swallow ordinary parenthesized doc prose —
+    // Prisma joins /// lines with \n, so `@timescale.bucket` followed by a line reading
+    // `(aligned to UTC hours)` failed generation with a malformed-argument error.
     if (doc[i] === "(") {
       const { body, end } = readBalanced(doc, i, "(", ")");
       args = parseArgs(body);
