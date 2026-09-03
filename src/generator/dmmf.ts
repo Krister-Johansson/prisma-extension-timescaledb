@@ -538,6 +538,13 @@ function buildCagg(
       if (!srcField) {
         throw new Error(`${fctx}: aggregate column "${column}" does not exist on source "${source}".`);
       }
+      // Postgres defines min/max (label order) and count for enums, but not avg/sum — those
+      // would pass generation and fail the CREATE MATERIALIZED VIEW at migrate.
+      if (srcField.kind === "enum" && (fn === "avg" || fn === "sum")) {
+        throw new Error(
+          `${fctx}: aggregate fn "${fn}" is not defined for enum column "${column}" (Postgres supports min, max, and count on enum types).`,
+        );
+      }
       aggregates.push({ name: dbCol(field), fn, column: dbCol(srcField) });
     }
   }

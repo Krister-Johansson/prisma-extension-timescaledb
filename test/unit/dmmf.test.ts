@@ -1085,6 +1085,28 @@ model SensorReading {
     expect(result.hypertables[0]?.compression?.segmentBy).toEqual(["status_col"]);
   });
 
+  it("rejects avg/sum on an enum aggregate column but accepts min/max/count", async () => {
+    const schema = (fn: string) => `${ENUM}
+/// @timescale.hypertable(column: "time")
+model SensorReading {
+  time   DateTime
+  status Status
+  @@id([status, time])
+}
+
+/// @timescale.continuousAggregate(source: "SensorReading", bucket: "1 hour", timeColumn: "time")
+view SensorHourly {
+  bucket DateTime /// @timescale.bucket
+  agg    Status   /// @timescale.aggregate(fn: "${fn}", column: "status")
+  @@unique([bucket])
+}
+`;
+    await expect(extract(schema("avg"))).rejects.toThrow(/aggregate fn "avg" is not defined for enum column "status"/);
+    await expect(extract(schema("sum"))).rejects.toThrow(/aggregate fn "sum" is not defined for enum column "status"/);
+    const result = await extract(schema("max"));
+    expect(result.continuousAggregates[0]?.aggregates).toEqual([{ name: "agg", fn: "max", column: "status" }]);
+  });
+
   it("accepts an enum groupBy column on a continuous aggregate", async () => {
     const result = await extract(`${ENUM}
 /// @timescale.hypertable(column: "time")
