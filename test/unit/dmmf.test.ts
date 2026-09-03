@@ -772,7 +772,9 @@ model Tag {
     // so timeBucket where can resolve relation filters nested through them.
     expect(result.relationsByModel).toEqual({
       Device: [{ field: "readings", targetModel: "Reading", table: "Reading", list: true, on: [{ related: "deviceId", outer: "id" }] }],
-      Tag: [{ field: "reading", targetModel: "Reading", table: "Reading", list: false, on: [{ related: "id", outer: "readingId" }, { related: "time", outer: "readingTime" }], fk: ["readingId", "readingTime"] }],
+      // Tag.reading has no `?`: a required to-one carries `required: true` so the runtime
+      // rejects a `null` filter on it (Prisma's types reject it too).
+      Tag: [{ field: "reading", targetModel: "Reading", table: "Reading", list: false, on: [{ related: "id", outer: "readingId" }, { related: "time", outer: "readingTime" }], fk: ["readingId", "readingTime"], required: true }],
     });
   });
 

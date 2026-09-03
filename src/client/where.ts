@@ -43,6 +43,8 @@ export interface RuntimeRelation {
   columns?: Record<string, string>;
   /** Outer FK column(s) (DB names) for `is`/`isNot: null` (optional to-one only). */
   fk?: readonly string[];
+  /** true => required to-one: a `null` filter is rejected (Prisma's types reject it too). */
+  required?: boolean;
   /** Related model's Prisma name, used to resolve its own relations for deeper nesting. */
   targetModel?: string;
 }
@@ -87,11 +89,16 @@ export function whereToSql(where: Record<string, unknown> | undefined, ctx: Wher
  * truth and `isNot`/`none` including the no-related-record case (verified against Prisma).
  */
 function relationClause(field: string, value: unknown, rel: RuntimeRelation, ctx: WhereCtx): string {
-  // Prisma-legal shorthand: `relation: null` on an optional to-one means `relation: { is: null }`
-  // (verified against findMany). List relations have no null shorthand — Prisma's types reject it.
+  // Prisma-legal shorthand: `relation: null` on an OPTIONAL to-one means `relation: { is: null }`
+  // (verified against findMany). List relations and required to-one relations have no null
+  // shorthand — Prisma's types reject both, so the runtime rejects them loudly too instead of
+  // silently matching nothing.
   if (value === null) {
     if (rel.list) {
       throw new Error(`timeBucket: relation filter on "${field}" cannot be null (use some / none / every on a list relation).`);
+    }
+    if (rel.required) {
+      throw new Error(`timeBucket: relation filter on "${field}" cannot be null (the relation is required).`);
     }
     value = { is: null };
   }

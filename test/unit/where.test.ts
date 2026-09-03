@@ -233,13 +233,38 @@ describe("whereToSql relation filters (EXISTS)", () => {
     expect(whereToSql({ device: { isNot: null } }, relHarness().ctx)).toBe(`"public"."Reading"."deviceId" IS NOT NULL`);
   });
 
-  it("to-one null shorthand equals { is: null } (Prisma-legal, verified against findMany)", () => {
-    expect(whereToSql({ device: null }, relHarness().ctx)).toBe(`"public"."Reading"."deviceId" IS NULL`);
+  it("to-one null shorthand produces the same SQL as { is: null } (Prisma-legal, verified against findMany)", () => {
+    const shorthand = whereToSql({ device: null }, relHarness().ctx);
+    const explicit = whereToSql({ device: { is: null } }, relHarness().ctx);
+    expect(shorthand).toBe(explicit);
+    expect(shorthand).toBe(`"public"."Reading"."deviceId" IS NULL`);
   });
 
   it("null on a list relation still throws (Prisma's types reject it too)", () => {
     expect(() => whereToSql({ tags: null }, relHarness().ctx)).toThrow(
       /relation filter on "tags" cannot be null \(use some \/ none \/ every/,
+    );
+  });
+
+  it("null on a REQUIRED to-one relation throws instead of silently matching nothing", () => {
+    const params: unknown[] = [];
+    const owner: RuntimeRelation = {
+      table: `"public"."Device"`,
+      list: false,
+      required: true,
+      on: [{ related: "id", outer: "deviceId" }],
+      fk: ["deviceId"],
+    };
+    const ctx: WhereCtx = {
+      col: (f) => `"${f}"`,
+      push: (v) => {
+        params.push(v);
+        return `$${params.length}`;
+      },
+      rel: { outerTable: `"public"."Reading"`, get: (f) => (f === "device" ? owner : undefined) },
+    };
+    expect(() => whereToSql({ device: null }, ctx)).toThrow(
+      /relation filter on "device" cannot be null \(the relation is required\)/,
     );
   });
 
