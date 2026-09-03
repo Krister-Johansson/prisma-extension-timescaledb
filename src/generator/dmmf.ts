@@ -16,6 +16,7 @@ import type {
 import type { Interval } from "../core/interval.js";
 import { assertInterval } from "../core/interval.js";
 import { parseOrderByTerm } from "../core/compression.js";
+import { AGG_FNS } from "../core/continuousAggregate.js";
 import {
   findAnnotation,
   optionalBoolean,
@@ -39,7 +40,12 @@ export interface TimescaleSchema {
 // (`by_range(col, INTERVAL …)`, `time_bucket($1, col)`), so accepting Int/BigInt here would pass
 // generation and then fail at `migrate`. Reject them up front with a clear message instead.
 const TIME_TYPES = new Set(["DateTime"]);
-const AGG_FNS = new Set<AggregateSpec["fn"]>(["avg", "sum", "min", "max", "count"]);
+
+// Prisma field types whose Postgres columns TimescaleDB's enable_chunk_skipping accepts. The
+// server supports "integer-like, timestamp-like" range calculation only (its own HINT wording);
+// Float (double precision), Decimal (numeric), String, Boolean, and enums all fail at migrate —
+// verified empirically against timescale/timescaledb 2.27.2. Reject at generation instead.
+const CHUNK_SKIPPING_TYPES = new Set(["Int", "BigInt", "DateTime"]);
 
 // The complete annotation surface. Anything outside these sets is a typo the user needs to hear
 // about NOW: an unknown name or argument key silently no-ops otherwise (no hypertable conversion,
@@ -224,7 +230,7 @@ function buildHypertable(
 
   const field = findScalarField(model, column);
   if (!field) {
-    throw new Error(`${ctx}: column "${column}" is not a scalar field on the model.`);
+    throw new Error(`${ctx}: column "${column}" is not a scalar or enum field on the model.`);
   }
   if (!TIME_TYPES.has(field.type)) {
     throw new Error(
@@ -352,7 +358,7 @@ function buildCompression(
   if (segmentByRaw !== undefined) {
     const segmentBy = splitList(segmentByRaw).map((name) => {
       const field = findScalarField(model, name);
-      if (!field) throw new Error(`${ctx}: segmentBy column "${name}" is not a scalar field on the model.`);
+      if (!field) throw new Error(`${ctx}: segmentBy column "${name}" is not a scalar or enum field on the model.`);
       return dbCol(field);
     });
     if (segmentBy.length > 0) config.segmentBy = segmentBy;
@@ -363,7 +369,7 @@ function buildCompression(
     const orderBy = splitList(orderByRaw).map((term) => {
       const parsed = parseOrderByTerm(term);
       const field = findScalarField(model, parsed.column);
-      if (!field) throw new Error(`${ctx}: orderBy column "${parsed.column}" is not a scalar field on the model.`);
+      if (!field) throw new Error(`${ctx}: orderBy column "${parsed.column}" is not a scalar or enum field on the model.`);
       return { ...parsed, column: dbCol(field) };
     });
     if (orderBy.length > 0) config.orderBy = orderBy;
@@ -395,7 +401,7 @@ function buildSpacePartition(
   }
   const field = findScalarField(model, partitionColumn);
   if (!field) {
-    throw new Error(`${ctx}: partitionColumn "${partitionColumn}" is not a scalar field on the model.`);
+    throw new Error(`${ctx}: partitionColumn "${partitionColumn}" is not a scalar or enum field on the model.`);
   }
   assertInEveryUniqueKey(model, partitionColumn, `partitionColumn "${partitionColumn}"`, ctx);
   const partitions = Number(partitionsRaw);
@@ -427,7 +433,12 @@ function buildChunkSkipping(
   const columns = splitList(raw).map((name) => {
     const field = findScalarField(model, name);
     if (!field) {
-      throw new Error(`${ctx}: chunkSkipping column "${name}" is not a scalar field on the model.`);
+      throw new Error(`${ctx}: chunkSkipping column "${name}" is not a scalar or enum field on the model.`);
+    }
+    if (field.kind !== "scalar" || !CHUNK_SKIPPING_TYPES.has(field.type)) {
+      throw new Error(
+        `${ctx}: chunkSkipping column "${name}" has type ${field.type}; chunk skipping supports integer-like and timestamp-like columns only (Int, BigInt, DateTime) — enable_chunk_skipping fails at migrate on anything else.`,
+      );
     }
     const db = dbCol(field);
     if (db === timeColumnDb) {
@@ -489,9 +500,20 @@ function buildCagg(
   const aggregates: AggregateSpec[] = [];
 
   for (const field of view.fields) {
+    // Relation fields are virtual — they never appear in the generated SELECT list.
+    if (field.kind === "object") continue;
     // Parsed (and syntax-validated, with location context) by the caller's field loop.
     const fieldAnns = fieldAnnotations.get(field.name) ?? [];
     const fctx = `@timescale field on "${view.name}.${field.name}"`;
+
+    // Every data field must be the bucket, a groupBy, or an aggregate: an unannotated field
+    // would be silently omitted from the CREATE MATERIALIZED VIEW while Prisma still selects
+    // it, so the first findMany() on the view dies with "column does not exist".
+    if (fieldAnns.length === 0) {
+      throw new Error(
+        `${ctx}: view field "${field.name}" has no @timescale annotation; every view field must carry @timescale.bucket, @timescale.groupBy, or @timescale.aggregate (otherwise it is omitted from the generated view and queries fail at runtime).`,
+      );
+    }
 
     if (findAnnotation(fieldAnns, "bucket")) {
       if (sawBucket) {
@@ -517,6 +539,13 @@ function buildCagg(
       const srcField = findScalarField(sourceModel, column);
       if (!srcField) {
         throw new Error(`${fctx}: aggregate column "${column}" does not exist on source "${source}".`);
+      }
+      // Postgres defines min/max (label order) and count for enums, but not avg/sum — those
+      // would pass generation and fail the CREATE MATERIALIZED VIEW at migrate.
+      if (srcField.kind === "enum" && (fn === "avg" || fn === "sum")) {
+        throw new Error(
+          `${fctx}: aggregate fn "${fn}" is not defined for enum column "${column}" (Postgres supports min, max, and count on enum types).`,
+        );
       }
       aggregates.push({ name: dbCol(field), fn, column: dbCol(srcField) });
     }
@@ -591,9 +620,11 @@ function assertInEveryUniqueKey(model: DMMF.Model, fieldName: string, what: stri
   }
 }
 
-/** Find a scalar (non-relation) field by name on a model. */
+/** Find a data (scalar or enum, non-relation) field by name on a model. Enum fields have DMMF
+ * kind "enum", not "scalar" — treating them as non-data dropped their @map renames and rejected
+ * legitimate enum segmentBy/groupBy/aggregate configurations. */
 function findScalarField(model: DMMF.Model, name: string): DMMF.Field | undefined {
-  return model.fields.find((f) => f.name === name && f.kind === "scalar");
+  return model.fields.find((f) => f.name === name && (f.kind === "scalar" || f.kind === "enum"));
 }
 
 /** DB table name: the @@map value, or the model name. */
@@ -606,11 +637,13 @@ function dbCol(field: DMMF.Field): string {
   return field.dbName ?? field.name;
 }
 
-/** Map of Prisma field name -> DB column name, for fields that were renamed via @map. */
+/** Map of Prisma field name -> DB column name, for fields that were renamed via @map. Enum
+ * fields (DMMF kind "enum") are columns too — omitting them made the runtime emit the Prisma
+ * name instead of the @map name in timeBucket SQL. */
 function columnMap(model: DMMF.Model): Record<string, string> {
   const map: Record<string, string> = {};
   for (const f of model.fields) {
-    if (f.kind === "scalar" && f.dbName) map[f.name] = f.dbName;
+    if ((f.kind === "scalar" || f.kind === "enum") && f.dbName) map[f.name] = f.dbName;
   }
   return map;
 }
