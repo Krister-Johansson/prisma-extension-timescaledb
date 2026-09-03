@@ -66,7 +66,14 @@ export function timescaledb<const C extends TimescaleConfig = TimescaleConfig>(c
   // Key by Prisma model name (ctx.$name); values hold the resolved DB table + schema + column map.
   const hypertableByModel = new Map<
     string,
-    { table: string; schema?: string; column: string; columns: Record<string, string> }
+    {
+      table: string;
+      schema?: string;
+      column: string;
+      columns: Record<string, string>;
+      segmentBy?: readonly string[];
+      partitionColumn?: string;
+    }
   >();
   // Prisma model name -> that model's relations, for relation filters in timeBucket where. The
   // generator's `relationsByModel` covers related (non-hypertable) models; each hypertable's own
@@ -84,6 +91,11 @@ export function timescaledb<const C extends TimescaleConfig = TimescaleConfig>(c
       ...(h.schema !== undefined ? { schema: h.schema } : {}),
       column: h.column,
       columns: { ...(h.columns ?? {}) },
+      // Compression / partitioning metadata (DB column names), so $timescale.enableChunkSkipping
+      // can enforce the same guards the generator does (skipping a segmentBy column returns
+      // wrong results; the partitioning dimensions already prune chunks).
+      ...(h.compression?.segmentBy ? { segmentBy: h.compression.segmentBy } : {}),
+      ...(h.spacePartition ? { partitionColumn: h.spacePartition.column } : {}),
     });
     if (h.relations && h.relations.length > 0 && !relationsByModel.has(name)) {
       relationsByModel.set(name, h.relations);
