@@ -310,6 +310,8 @@ function buildRelations(model: DMMF.Model, byName: Map<string, DMMF.Model>): Rel
       on,
       ...(Object.keys(columns).length > 0 ? { columns } : {}),
       ...(fk ? { fk } : {}),
+      // Required to-one: a `null` filter is a Prisma type error, so the runtime rejects it too.
+      ...(!f.isList && f.isRequired ? { required: true } : {}),
     });
   }
   return relations;
