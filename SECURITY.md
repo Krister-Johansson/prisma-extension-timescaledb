@@ -43,17 +43,27 @@ Sigstore signature bundle over it (`.sigstore.json`). Verify the SBOM with:
 ```bash
 cosign verify-blob \
   --bundle prisma-extension-timescaledb-<version>.cdx.json.sigstore.json \
-  --certificate-identity-regexp '^https://github.com/Krister-Johansson/prisma-extension-timescaledb/\.github/workflows/sbom\.yml@refs/tags/prisma-extension-timescaledb-v' \
+  --certificate-identity "https://github.com/Krister-Johansson/prisma-extension-timescaledb/.github/workflows/sbom.yml@refs/tags/prisma-extension-timescaledb-v<version>" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   prisma-extension-timescaledb-<version>.cdx.json
 ```
 
 The certificate identity must be this repository's sbom.yml workflow running
-on a release tag; treat anything else as compromised, and report it. One
-exception: releases 0.5.0 through 0.8.0 predate the signing workflow and had
-their signatures backfilled by a manual run of it, so their identity ends in
-`sbom.yml@refs/heads/main` instead of the tag. From the next release onward,
-expect the tag form.
+on the release tag of the exact version you are verifying; treat anything
+else as compromised, and report it. One exception: releases 0.5.0 through
+0.8.0 predate the signing workflow and had their signatures backfilled by a
+manual run of it, so their identity is the workflow on `refs/heads/main`
+instead of the tag. Verify those four releases with:
+
+```bash
+cosign verify-blob \
+  --bundle prisma-extension-timescaledb-<version>.cdx.json.sigstore.json \
+  --certificate-identity "https://github.com/Krister-Johansson/prisma-extension-timescaledb/.github/workflows/sbom.yml@refs/heads/main" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  prisma-extension-timescaledb-<version>.cdx.json
+```
+
+From 0.9.0 onward, expect the tag form only.
 
 ## Reporting a vulnerability
 
