@@ -108,7 +108,7 @@ model M {
 
   it("column is not a field", async () => {
     await expect(extract(htModel(`@timescale.hypertable(column: "nope")`))).rejects.toThrow(
-      /column "nope" is not a scalar field/,
+      /column "nope" is not a scalar or enum field/,
     );
   });
 
@@ -531,7 +531,7 @@ model SensorReading {
   @@id([deviceId, time])
 }
 `),
-    ).rejects.toThrow(/segmentBy column "nope" is not a scalar field/);
+    ).rejects.toThrow(/segmentBy column "nope" is not a scalar or enum field/);
   });
 
   it("rejects an unknown orderBy column", async () => {
@@ -545,7 +545,7 @@ model SensorReading {
   @@id([deviceId, time])
 }
 `),
-    ).rejects.toThrow(/orderBy column "nope" is not a scalar field/);
+    ).rejects.toThrow(/orderBy column "nope" is not a scalar or enum field/);
   });
 
   it("rejects a malformed orderBy direction token", async () => {
@@ -613,7 +613,7 @@ model SensorReading {
   @@id([deviceId, time])
 }
 `),
-    ).rejects.toThrow(/partitionColumn "nope" is not a scalar field/);
+    ).rejects.toThrow(/partitionColumn "nope" is not a scalar or enum field/);
   });
 
   it("rejects a non-positive partition count", async () => {
@@ -693,7 +693,7 @@ model SensorReading {
   @@id([deviceId, time])
 }
 `),
-    ).rejects.toThrow(/chunkSkipping column "nope" is not a scalar field/);
+    ).rejects.toThrow(/chunkSkipping column "nope" is not a scalar or enum field/);
   });
 
   it("rejects the time / partitioning column (it already prunes chunks)", async () => {
@@ -1047,5 +1047,155 @@ view SensorHourly {
   @@unique([bucket])
 }`),
     ).rejects.toThrow(/on "SensorHourly\.avgTemp".*Malformed annotation argument/s);
+  });
+});
+
+describe("extractTimescaleSchema — enum fields are data columns", () => {
+  const ENUM = `
+enum Status {
+  OK
+  ERR
+}
+`;
+
+  it("includes enum @map renames in the hypertable columns map", async () => {
+    const result = await extract(`${ENUM}
+/// @timescale.hypertable(column: "time")
+model SensorReading {
+  time   DateTime
+  id     Int
+  status Status @map("status_col")
+  @@id([id, time])
+}
+`);
+    expect(result.hypertables[0]?.columns).toEqual({ status: "status_col" });
+  });
+
+  it("accepts an enum compression segmentBy column and resolves its @map name", async () => {
+    const result = await extract(`${ENUM}
+/// @timescale.hypertable(column: "time")
+/// @timescale.compression(after: "7 days", segmentBy: "status")
+model SensorReading {
+  time   DateTime
+  id     Int
+  status Status @map("status_col")
+  @@id([id, time])
+}
+`);
+    expect(result.hypertables[0]?.compression?.segmentBy).toEqual(["status_col"]);
+  });
+
+  it("rejects avg/sum on an enum aggregate column but accepts min/max/count", async () => {
+    const schema = (fn: string) => `${ENUM}
+/// @timescale.hypertable(column: "time")
+model SensorReading {
+  time   DateTime
+  status Status
+  @@id([status, time])
+}
+
+/// @timescale.continuousAggregate(source: "SensorReading", bucket: "1 hour", timeColumn: "time")
+view SensorHourly {
+  bucket DateTime /// @timescale.bucket
+  agg    Status   /// @timescale.aggregate(fn: "${fn}", column: "status")
+  @@unique([bucket])
+}
+`;
+    await expect(extract(schema("avg"))).rejects.toThrow(/aggregate fn "avg" is not defined for enum column "status"/);
+    await expect(extract(schema("sum"))).rejects.toThrow(/aggregate fn "sum" is not defined for enum column "status"/);
+    const result = await extract(schema("max"));
+    expect(result.continuousAggregates[0]?.aggregates).toEqual([{ name: "agg", fn: "max", column: "status" }]);
+  });
+
+  it("accepts an enum groupBy column on a continuous aggregate", async () => {
+    const result = await extract(`${ENUM}
+/// @timescale.hypertable(column: "time")
+model SensorReading {
+  time        DateTime
+  status      Status
+  temperature Float
+  @@id([status, time])
+}
+
+/// @timescale.continuousAggregate(source: "SensorReading", bucket: "1 hour", timeColumn: "time")
+view SensorHourly {
+  bucket  DateTime /// @timescale.bucket
+  status  Status   /// @timescale.groupBy
+  avgTemp Float    /// @timescale.aggregate(fn: "avg", column: "temperature")
+  @@unique([status, bucket])
+}
+`);
+    expect(result.continuousAggregates[0]?.groupBy).toEqual([{ source: "status", output: "status" }]);
+  });
+});
+
+describe("extractTimescaleSchema — chunkSkipping column types", () => {
+  it("rejects a Float chunkSkipping column (unsupported for range calculation)", async () => {
+    await expect(
+      extract(`
+/// @timescale.hypertable(column: "time", chunkSkipping: "temperature")
+model SensorReading {
+  time        DateTime
+  deviceId    Int
+  temperature Float
+  @@id([deviceId, time])
+}
+`),
+    ).rejects.toThrow(/chunkSkipping column "temperature" has type Float; chunk skipping supports integer-like and timestamp-like columns only/);
+  });
+
+  it("rejects an enum chunkSkipping column", async () => {
+    await expect(
+      extract(`
+enum Status {
+  OK
+  ERR
+}
+
+/// @timescale.hypertable(column: "time", chunkSkipping: "status")
+model SensorReading {
+  time     DateTime
+  deviceId Int
+  status   Status
+  @@id([deviceId, time])
+}
+`),
+    ).rejects.toThrow(/chunkSkipping column "status" has type Status; chunk skipping supports integer-like and timestamp-like columns only/);
+  });
+
+  it("accepts a DateTime chunkSkipping column that is not the time dimension", async () => {
+    const result = await extract(`
+/// @timescale.hypertable(column: "time", chunkSkipping: "ingestedAt")
+model SensorReading {
+  time       DateTime
+  deviceId   Int
+  ingestedAt DateTime
+  @@id([deviceId, time])
+}
+`);
+    expect(result.hypertables[0]?.chunkSkipping).toEqual(["ingestedAt"]);
+  });
+});
+
+describe("extractTimescaleSchema — every cagg view field must be annotated", () => {
+  it("rejects an unannotated view field instead of silently omitting it", async () => {
+    await expect(
+      extract(`
+/// @timescale.hypertable(column: "time")
+model SensorReading {
+  time        DateTime
+  temperature Float
+  @@id([time])
+}
+
+/// @timescale.continuousAggregate(source: "SensorReading", bucket: "1 hour", timeColumn: "time")
+view SensorHourly {
+  bucket    DateTime /// @timescale.bucket
+  avgTemp   Float    /// @timescale.aggregate(fn: "avg", column: "temperature")
+  forgotten Float
+  @@unique([bucket])
+}
+`),
+    ).rejects.toThrow(/view field "forgotten" has no @timescale annotation/);
   });
 });
