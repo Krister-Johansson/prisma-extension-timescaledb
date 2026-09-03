@@ -16,6 +16,12 @@ export interface HypertableRef {
   schema?: string;
   /** Prisma field name -> DB column, to map `segmentBy`/`orderBy` in addCompressionPolicy (@map). */
   columns?: Record<string, string>;
+  /** Time-dimension DB column, so enableChunkSkipping can reject it (it already prunes chunks). */
+  column?: string;
+  /** Compression segmentBy DB columns — chunk skipping on one returns wrong results. */
+  segmentBy?: readonly string[];
+  /** Hash space-partition DB column, if any — it already prunes chunks. */
+  partitionColumn?: string;
 }
 
 /** Options for a data-retention policy. */
@@ -123,7 +129,9 @@ export interface TimescaleJob {
   nextStart: Date | null;
 }
 
-/** Per-job run statistics from `timescaledb_information.job_stats`. */
+/** Per-job run statistics from `timescaledb_information.job_stats` (joined to `jobs` so
+ * `hypertableName` is the user-facing relation — a cagg job reports its view name, not the
+ * internal materialization hypertable). */
 export interface JobStats {
   jobId: number;
   hypertableName: string | null;
@@ -335,6 +343,18 @@ function isConcurrentRefreshError(err: unknown): boolean {
 
 const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * Render an optional named Interval argument as `key => INTERVAL '...'` after validation. A typed
+ * literal, not a bind param: the TimescaleDB functions take these through polymorphic "any" /
+ * interval parameters that a parameter placeholder leaves type-ambiguous. Shared by dropChunks,
+ * showChunks, and alterJob so the validate-then-render rule lives in one place.
+ */
+function intervalArg(key: string, value: Interval | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  assertInterval(value);
+  return `${key} => INTERVAL ${quoteLiteral(value)}`;
+}
+
 /** Normalize a `segmentBy` input (comma-separated string or array) to trimmed, non-empty field names. */
 function normalizeSegmentBy(input: string | readonly string[] | undefined): string[] | undefined {
   if (input == null) return undefined;
@@ -397,6 +417,26 @@ export function makeManage<HModels extends string = string, CModels extends stri
     const ref = resolveHypertable(model);
     const dbColumn = (ref.columns ?? {})[column] ?? column;
     assertSafeIdent(dbColumn, "chunk-skipping column");
+    // Mirror the generator's guards where the registry carries the metadata: the partitioning
+    // dimensions already prune chunks, and skipping on a compression segmentBy column returns
+    // wrong (empty) results once chunks compress — verified empirically. Disable stays unguarded.
+    if (fn === "enable_chunk_skipping") {
+      if (ref.column !== undefined && dbColumn === ref.column) {
+        throw new Error(
+          `enableChunkSkipping: column "${column}" is the time/partitioning column; that dimension already prunes chunks.`,
+        );
+      }
+      if (ref.partitionColumn !== undefined && dbColumn === ref.partitionColumn) {
+        throw new Error(
+          `enableChunkSkipping: column "${column}" is the hash space-partition column; that dimension already prunes chunks.`,
+        );
+      }
+      if (ref.segmentBy?.includes(dbColumn)) {
+        throw new Error(
+          `enableChunkSkipping: column "${column}" is a compression segmentBy column; skipping on a segmentBy column returns wrong (empty) results once chunks compress.`,
+        );
+      }
+    }
     const rel = relationLiteral(ref.table, ref.schema);
     return `DO $$ BEGIN SET LOCAL timescaledb.enable_chunk_skipping = on; PERFORM ${fn}(${rel}, ${quoteLiteral(dbColumn)}, if_not_exists => TRUE); END $$`;
   };
@@ -522,10 +562,13 @@ export function makeManage<HModels extends string = string, CModels extends stri
       const reloptions = columnstoreReloptions(segmentBy, orderBy);
       const rel = relationLiteral(ref.table, ref.schema);
       const alterTarget = qualifiedIdent(ref.table, ref.schema);
-      // Two statements: add_columnstore_policy errors unless the columnstore is enabled first.
-      await client.$executeRawUnsafe(`ALTER TABLE ${alterTarget} SET (${reloptions.join(", ")})`);
+      // One DO block, one connection, one transaction: the ALTER must run before the CALL
+      // (add_columnstore_policy errors unless the columnstore is enabled), and running them as
+      // two autocommitted statements left the columnstore reconfigured with no policy when the
+      // CALL failed. A failing CALL now rolls the ALTER back too — verified empirically against
+      // timescale/timescaledb 2.27.2.
       await client.$executeRawUnsafe(
-        `CALL add_columnstore_policy(${rel}, after => INTERVAL ${quoteLiteral(opts.after)}, if_not_exists => TRUE)`,
+        `DO $$ BEGIN ALTER TABLE ${alterTarget} SET (${reloptions.join(", ")}); CALL add_columnstore_policy(${rel}, after => INTERVAL ${quoteLiteral(opts.after)}, if_not_exists => TRUE); END $$`,
       );
     },
 
@@ -540,12 +583,7 @@ export function makeManage<HModels extends string = string, CModels extends stri
       const rel = relationLiteral(ref.table, ref.schema);
       // Each bound is a validated Interval interpolated as `INTERVAL '...'` — a typed literal, so
       // `older_than`'s polymorphic "any" parameter resolves (a bind param would be type-ambiguous).
-      const bound = (key: string, value: Interval | undefined): string | undefined => {
-        if (value === undefined) return undefined;
-        assertInterval(value);
-        return `${key} => INTERVAL ${quoteLiteral(value)}`;
-      };
-      const args = [bound("older_than", opts.olderThan), bound("newer_than", opts.newerThan)].filter(
+      const args = [intervalArg("older_than", opts.olderThan), intervalArg("newer_than", opts.newerThan)].filter(
         (a): a is string => a !== undefined,
       );
       if (args.length === 0) {
@@ -663,7 +701,12 @@ export function makeManage<HModels extends string = string, CModels extends stri
     },
 
     async jobStats(model) {
-      const { where, params } = jobFilter(model);
+      // job_stats reports a continuous aggregate's MATERIALIZATION hypertable
+      // (_timescaledb_internal._materialized_hypertable_N), not the user-facing view name —
+      // verified empirically on 2.27.2 — so filtering it directly matched zero rows for cagg
+      // models. Join to the jobs view (which reports the view name, like listJobs) for both
+      // the filter and the reported hypertable_name.
+      const { where, params } = jobFilter(model, "j.");
       const rows = await client.$queryRawUnsafe<
         {
           job_id: number;
@@ -680,14 +723,15 @@ export function makeManage<HModels extends string = string, CModels extends stri
         }[]
       >(
         [
-          "SELECT job_id, hypertable_name, last_run_started_at, last_successful_finish, last_run_status,",
-          "job_status, last_run_duration::text AS last_run_duration, next_start,",
-          "COALESCE(total_runs, 0)::bigint AS total_runs,",
-          "COALESCE(total_successes, 0)::bigint AS total_successes,",
-          "COALESCE(total_failures, 0)::bigint AS total_failures",
-          "FROM timescaledb_information.job_stats",
+          "SELECT s.job_id, j.hypertable_name, s.last_run_started_at, s.last_successful_finish, s.last_run_status,",
+          "s.job_status, s.last_run_duration::text AS last_run_duration, s.next_start,",
+          "COALESCE(s.total_runs, 0)::bigint AS total_runs,",
+          "COALESCE(s.total_successes, 0)::bigint AS total_successes,",
+          "COALESCE(s.total_failures, 0)::bigint AS total_failures",
+          "FROM timescaledb_information.job_stats s",
+          "LEFT JOIN timescaledb_information.jobs j ON j.job_id = s.job_id",
           where,
-          "ORDER BY job_id",
+          "ORDER BY s.job_id",
         ]
           .filter(Boolean)
           .join(" "),
@@ -710,19 +754,11 @@ export function makeManage<HModels extends string = string, CModels extends stri
 
     async jobErrors(model) {
       // job_errors has no hypertable_name column, so a model filter joins to the jobs view by job_id.
-      const rel = model === undefined ? undefined : resolveRelationName(model);
-      const params: unknown[] = [];
-      let from = "timescaledb_information.job_errors e";
-      let where = "";
-      if (rel) {
-        from += " JOIN timescaledb_information.jobs j ON j.job_id = e.job_id";
-        params.push(rel.name);
-        where = "WHERE j.hypertable_name = $1";
-        if (rel.schema !== undefined) {
-          params.push(rel.schema);
-          where += " AND j.hypertable_schema = $2";
-        }
-      }
+      const { where, params } = jobFilter(model, "j.");
+      const from =
+        model === undefined
+          ? "timescaledb_information.job_errors e"
+          : "timescaledb_information.job_errors e JOIN timescaledb_information.jobs j ON j.job_id = e.job_id";
       const rows = await client.$queryRawUnsafe<
         {
           job_id: number;
@@ -757,18 +793,20 @@ export function makeManage<HModels extends string = string, CModels extends stri
       const id = jobIdLiteral(jobId);
       const args: string[] = [];
       const params: unknown[] = [];
-      const interval = (key: string, value: Interval | undefined): void => {
-        if (value === undefined) return;
-        assertInterval(value);
-        args.push(`${key} => INTERVAL ${quoteLiteral(value)}`);
-      };
-      interval("schedule_interval", options.scheduleInterval);
-      interval("max_runtime", options.maxRuntime);
-      interval("retry_period", options.retryPeriod);
+      for (const [key, value] of [
+        ["schedule_interval", options.scheduleInterval],
+        ["max_runtime", options.maxRuntime],
+        ["retry_period", options.retryPeriod],
+      ] as const) {
+        const arg = intervalArg(key, value);
+        if (arg !== undefined) args.push(arg);
+      }
       if (options.maxRetries !== undefined) {
-        if (!Number.isInteger(options.maxRetries) || options.maxRetries < 0) {
+        // -1 is TimescaleDB's "unlimited retries" sentinel (JOB_RETRY_UNLIMITED) and the default
+        // for policy jobs — rejecting it made a finite value a one-way door.
+        if (!Number.isInteger(options.maxRetries) || options.maxRetries < -1) {
           throw new Error(
-            `alterJob: maxRetries must be a non-negative integer (got ${JSON.stringify(options.maxRetries)}).`,
+            `alterJob: maxRetries must be an integer >= -1 (got ${JSON.stringify(options.maxRetries)}; -1 means unlimited retries).`,
           );
         }
         args.push(`max_retries => ${options.maxRetries}`);
@@ -801,14 +839,8 @@ export function makeManage<HModels extends string = string, CModels extends stri
     async showChunks(model, options = {}) {
       const ref = resolveHypertable(model);
       const rel = relationLiteral(ref.table, ref.schema);
-      // Bounds are validated Intervals interpolated as typed `INTERVAL '...'` literals (the args are
-      // polymorphic "any" — a bind param would be type-ambiguous, same as dropChunks). Both optional.
-      const bound = (key: string, value: Interval | undefined): string | undefined => {
-        if (value === undefined) return undefined;
-        assertInterval(value);
-        return `${key} => INTERVAL ${quoteLiteral(value)}`;
-      };
-      const args = [rel, bound("older_than", options.olderThan), bound("newer_than", options.newerThan)].filter(
+      // Bounds are optional, validated Intervals rendered by the shared intervalArg helper.
+      const args = [rel, intervalArg("older_than", options.olderThan), intervalArg("newer_than", options.newerThan)].filter(
         (a): a is string => a !== undefined,
       );
       const rows = await client.$queryRawUnsafe<{ chunk: string }[]>(
