@@ -65,16 +65,19 @@ component, the verdict, and the reasoning, and the corresponding alert is
 dismissed with the same justification so the two records match.
 
 Current statements: none. There are no open component vulnerabilities
-assessed as not affecting the project (last reviewed 2026-08-15). Recent
+assessed as not affecting the project (last reviewed 2026-09-03). Recent
 history of the process, for the record: the dev-scope undici
 (GHSA-8xcm-r25x-g524 and related), protobufjs (GHSA-j3f2-48v5-ccww), and
 valibot (GHSA-5qjj-4xww-7phc) advisories were removed by the dependency
 upgrades in [#82](https://github.com/Krister-Johansson/prisma-extension-timescaledb/pull/82),
-and brace-expansion (GHSA-3jxr-9vmj-r5cp and related) by
+brace-expansion (GHSA-3jxr-9vmj-r5cp and related) by
 [#89](https://github.com/Krister-Johansson/prisma-extension-timescaledb/pull/89),
-rather than assessed away. One dev-scope low remains open: esbuild
-(GHSA-g7r4-m6w7-qqqr, Windows-only dev-server file read), pinned inside
-tsup's dependency range and tracked for the next tsup upgrade.
+and the dev-scope deepmerge-ts (GHSA-ggr8-5vv4-36mx) and esbuild
+(GHSA-g7r4-m6w7-qqqr) advisories by npm overrides in
+[#102](https://github.com/Krister-Johansson/prisma-extension-timescaledb/pull/102)
+([#103](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/103)
+tracks removing the overrides once the upstream pins move past the patched
+versions), rather than assessed away.
 
 ## Static analysis (SAST)
 
