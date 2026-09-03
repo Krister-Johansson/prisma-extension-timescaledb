@@ -132,7 +132,7 @@ export interface RefreshPolicy {
 /** Continuous aggregate config (SPEC §1.2 / §2.3). */
 export interface CaggConfig {
   /**
-   * Prisma view model name, used by `$timescale.refreshContinuousAggregate(...)` to resolve
+   * Prisma view model name, used by `$timescale().refreshContinuousAggregate(...)` to resolve
    * the caller's name to the DB view. Omitted when it equals `name` (no @@map).
    */
   model?: string;

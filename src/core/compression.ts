@@ -23,7 +23,7 @@ export interface CompressionPolicyConfig extends CompressionConfig {
  * Parse a columnstore `orderby` term such as `"time DESC NULLS LAST"` into its parts. The column
  * is left as written (a Prisma field name from an annotation / runtime arg; the caller maps it to
  * the DB name). Throws on malformed direction / NULLS tokens. Shared by the generator (annotation
- * parsing) and the runtime ($timescale.addCompressionPolicy).
+ * parsing) and the runtime ($timescale().addCompressionPolicy).
  */
 export function parseOrderByTerm(term: string): CompressionOrderBy {
   const tokens = term.trim().split(/\s+/);

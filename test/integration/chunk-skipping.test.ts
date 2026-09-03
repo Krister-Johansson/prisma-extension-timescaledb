@@ -2,7 +2,7 @@
 //   1. Generated + reset-safe: the `chunkSkipping` annotation emits a DO block that turns the
 //      `timescaledb.enable_chunk_skipping` GUC on and calls enable_chunk_skipping(...), surviving
 //      `migrate reset` (idempotent replay).
-//   2. Runtime: $timescale.disableChunkSkipping / enableChunkSkipping toggle the column, idempotently.
+//   2. Runtime: $timescale().disableChunkSkipping / enableChunkSkipping toggle the column, idempotently.
 // Verified against the internal catalog `_timescaledb_catalog.chunk_column_stats` (there is no public
 // timescaledb_information view for chunk skipping). The GUC requirement and the "compressed chunks
 // only" caveat are exercised implicitly: the enable call only succeeds because we set the GUC.
@@ -91,16 +91,16 @@ describe.skipIf(!DOCKER_OK)("chunk skipping (generated + runtime)", () => {
     // The generator already enabled eventId from the annotation.
     expect(await skippingColumns(h)).toBe(1);
 
-    await prisma.$timescale.disableChunkSkipping("SensorReading", "eventId");
+    await prisma.$timescale().disableChunkSkipping("SensorReading", "eventId");
     expect(await skippingColumns(h)).toBe(0);
     // Idempotent: re-disabling a not-enabled column is a no-op, not an error.
-    await prisma.$timescale.disableChunkSkipping("SensorReading", "eventId");
+    await prisma.$timescale().disableChunkSkipping("SensorReading", "eventId");
     expect(await skippingColumns(h)).toBe(0);
 
-    await prisma.$timescale.enableChunkSkipping("SensorReading", "eventId");
+    await prisma.$timescale().enableChunkSkipping("SensorReading", "eventId");
     expect(await skippingColumns(h)).toBe(1);
     // Idempotent: re-enabling is a no-op.
-    await prisma.$timescale.enableChunkSkipping("SensorReading", "eventId");
+    await prisma.$timescale().enableChunkSkipping("SensorReading", "eventId");
     expect(await skippingColumns(h)).toBe(1);
   });
 

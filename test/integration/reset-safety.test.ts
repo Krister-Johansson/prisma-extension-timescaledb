@@ -157,7 +157,7 @@ describe.skipIf(!DOCKER_OK)("reset-safety (generated migrations)", () => {
       expect(exact.sumNum).toBe(6);
 
       // Refresh the continuous aggregate, then read it as a normal typed Prisma view.
-      await prisma.$timescale.refreshContinuousAggregate("SensorHourly");
+      await prisma.$timescale().refreshContinuousAggregate("SensorHourly");
       const hourly = await prisma.sensorHourly.findMany({ orderBy: [{ deviceId: "asc" }, { bucket: "asc" }] });
       expect(
         hourly.map((r: { bucket: Date; deviceId: number; avgTemp: number }) => ({
