@@ -88,5 +88,9 @@
   },
   "engines": {
     "node": ">=18.18"
+  },
+  "overrides": {
+    "deepmerge-ts": "^8.0.0",
+    "esbuild": "^0.28.1"
   }
 }
