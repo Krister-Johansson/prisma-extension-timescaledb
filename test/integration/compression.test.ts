@@ -77,7 +77,7 @@ describe.skipIf(!DOCKER_OK)("compression policies (generated + runtime)", () => 
     expect(await compressionJobs(h)).toBe(1);
   });
 
-  it("$timescale.addCompressionPolicy / removeCompressionPolicy operate at runtime", async () => {
+  it("$timescale().addCompressionPolicy / removeCompressionPolicy operate at runtime", async () => {
     const { PrismaClient } = await import(pathToFileURL(join(h.projectDir, "client", "client.ts")).href);
     const { PrismaPg } = await import("@prisma/adapter-pg");
     const { registry } = await import(pathToFileURL(join(h.projectDir, "timescale", "index.ts")).href);
@@ -85,10 +85,10 @@ describe.skipIf(!DOCKER_OK)("compression policies (generated + runtime)", () => 
     const base = new PrismaClient({ adapter: new PrismaPg({ connectionString: h.databaseUrl }) });
     const prisma = base.$extends(timescaledb(registry));
     try {
-      await prisma.$timescale.removeCompressionPolicy("SensorReading");
+      await prisma.$timescale().removeCompressionPolicy("SensorReading");
       expect(await compressionJobs(h)).toBe(0);
 
-      await prisma.$timescale.addCompressionPolicy("SensorReading", {
+      await prisma.$timescale().addCompressionPolicy("SensorReading", {
         after: "7 days",
         segmentBy: "deviceId",
         orderBy: "time DESC",
@@ -96,7 +96,7 @@ describe.skipIf(!DOCKER_OK)("compression policies (generated + runtime)", () => 
       expect(await compressionJobs(h)).toBe(1);
 
       // Idempotent: re-adding the identical policy is a no-op, not an error.
-      await prisma.$timescale.addCompressionPolicy("SensorReading", {
+      await prisma.$timescale().addCompressionPolicy("SensorReading", {
         after: "7 days",
         segmentBy: "deviceId",
         orderBy: "time DESC",

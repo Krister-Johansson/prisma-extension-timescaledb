@@ -1,5 +1,5 @@
 // Continuous-aggregate refresh-policy management at runtime, on real TimescaleDB:
-// $timescale.removeContinuousAggregatePolicy / addContinuousAggregatePolicy. The default harness
+// $timescale().removeContinuousAggregatePolicy / addContinuousAggregatePolicy. The default harness
 // schema already has a refresh policy from the annotation; verified against timescaledb_information.jobs.
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
@@ -56,14 +56,14 @@ describe.skipIf(!DOCKER_OK)("continuous-aggregate refresh policy (runtime)", () 
     // The generator already added a refresh policy from the annotation.
     expect(await refreshJobs(h)).toBe(1);
 
-    await prisma.$timescale.removeContinuousAggregatePolicy("SensorHourly");
+    await prisma.$timescale().removeContinuousAggregatePolicy("SensorHourly");
     expect(await refreshJobs(h)).toBe(0);
 
-    await prisma.$timescale.addContinuousAggregatePolicy("SensorHourly", policy);
+    await prisma.$timescale().addContinuousAggregatePolicy("SensorHourly", policy);
     expect(await refreshJobs(h)).toBe(1);
 
     // Idempotent: re-adding the identical policy is a no-op, not an error.
-    await prisma.$timescale.addContinuousAggregatePolicy("SensorHourly", policy);
+    await prisma.$timescale().addContinuousAggregatePolicy("SensorHourly", policy);
     expect(await refreshJobs(h)).toBe(1);
   });
 });

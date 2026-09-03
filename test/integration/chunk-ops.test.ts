@@ -1,4 +1,4 @@
-// On-demand chunk operations at runtime, on real TimescaleDB: $timescale.showChunks /
+// On-demand chunk operations at runtime, on real TimescaleDB: $timescale().showChunks /
 // compressChunk / decompressChunk. The hypertable enables the columnstore (@timescale.compression)
 // so compress_chunk works; we insert two days' worth of data to get two chunks.
 //
@@ -72,28 +72,28 @@ describe.skipIf(!DOCKER_OK)("on-demand chunk operations (runtime)", () => {
   });
 
   it("lists chunks and applies interval bounds", async () => {
-    const chunks: string[] = await prisma.$timescale.showChunks("SensorReading");
+    const chunks: string[] = await prisma.$timescale().showChunks("SensorReading");
     expect(chunks).toHaveLength(2);
     expect(chunks.every((c) => c.includes("_hyper_"))).toBe(true);
 
     // The data is from early 2026; nothing is older than ~27 years before now, so the bound filters all out.
-    expect(await prisma.$timescale.showChunks("SensorReading", { olderThan: "10000 days" })).toHaveLength(0);
+    expect(await prisma.$timescale().showChunks("SensorReading", { olderThan: "10000 days" })).toHaveLength(0);
   });
 
   it("compresses and decompresses a single chunk, idempotently", async () => {
-    const [chunk] = await prisma.$timescale.showChunks("SensorReading");
+    const [chunk] = await prisma.$timescale().showChunks("SensorReading");
     expect(await compressedChunks(h)).not.toContain(chunk);
 
-    await prisma.$timescale.compressChunk(chunk);
+    await prisma.$timescale().compressChunk(chunk);
     expect(await compressedChunks(h)).toContain(chunk);
     // Idempotent: re-compressing an already-compressed chunk is a no-op, not an error.
-    await prisma.$timescale.compressChunk(chunk);
+    await prisma.$timescale().compressChunk(chunk);
     expect(await compressedChunks(h)).toContain(chunk);
 
-    await prisma.$timescale.decompressChunk(chunk);
+    await prisma.$timescale().decompressChunk(chunk);
     expect(await compressedChunks(h)).not.toContain(chunk);
     // Idempotent the other way too.
-    await prisma.$timescale.decompressChunk(chunk);
+    await prisma.$timescale().decompressChunk(chunk);
     expect(await compressedChunks(h)).not.toContain(chunk);
   });
 });
