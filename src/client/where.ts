@@ -47,6 +47,10 @@ export interface RuntimeRelation {
   required?: boolean;
   /** Related model's Prisma name, used to resolve its own relations for deeper nesting. */
   targetModel?: string;
+  /** Implicit many-to-many: the hidden join table (already quoted/qualified) and which of its
+   * columns points at which side. With `through` set, `on` holds one pair: the related model's
+   * id column (`related`) and the outer model's id column (`outer`), both unquoted DB names. */
+  through?: { table: string; outerColumn: string; relatedColumn: string };
 }
 
 const SUPPORTED = "equals, not, in, notIn, lt, lte, gt, gte, contains, startsWith, endsWith";
@@ -130,8 +134,19 @@ function relationClause(field: string, value: unknown, rel: RuntimeRelation, ctx
       ? { rel: { outerTable: alias, get: nestedGet, depth: level, relationsOf: ctx.rel!.relationsOf } }
       : {}),
   };
-  const join = rel.on.map((p) => `${alias}.${quoteIdent(p.related)} = ${outer}.${quoteIdent(p.outer)}`).join(" AND ");
-  const from = `${rel.table} AS ${alias}`;
+  // Implicit m-n goes through the hidden join table: FROM _jt JOIN related ON related.id = _jt.<X>
+  // WHERE _jt.<Y> = outer.id. The join-table alias is depth-unique like the relation alias.
+  let join: string;
+  let from: string;
+  if (rel.through) {
+    const jt = quoteIdent(level === 1 ? "_jt" : `_jt${level}`);
+    const pair = rel.on[0]!;
+    from = `${rel.through.table} AS ${jt} JOIN ${rel.table} AS ${alias} ON ${alias}.${quoteIdent(pair.related)} = ${jt}.${quoteIdent(rel.through.relatedColumn)}`;
+    join = `${jt}.${quoteIdent(rel.through.outerColumn)} = ${outer}.${quoteIdent(pair.outer)}`;
+  } else {
+    join = rel.on.map((p) => `${alias}.${quoteIdent(p.related)} = ${outer}.${quoteIdent(p.outer)}`).join(" AND ");
+    from = `${rel.table} AS ${alias}`;
+  }
 
   // EXISTS (SELECT 1 FROM related AS _rel WHERE join AND (inner)); inner "" -> TRUE. `every` negates
   // the inner (NOT EXISTS where a related row fails it). `negate` wraps the whole thing in NOT.

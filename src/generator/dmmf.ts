@@ -292,7 +292,20 @@ function buildRelations(model: DMMF.Model, byName: Map<string, DMMF.Model>): Rel
       const owning = related.fields.find(
         (g) => g.kind === "object" && g.relationName === f.relationName && (g.relationFromFields?.length ?? 0) > 0,
       );
-      if (!owning?.relationFromFields || !owning.relationToFields) continue;
+      if (!owning?.relationFromFields || !owning.relationToFields) {
+        // NEITHER side owns a FK: an implicit many-to-many. Prisma keeps the pairs in a
+        // hidden join table named `_<relationName>` whose "A" column references the
+        // alphabetically-first model's id and "B" the other — verified empirically against
+        // Prisma's own DDL (including a custom @relation name and an @map'd id). Self-relations
+        // stay unsupported: both join columns reference the same model, so the filter
+        // direction is ambiguous.
+        const m2m =
+          f.isList && f.relationName && model.name !== related.name
+            ? implicitManyToMany(model, related, f)
+            : undefined;
+        if (m2m) relations.push(m2m);
+        continue;
+      }
       const toFields = owning.relationToFields;
       on = owning.relationFromFields.map((fromField, i) => ({
         related: resolveCol(related, fromField),
@@ -320,6 +333,39 @@ function buildRelations(model: DMMF.Model, byName: Map<string, DMMF.Model>): Rel
 /** Resolve a field name on a model to its DB column name (the @map value, or the field name). */
 function resolveCol(model: DMMF.Model, fieldName: string): string {
   return model.fields.find((f) => f.name === fieldName)?.dbName ?? fieldName;
+}
+
+/**
+ * Build the RelationConfig for one side of an implicit many-to-many relation. `on` carries one
+ * pair — the two models' single id DB columns — and `through` names the hidden join table and
+ * which of its "A"/"B" columns points at which side. Prisma requires a single-field id on both
+ * models for an implicit m-n, so a missing one means the DMMF is not what we expect; skip.
+ */
+function implicitManyToMany(model: DMMF.Model, related: DMMF.Model, f: DMMF.Field): RelationConfig | undefined {
+  const modelId = model.fields.find((g) => g.isId);
+  const relatedId = related.fields.find((g) => g.isId);
+  if (!modelId || !relatedId) return undefined;
+  const columns = columnMap(related);
+  const outerIsA = model.name < related.name;
+  // The join table lives in the alphabetically-FIRST model's schema — probed empirically
+  // (cross-schema implicit m-n validates, and db push placed _CategoryToDevice in Category's
+  // schema), matching Prisma's multiSchema docs.
+  const throughSchema = outerIsA ? model.schema : related.schema;
+  return {
+    field: f.name,
+    targetModel: related.name,
+    table: dbTable(related),
+    ...(related.schema ? { schema: related.schema } : {}),
+    list: true,
+    on: [{ related: dbCol(relatedId), outer: dbCol(modelId) }],
+    ...(Object.keys(columns).length > 0 ? { columns } : {}),
+    through: {
+      table: `_${f.relationName}`,
+      ...(throughSchema ? { schema: throughSchema } : {}),
+      outerColumn: outerIsA ? "A" : "B",
+      relatedColumn: outerIsA ? "B" : "A",
+    },
+  };
 }
 
 /** Parse the optional `@timescale.retention(dropAfter)` annotation on a hypertable model. */

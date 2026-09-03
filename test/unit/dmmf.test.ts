@@ -1201,3 +1201,139 @@ view SensorHourly {
     ).rejects.toThrow(/view field "forgotten" has no @timescale annotation/);
   });
 });
+
+describe("extractTimescaleSchema — implicit many-to-many relations", () => {
+  const SCHEMA = `
+/// @timescale.hypertable(column: "time", chunkInterval: "1 day")
+model Reading {
+  time     DateTime
+  id       Int
+  deviceId Int?
+  device   Device? @relation(fields: [deviceId], references: [id])
+  @@id([id, time])
+}
+model Device {
+  id         Int        @id
+  categories Category[]
+  readings   Reading[]
+}
+model Category {
+  id      Int      @id @map("cat_id")
+  name    String
+  devices Device[]
+}
+`;
+
+  it("extracts both sides with the hidden join table (A = alphabetically-first model, @map ids resolved)", async () => {
+    // Verified empirically against Prisma's DDL: table _<relationName>, column "A" references
+    // the alphabetically-first model's id, "B" the other, ids via their @map DB columns.
+    const result = await extract(SCHEMA);
+    expect(result.relationsByModel["Device"]).toContainEqual({
+      field: "categories",
+      targetModel: "Category",
+      table: "Category",
+      list: true,
+      on: [{ related: "cat_id", outer: "id" }],
+      columns: { id: "cat_id" },
+      through: { table: "_CategoryToDevice", outerColumn: "B", relatedColumn: "A" },
+    });
+    expect(result.relationsByModel["Category"]).toContainEqual({
+      field: "devices",
+      targetModel: "Device",
+      table: "Device",
+      list: true,
+      on: [{ related: "id", outer: "cat_id" }],
+      through: { table: "_CategoryToDevice", outerColumn: "A", relatedColumn: "B" },
+    });
+  });
+
+  it("uses the custom @relation name for the join table", async () => {
+    const result = await extract(`
+/// @timescale.hypertable(column: "time")
+model Reading {
+  time DateTime
+  id   Int
+  @@id([id, time])
+}
+model Device {
+  id   Int   @id
+  tags Tag[] @relation("labelled")
+}
+model Tag {
+  id      Int      @id
+  devices Device[] @relation("labelled")
+}
+`);
+    expect(result.relationsByModel["Device"]?.[0]?.through?.table).toBe("_labelled");
+  });
+
+  it("skips an implicit many-to-many self-relation (direction is ambiguous)", async () => {
+    const result = await extract(`
+/// @timescale.hypertable(column: "time")
+model Reading {
+  time DateTime
+  id   Int
+  @@id([id, time])
+}
+model Person {
+  id        Int      @id
+  friends   Person[] @relation("friends")
+  friendOf  Person[] @relation("friends")
+}
+`);
+    expect(result.relationsByModel["Person"] ?? []).toEqual([]);
+  });
+});
+
+describe("extractTimescaleSchema — implicit m-n across schemas (multiSchema)", () => {
+  it("places the join table in the alphabetically-first model's schema", async () => {
+    // Probed empirically: db push on this exact shape created meta._CategoryToDevice
+    // (Category's schema), matching Prisma's multiSchema docs.
+    const dmmf = await getDMMF({
+      datamodel: `
+generator client {
+  provider = "prisma-client"
+  output = "../generated/prisma"
+  previewFeatures = ["views", "multiSchema"]
+}
+datasource db {
+  provider = "postgresql"
+  schemas = ["iot", "meta"]
+}
+
+/// @timescale.hypertable(column: "time")
+model Reading {
+  time DateTime
+  id   Int
+  @@id([id, time])
+  @@schema("iot")
+}
+model Device {
+  id         Int        @id
+  categories Category[]
+  @@schema("iot")
+}
+model Category {
+  id      Int      @id
+  devices Device[]
+  @@schema("meta")
+}
+`,
+    });
+    const result = extractTimescaleSchema(dmmf);
+    // From Device (name > Category): Device is the "B" side; the join table sits in meta.
+    expect(result.relationsByModel["Device"]?.[0]?.through).toEqual({
+      table: "_CategoryToDevice",
+      schema: "meta",
+      outerColumn: "B",
+      relatedColumn: "A",
+    });
+    // From Category (the "A" side): same table, same schema, columns flipped.
+    expect(result.relationsByModel["Category"]?.[0]?.through).toEqual({
+      table: "_CategoryToDevice",
+      schema: "meta",
+      outerColumn: "A",
+      relatedColumn: "B",
+    });
+  });
+});
