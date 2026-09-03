@@ -63,7 +63,7 @@ describe.skipIf(!DOCKER_OK)("retention policies (generated + runtime)", () => {
     expect(await retentionJobs(h)).toBe(1);
   });
 
-  it("$timescale.addRetentionPolicy / removeRetentionPolicy operate at runtime", async () => {
+  it("$timescale().addRetentionPolicy / removeRetentionPolicy operate at runtime", async () => {
     const { PrismaClient } = await import(pathToFileURL(join(h.projectDir, "client", "client.ts")).href);
     const { PrismaPg } = await import("@prisma/adapter-pg");
     const { registry } = await import(pathToFileURL(join(h.projectDir, "timescale", "index.ts")).href);
@@ -71,14 +71,47 @@ describe.skipIf(!DOCKER_OK)("retention policies (generated + runtime)", () => {
     const base = new PrismaClient({ adapter: new PrismaPg({ connectionString: h.databaseUrl }) });
     const prisma = base.$extends(timescaledb(registry));
     try {
-      await prisma.$timescale.removeRetentionPolicy("SensorReading");
+      await prisma.$timescale().removeRetentionPolicy("SensorReading");
       expect(await retentionJobs(h)).toBe(0);
 
-      await prisma.$timescale.addRetentionPolicy("SensorReading", { dropAfter: "7 days" });
+      await prisma.$timescale().addRetentionPolicy("SensorReading", { dropAfter: "7 days" });
       expect(await retentionJobs(h)).toBe(1);
 
       // Idempotent: re-adding the identical policy is a no-op, not an error.
-      await prisma.$timescale.addRetentionPolicy("SensorReading", { dropAfter: "7 days" });
+      await prisma.$timescale().addRetentionPolicy("SensorReading", { dropAfter: "7 days" });
+      expect(await retentionJobs(h)).toBe(1);
+    } finally {
+      await base.$disconnect();
+    }
+  });
+
+  it("$timescale() joins an interactive transaction: a rollback undoes the policy", async () => {
+    // $timescale used to close over the pre-extension client, so its SQL ran on a separate
+    // pooled connection and committed despite the surrounding rollback. As a method it binds
+    // to the client it is called on — the transaction client inside $transaction.
+    const { PrismaClient } = await import(pathToFileURL(join(h.projectDir, "client", "client.ts")).href);
+    const { PrismaPg } = await import("@prisma/adapter-pg");
+    const { registry } = await import(pathToFileURL(join(h.projectDir, "timescale", "index.ts")).href);
+
+    const base = new PrismaClient({ adapter: new PrismaPg({ connectionString: h.databaseUrl }) });
+    const prisma = base.$extends(timescaledb(registry));
+    try {
+      await prisma.$timescale().removeRetentionPolicy("SensorReading");
+      expect(await retentionJobs(h)).toBe(0);
+
+      await expect(
+        prisma.$transaction(async (tx: typeof prisma) => {
+          await tx.$timescale().addRetentionPolicy("SensorReading", { dropAfter: "7 days" });
+          throw new Error("abort");
+        }),
+      ).rejects.toThrow("abort");
+      // The add above must have been part of the transaction, so the rollback removed it.
+      expect(await retentionJobs(h)).toBe(0);
+
+      // And a committed transaction keeps it.
+      await prisma.$transaction(async (tx: typeof prisma) => {
+        await tx.$timescale().addRetentionPolicy("SensorReading", { dropAfter: "7 days" });
+      });
       expect(await retentionJobs(h)).toBe(1);
     } finally {
       await base.$disconnect();

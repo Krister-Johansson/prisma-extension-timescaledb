@@ -65,22 +65,22 @@ describe.skipIf(!DOCKER_OK)("$timescale chunk + size helpers (real TimescaleDB)"
   });
 
   it("reports total / detailed size and an approximate row count as bigints", async () => {
-    const size = await prisma.$timescale.hypertableSize("SensorReading");
+    const size = await prisma.$timescale().hypertableSize("SensorReading");
     expect(typeof size).toBe("bigint");
     expect(size).toBeGreaterThan(0n);
 
-    const detailed = await prisma.$timescale.hypertableDetailedSize("SensorReading");
+    const detailed = await prisma.$timescale().hypertableDetailedSize("SensorReading");
     expect(typeof detailed.totalBytes).toBe("bigint");
     expect(detailed.totalBytes).toBeGreaterThan(0n);
     expect(detailed.totalBytes).toBe(detailed.tableBytes + detailed.indexBytes + detailed.toastBytes);
 
-    const rows = await prisma.$timescale.approximateRowCount("SensorReading");
+    const rows = await prisma.$timescale().approximateRowCount("SensorReading");
     expect(typeof rows).toBe("bigint");
     expect(rows).toBe(3n);
   });
 
   it("dropChunks drops old chunks on demand and returns their names", async () => {
-    const dropped = await prisma.$timescale.dropChunks("SensorReading", { olderThan: "15 days" });
+    const dropped = await prisma.$timescale().dropChunks("SensorReading", { olderThan: "15 days" });
     expect(dropped).toHaveLength(1); // only the ~20-days-ago chunk is entirely older than 15 days
     expect(dropped.every((c: string) => c.includes("_hyper_"))).toBe(true);
 
@@ -89,8 +89,8 @@ describe.skipIf(!DOCKER_OK)("$timescale chunk + size helpers (real TimescaleDB)"
   });
 
   it("compressionStats reads catalog stats once columnstore is enabled", async () => {
-    await prisma.$timescale.addCompressionPolicy("SensorReading", { after: "7 days" });
-    const stats = await prisma.$timescale.compressionStats("SensorReading");
+    await prisma.$timescale().addCompressionPolicy("SensorReading", { after: "7 days" });
+    const stats = await prisma.$timescale().compressionStats("SensorReading");
     expect(typeof stats.totalChunks).toBe("bigint");
     expect(stats.compressedChunks).toBe(0n); // policy hasn't run yet — nothing compressed
   });

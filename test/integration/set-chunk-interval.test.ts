@@ -1,5 +1,5 @@
 // Changing a live hypertable's chunk interval at runtime on real TimescaleDB:
-// $timescale.setChunkInterval -> set_partitioning_interval. The default harness hypertable is
+// $timescale().setChunkInterval -> set_partitioning_interval. The default harness hypertable is
 // created with chunkInterval "1 day"; we resize it and confirm via timescaledb_information.dimensions.
 // Runtime-only feature (no migration emitted), so no migrate-reset assertion is needed.
 import { execFileSync } from "node:child_process";
@@ -61,11 +61,11 @@ describe.skipIf(!DOCKER_OK)("set chunk interval (runtime)", () => {
     // Created at "1 day" by the annotation.
     expect(await chunkIntervalSeconds(h)).toBe(DAY);
 
-    await prisma.$timescale.setChunkInterval("SensorReading", "6 hours");
+    await prisma.$timescale().setChunkInterval("SensorReading", "6 hours");
     expect(await chunkIntervalSeconds(h)).toBe(SIX_HOURS);
 
     // Re-applying the same value is a no-op, not an error.
-    await prisma.$timescale.setChunkInterval("SensorReading", "6 hours");
+    await prisma.$timescale().setChunkInterval("SensorReading", "6 hours");
     expect(await chunkIntervalSeconds(h)).toBe(SIX_HOURS);
   });
 });
