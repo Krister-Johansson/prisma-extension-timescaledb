@@ -543,6 +543,7 @@ export function buildTimeBucketQuery(
         ...(r.columns ? { columns: r.columns } : {}),
         ...(r.fk ? { fk: r.fk } : {}),
         ...(r.targetModel ? { targetModel: r.targetModel } : {}),
+        ...(r.required ? { required: true } : {}),
       });
     }
     relMaps.set(m, fieldMap);

@@ -61,6 +61,8 @@ export interface RelationConfig {
   columns?: Record<string, string>;
   /** For an optional to-one relation: the hypertable's FK column(s) (DB names), for `is`/`isNot: null`. */
   fk?: readonly string[];
+  /** `true` for a required to-one relation — `null` filters are rejected (Prisma's types do too). */
+  required?: boolean;
 }
 
 /** Hypertable conversion config (SPEC §1.1 / §2.2). All names are DB names (post-@@map). */
