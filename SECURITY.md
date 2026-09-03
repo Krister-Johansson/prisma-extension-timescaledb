@@ -35,6 +35,36 @@ The expected identity in the attestation is this repository:
 the release-please workflow. Treat any version whose provenance names a
 different repository or builder as compromised, and report it.
 
+Each GitHub release also carries a CycloneDX software bill of materials
+(`prisma-extension-timescaledb-<version>.cdx.json`) as an asset, listing the
+exact runtime dependency tree the release shipped with, along with a keyless
+Sigstore signature bundle over it (`.sigstore.json`). Verify the SBOM with:
+
+```bash
+cosign verify-blob \
+  --bundle prisma-extension-timescaledb-<version>.cdx.json.sigstore.json \
+  --certificate-identity "https://github.com/Krister-Johansson/prisma-extension-timescaledb/.github/workflows/sbom.yml@refs/tags/prisma-extension-timescaledb-v<version>" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  prisma-extension-timescaledb-<version>.cdx.json
+```
+
+The certificate identity must be this repository's sbom.yml workflow running
+on the release tag of the exact version you are verifying; treat anything
+else as compromised, and report it. One exception: releases 0.5.0 through
+0.8.0 predate the signing workflow and had their signatures backfilled by a
+manual run of it, so their identity is the workflow on `refs/heads/main`
+instead of the tag. Verify those four releases with:
+
+```bash
+cosign verify-blob \
+  --bundle prisma-extension-timescaledb-<version>.cdx.json.sigstore.json \
+  --certificate-identity "https://github.com/Krister-Johansson/prisma-extension-timescaledb/.github/workflows/sbom.yml@refs/heads/main" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  prisma-extension-timescaledb-<version>.cdx.json
+```
+
+From 0.9.0 onward, expect the tag form only.
+
 ## Reporting a vulnerability
 
 Do not open a public issue for security problems.
