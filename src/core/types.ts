@@ -63,6 +63,22 @@ export interface RelationConfig {
   fk?: readonly string[];
   /** `true` for a required to-one relation — `null` filters are rejected (Prisma's types do too). */
   required?: boolean;
+  /**
+   * For an implicit many-to-many relation: Prisma's hidden join table (`_<relationName>`). Its
+   * `"A"` column references the alphabetically-first model's id, `"B"` the other — verified
+   * empirically against Prisma's own DDL. With `through` set, `on` holds ONE pair: the two
+   * models' id DB columns (`related` = the related model's id, `outer` = this model's id).
+   */
+  through?: {
+    /** Join table DB name (always `_<relationName>`). */
+    table: string;
+    /** Join table's `@@schema` (multiSchema) — the models' shared schema. */
+    schema?: string;
+    /** Join-table column (`"A"` or `"B"`) referencing THIS model's id. */
+    outerColumn: string;
+    /** Join-table column (`"A"` or `"B"`) referencing the related model's id. */
+    relatedColumn: string;
+  };
 }
 
 /** Hypertable conversion config (SPEC §1.1 / §2.2). All names are DB names (post-@@map). */

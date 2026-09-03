@@ -544,6 +544,15 @@ export function buildTimeBucketQuery(
         ...(r.fk ? { fk: r.fk } : {}),
         ...(r.targetModel ? { targetModel: r.targetModel } : {}),
         ...(r.required ? { required: true } : {}),
+        ...(r.through
+          ? {
+              through: {
+                table: qualifiedIdent(r.through.table, r.through.schema),
+                outerColumn: r.through.outerColumn,
+                relatedColumn: r.through.relatedColumn,
+              },
+            }
+          : {}),
       });
     }
     relMaps.set(m, fieldMap);

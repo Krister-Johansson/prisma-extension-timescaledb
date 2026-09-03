@@ -383,3 +383,42 @@ describe("whereToSql nested relation filters (multi-level EXISTS)", () => {
     );
   });
 });
+
+describe("whereToSql — implicit many-to-many (through join table)", () => {
+  function m2mHarness() {
+    const params: unknown[] = [];
+    const categories: RuntimeRelation = {
+      table: `"public"."Category"`,
+      list: true,
+      on: [{ related: "cat_id", outer: "id" }],
+      columns: { id: "cat_id" },
+      through: { table: `"_CategoryToDevice"`, outerColumn: "B", relatedColumn: "A" },
+    };
+    const ctx: WhereCtx = {
+      col: (f) => `"${f}"`,
+      push: (v) => {
+        params.push(v);
+        return `$${params.length}`;
+      },
+      rel: { outerTable: `"public"."Device"`, get: (f) => (f === "categories" ? categories : undefined) },
+    };
+    return { ctx, params };
+  }
+
+  it("some routes through the join table with both hops", () => {
+    const { ctx, params } = m2mHarness();
+    expect(whereToSql({ categories: { some: { name: "beta" } } }, ctx)).toBe(
+      `EXISTS (SELECT 1 FROM "_CategoryToDevice" AS "_jt" JOIN "public"."Category" AS "_rel" ON "_rel"."cat_id" = "_jt"."A" WHERE "_jt"."B" = "public"."Device"."id" AND ("_rel"."name" = $1))`,
+    );
+    expect(params).toEqual(["beta"]);
+  });
+
+  it("none / every wrap the same join (every negates the inner)", () => {
+    expect(whereToSql({ categories: { none: { name: "beta" } } }, m2mHarness().ctx)).toBe(
+      `NOT EXISTS (SELECT 1 FROM "_CategoryToDevice" AS "_jt" JOIN "public"."Category" AS "_rel" ON "_rel"."cat_id" = "_jt"."A" WHERE "_jt"."B" = "public"."Device"."id" AND ("_rel"."name" = $1))`,
+    );
+    expect(whereToSql({ categories: { every: { name: "beta" } } }, m2mHarness().ctx)).toBe(
+      `NOT EXISTS (SELECT 1 FROM "_CategoryToDevice" AS "_jt" JOIN "public"."Category" AS "_rel" ON "_rel"."cat_id" = "_jt"."A" WHERE "_jt"."B" = "public"."Device"."id" AND (NOT ("_rel"."name" = $1)))`,
+    );
+  });
+});

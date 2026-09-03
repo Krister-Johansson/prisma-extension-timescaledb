@@ -34,9 +34,15 @@ model Reading {
   @@id([id, time])
 }
 model Device {
-  id       Int       @id
-  active   Boolean
-  readings Reading[]
+  id         Int        @id
+  active     Boolean
+  readings   Reading[]
+  categories Category[]
+}
+model Category {
+  id      Int      @id
+  name    String
+  devices Device[]
 }
 model Tag {
   id          Int      @id
@@ -52,7 +58,11 @@ const INIT_SQL = `CREATE TABLE "Device" ("id" INTEGER PRIMARY KEY, "active" BOOL
 CREATE TABLE "Reading" ("time" TIMESTAMP(3) NOT NULL, "id" INTEGER NOT NULL, "deviceId" INTEGER,
   CONSTRAINT "Reading_pkey" PRIMARY KEY ("id","time"));
 CREATE TABLE "Tag" ("id" INTEGER PRIMARY KEY, "label" TEXT NOT NULL, "readingId" INTEGER NOT NULL,
-  "readingTime" TIMESTAMP(3) NOT NULL);`;
+  "readingTime" TIMESTAMP(3) NOT NULL);
+CREATE TABLE "Category" ("id" INTEGER PRIMARY KEY, "name" TEXT NOT NULL);
+CREATE TABLE "_CategoryToDevice" ("A" INTEGER NOT NULL REFERENCES "Category"("id"), "B" INTEGER NOT NULL REFERENCES "Device"("id"));
+CREATE UNIQUE INDEX "_CategoryToDevice_AB_unique" ON "_CategoryToDevice"("A", "B");
+CREATE INDEX "_CategoryToDevice_B_index" ON "_CategoryToDevice"("B");`;
 
 const t = (m: number) => new Date(`2026-06-15T10:${String(m).padStart(2, "0")}:00Z`);
 
@@ -82,6 +92,9 @@ describe.skipIf(!DOCKER_OK)("timeBucket relation filters (real TimescaleDB)", ()
         { id: 4, time: t(35), deviceId: 1 },
       ],
     });
+    // D1 in [sensors, beta]; D2 in [sensors] — reached via the implicit m-n join table.
+    await prisma.category.create({ data: { id: 1, name: "sensors", devices: { connect: [{ id: 1 }, { id: 2 }] } } });
+    await prisma.category.create({ data: { id: 2, name: "beta", devices: { connect: [{ id: 1 }] } } });
     await prisma.tag.createMany({
       data: [
         { id: 1, label: "prod", readingId: 1, readingTime: t(5) },
@@ -134,6 +147,20 @@ describe.skipIf(!DOCKER_OK)("timeBucket relation filters (real TimescaleDB)", ()
   it("composes with scalar filters and AND/OR", async () => {
     expect(await count({ AND: [{ device: { is: { active: true } } }, { tags: { some: { label: "dev" } } }] })).toBe(2); // R1, R4
     expect(await count({ deviceId: { not: null }, tags: { none: { label: "dev" } } })).toBe(1); // R2 (has device, no dev tag)
+  });
+
+  it("filters through an implicit many-to-many, matching Prisma findMany exactly", async () => {
+    // Reading -> device (to-one) -> categories (implicit m-n via the hidden _CategoryToDevice
+    // join table). Counts are checked against Prisma's own findMany, never hand-computed.
+    const cases: object[] = [
+      { device: { is: { categories: { some: { name: "beta" } } } } }, // R1, R4 (device 1)
+      { device: { is: { categories: { none: { name: "beta" } } } } }, // R2 (device 2)
+      { device: { is: { categories: { every: { name: "sensors" } } } } }, // device 2 only
+      { device: { is: { categories: { some: { devices: { some: { active: false } } } } } } }, // m-n nested inside m-n
+    ];
+    for (const where of cases) {
+      expect(await count(where)).toBe(await expected(where));
+    }
   });
 
   it("nests relation filters THROUGH other relations, matching Prisma findMany exactly", async () => {
