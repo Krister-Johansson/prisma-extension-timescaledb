@@ -347,6 +347,10 @@ function implicitManyToMany(model: DMMF.Model, related: DMMF.Model, f: DMMF.Fiel
   if (!modelId || !relatedId) return undefined;
   const columns = columnMap(related);
   const outerIsA = model.name < related.name;
+  // The join table lives in the alphabetically-FIRST model's schema — probed empirically
+  // (cross-schema implicit m-n validates, and db push placed _CategoryToDevice in Category's
+  // schema), matching Prisma's multiSchema docs.
+  const throughSchema = outerIsA ? model.schema : related.schema;
   return {
     field: f.name,
     targetModel: related.name,
@@ -357,7 +361,7 @@ function implicitManyToMany(model: DMMF.Model, related: DMMF.Model, f: DMMF.Fiel
     ...(Object.keys(columns).length > 0 ? { columns } : {}),
     through: {
       table: `_${f.relationName}`,
-      ...(model.schema ? { schema: model.schema } : {}),
+      ...(throughSchema ? { schema: throughSchema } : {}),
       outerColumn: outerIsA ? "A" : "B",
       relatedColumn: outerIsA ? "B" : "A",
     },

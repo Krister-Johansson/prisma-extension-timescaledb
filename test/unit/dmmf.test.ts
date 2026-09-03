@@ -1284,3 +1284,56 @@ model Person {
     expect(result.relationsByModel["Person"] ?? []).toEqual([]);
   });
 });
+
+describe("extractTimescaleSchema — implicit m-n across schemas (multiSchema)", () => {
+  it("places the join table in the alphabetically-first model's schema", async () => {
+    // Probed empirically: db push on this exact shape created meta._CategoryToDevice
+    // (Category's schema), matching Prisma's multiSchema docs.
+    const dmmf = await getDMMF({
+      datamodel: `
+generator client {
+  provider = "prisma-client"
+  output = "../generated/prisma"
+  previewFeatures = ["views", "multiSchema"]
+}
+datasource db {
+  provider = "postgresql"
+  schemas = ["iot", "meta"]
+}
+
+/// @timescale.hypertable(column: "time")
+model Reading {
+  time DateTime
+  id   Int
+  @@id([id, time])
+  @@schema("iot")
+}
+model Device {
+  id         Int        @id
+  categories Category[]
+  @@schema("iot")
+}
+model Category {
+  id      Int      @id
+  devices Device[]
+  @@schema("meta")
+}
+`,
+    });
+    const result = extractTimescaleSchema(dmmf);
+    // From Device (name > Category): Device is the "B" side; the join table sits in meta.
+    expect(result.relationsByModel["Device"]?.[0]?.through).toEqual({
+      table: "_CategoryToDevice",
+      schema: "meta",
+      outerColumn: "B",
+      relatedColumn: "A",
+    });
+    // From Category (the "A" side): same table, same schema, columns flipped.
+    expect(result.relationsByModel["Category"]?.[0]?.through).toEqual({
+      table: "_CategoryToDevice",
+      schema: "meta",
+      outerColumn: "A",
+      relatedColumn: "B",
+    });
+  });
+});
