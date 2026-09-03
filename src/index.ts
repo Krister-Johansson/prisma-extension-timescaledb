@@ -14,6 +14,16 @@ export type {
   JobError,
   AlterJobOptions,
 } from "./client/index.js";
+// timeBucket types, so callers can type wrappers around model.timeBucket(...) — the client
+// barrel re-exported these but the package root (the only published entry) did not.
+export type {
+  TimeBucketArgs,
+  TimeBucketRow,
+  AggregateInput,
+  AggregateOp,
+  ScalarRow,
+  WhereInput,
+} from "./client/timeBucket.js";
 
 // Re-export the core types + SQL builders for convenience (also available at "./core").
 export type {
