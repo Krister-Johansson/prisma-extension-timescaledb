@@ -233,6 +233,16 @@ describe("whereToSql relation filters (EXISTS)", () => {
     expect(whereToSql({ device: { isNot: null } }, relHarness().ctx)).toBe(`"public"."Reading"."deviceId" IS NOT NULL`);
   });
 
+  it("to-one null shorthand equals { is: null } (Prisma-legal, verified against findMany)", () => {
+    expect(whereToSql({ device: null }, relHarness().ctx)).toBe(`"public"."Reading"."deviceId" IS NULL`);
+  });
+
+  it("null on a list relation still throws (Prisma's types reject it too)", () => {
+    expect(() => whereToSql({ tags: null }, relHarness().ctx)).toThrow(
+      /relation filter on "tags" cannot be null \(use some \/ none \/ every/,
+    );
+  });
+
   it("to-many some / none / every (every negates the inner)", () => {
     const a = relHarness();
     expect(whereToSql({ tags: { some: { label: "x" } } }, a.ctx)).toBe(

@@ -87,7 +87,15 @@ export function whereToSql(where: Record<string, unknown> | undefined, ctx: Wher
  * truth and `isNot`/`none` including the no-related-record case (verified against Prisma).
  */
 function relationClause(field: string, value: unknown, rel: RuntimeRelation, ctx: WhereCtx): string {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+  // Prisma-legal shorthand: `relation: null` on an optional to-one means `relation: { is: null }`
+  // (verified against findMany). List relations have no null shorthand — Prisma's types reject it.
+  if (value === null) {
+    if (rel.list) {
+      throw new Error(`timeBucket: relation filter on "${field}" cannot be null (use some / none / every on a list relation).`);
+    }
+    value = { is: null };
+  }
+  if (typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`timeBucket: relation filter on "${field}" must be an object (some/none/every/is/isNot).`);
   }
   const filter = value as Record<string, unknown>;
