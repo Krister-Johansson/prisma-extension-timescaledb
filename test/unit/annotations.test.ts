@@ -43,6 +43,17 @@ describe("parseAnnotations", () => {
     expect(ann?.args).toEqual({ a: "1", nested: { b: "2", c: "3" }, d: "4" });
   });
 
+  it("does not treat parenthesized doc prose on the next line as arguments (Prisma joins /// lines with \\n)", () => {
+    expect(parseAnnotations("@timescale.bucket\n(aligned to UTC hours)")).toEqual([{ name: "bucket", args: {} }]);
+  });
+
+  it("does not treat same-line parenthesized prose after whitespace as arguments", () => {
+    expect(parseAnnotations("@timescale.bucket (aligned to UTC)")).toEqual([{ name: "bucket", args: {} }]);
+    // With no space the parens sit in argument position and stay an argument list, matching
+    // Prisma's own attribute syntax.
+    expect(() => parseAnnotations("@timescale.bucket(aligned to UTC)")).toThrow(/Malformed annotation argument/);
+  });
+
   it("rejects trailing characters after a string value", () => {
     expect(() => parseAnnotations(`@timescale.hypertable(column: "time"oops)`)).toThrow(/trailing characters after string/);
   });
