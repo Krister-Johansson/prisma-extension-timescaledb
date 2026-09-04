@@ -56,3 +56,13 @@ export function assertSafeIdent(name: string, label = "identifier"): void {
     );
   }
 }
+
+/**
+ * The existence guard opening every emitted objects DO block: skip (with a visible WARNING,
+ * never silently) when the target relation does not exist. On a `migrate reset` replay that
+ * is the normal dropped-later case; at first deploy it flags a missing CREATE TABLE
+ * migration, which the unguarded form would have surfaced as a hard error.
+ */
+export function existenceGuard(rel: string): string {
+  return `IF to_regclass(${rel}) IS NULL THEN RAISE WARNING 'prisma-extension-timescaledb: relation % does not exist; skipping (table dropped by a later migration, or its CREATE TABLE migration is missing)', ${rel}; RETURN; END IF;`;
+}

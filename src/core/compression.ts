@@ -9,7 +9,7 @@
 // It is transaction-safe, so the two statements run fine inside Prisma's migration transaction.
 import type { CompressionConfig, CompressionOrderBy, MigrationSql } from "./types.js";
 import { assertInterval } from "./interval.js";
-import { assertSafeIdent, quoteIdent, quoteLiteral, qualifiedIdent, relationLiteral } from "./sql.js";
+import { assertSafeIdent, existenceGuard, quoteIdent, quoteLiteral, qualifiedIdent, relationLiteral } from "./sql.js";
 
 /** Compression-policy builder input. All names are DB names (post-@@map / @@schema). */
 export interface CompressionPolicyConfig extends CompressionConfig {
@@ -123,12 +123,22 @@ export function createCompressionPolicySql(config: CompressionPolicyConfig): Mig
   const rel = relationLiteral(table, schema);
   const alterTarget = qualifiedIdent(table, schema);
 
-  const up = `ALTER TABLE ${alterTarget} SET (
+  const alter = `ALTER TABLE ${alterTarget} SET (
   ${reloptions.join(",\n  ")}
-);
-CALL add_columnstore_policy(${rel}, after => INTERVAL ${quoteLiteral(after)}, if_not_exists => TRUE);`;
+)`;
+  const call = `CALL add_columnstore_policy(${rel}, after => INTERVAL ${quoteLiteral(after)}, if_not_exists => TRUE)`;
+
+  const up = `${alter};
+${call};`;
+  // Guarded form for emitted migrations: skip when the table is gone, and run the ALTER + CALL
+  // in one block (ALTER TABLE and CALL inside plpgsql verified empirically on 2.27.2).
+  const guardedUp = `DO $$ BEGIN
+  ${existenceGuard(rel)}
+  ${alter.replace(/\n/g, "\n  ")};
+  ${call};
+END $$;`;
 
   const down = `CALL remove_columnstore_policy(${rel}, if_exists => TRUE);`;
 
-  return { up, down };
+  return { up, down, guardedUp };
 }

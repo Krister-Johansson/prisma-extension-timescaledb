@@ -120,6 +120,14 @@ npx prisma generate                                # emits the timescale migrati
 npx prisma migrate deploy                          # applies everything, in the right order
 ```
 
+The same three steps cover later schema changes: when the annotated objects
+change, `prisma generate` appends a new versioned migration
+(`..._timescaledb_objects_v0002`, and so on) instead of rewriting an applied
+one, and the next `migrate deploy` (or `migrate dev`) applies it. Regenerating
+an unchanged schema writes nothing. The generator keeps its state in
+`migrations/.prisma-extension-timescaledb.json`; commit that file with your
+migrations.
+
 ```ts
 import { PrismaClient } from "./client/client.js";
 import { PrismaPg } from "@prisma/adapter-pg";
