@@ -1,25 +1,13 @@
 // $timescale chunk + size helpers, end-to-end on real TimescaleDB: drop_chunks (on-demand
 // retention) plus the size / row-count / compression-stats introspection. Sizes come back as
 // exact JS bigints. Verified against a 3-chunk hypertable (one chunk per day).
-import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { startHarness, type Harness, type TestPrismaClient } from "./harness.js";
+import { startHarness, type Harness, type TestPrismaClient, dockerAvailable } from "./harness.js";
 import { timescaledb } from "../../src/client/index.js";
 
-const DOCKER_OK = (() => {
-  try {
-    execFileSync("docker", ["info"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-})();
-
-if (!DOCKER_OK) {
-  console.warn("\n[integration] SKIPPED chunk-helpers.test.ts: Docker is not available. Not verified.\n");
-}
+const DOCKER_OK = dockerAvailable("The $timescale chunk and size helpers are NOT verified.");
 
 const MODELS = `/// @timescale.hypertable(column: "time", chunkInterval: "1 day")
 model SensorReading {

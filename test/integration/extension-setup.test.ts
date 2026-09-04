@@ -9,25 +9,13 @@
 // These cases need a database with no `timescaledb` in it, which the harness cannot give: the
 // image installs the extension into `template1`, so every database cloned from it already has
 // one in `public`. Each test creates its own from `template0` instead.
-import { execFileSync } from "node:child_process";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import pg from "pg";
 import { GenericContainer, type StartedTestContainer } from "testcontainers";
-import { IMAGE } from "./harness.js";
+import { IMAGE, dockerAvailable } from "./harness.js";
 import { createExtensionSql } from "../../src/core/index.js";
 
-const DOCKER_OK = (() => {
-  try {
-    execFileSync("docker", ["info"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-})();
-
-if (!DOCKER_OK) {
-  console.warn("\n[integration] SKIPPED extension-setup.test.ts: Docker is not available. Extension setup is NOT verified.\n");
-}
+const DOCKER_OK = dockerAvailable("Extension setup is NOT verified.");
 
 const EXTENSION_SQL = createExtensionSql().up;
 

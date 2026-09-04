@@ -1,27 +1,13 @@
 // Relation filters in timeBucket where, end-to-end on real TimescaleDB. The generator extracts
 // relation metadata (to-one `device`, composite-key to-many `tags`) into the registry, and the
 // runtime builds EXISTS subqueries. Counts mirror the research probe's Prisma results.
-import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { startHarness, type Harness, type TestPrismaClient } from "./harness.js";
+import { startHarness, type Harness, type TestPrismaClient, dockerAvailable } from "./harness.js";
 import { timescaledb } from "../../src/client/index.js";
 
-const DOCKER_OK = (() => {
-  try {
-    execFileSync("docker", ["info"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-})();
-
-if (!DOCKER_OK) {
-  console.warn(
-    "\n[integration] SKIPPED relation-filters.test.ts: Docker is not available. Relation filters are NOT verified.\n",
-  );
-}
+const DOCKER_OK = dockerAvailable("Relation filters are NOT verified.");
 
 const MODELS = `/// @timescale.hypertable(column: "time", chunkInterval: "1 day")
 model Reading {

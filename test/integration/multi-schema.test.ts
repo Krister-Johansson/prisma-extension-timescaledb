@@ -1,25 +1,13 @@
 // End-to-end proof of @@schema (multiSchema): the hypertable + cagg live in a non-default
 // schema ("metrics"). Proves the generator schema-qualifies its SQL and the runtime resolves
 // schema-qualified relations against real TimescaleDB.
-import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { startHarness, type Harness } from "./harness.js";
+import { startHarness, type Harness, dockerAvailable } from "./harness.js";
 import { timescaledb } from "../../src/client/index.js";
 
-const DOCKER_OK = (() => {
-  try {
-    execFileSync("docker", ["info"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-})();
-
-if (!DOCKER_OK) {
-  console.warn("\n[integration] SKIPPED: Docker is not available. The @@schema (multiSchema) checks are NOT verified.\n");
-}
+const DOCKER_OK = dockerAvailable("The @@schema (multiSchema) checks are NOT verified.");
 
 const MODELS = `/// @timescale.hypertable(column: "time", chunkInterval: "1 day")
 model SensorReading {

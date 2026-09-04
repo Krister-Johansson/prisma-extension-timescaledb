@@ -4,22 +4,10 @@
 // The reset-safety run is the real proof: `migrate reset` replays the managed migration from
 // scratch, so the inner cagg must be emitted before the outer or the replay would fail. Verified
 // against timescaledb_information.continuous_aggregates, including migrate reset (twice).
-import { execFileSync } from "node:child_process";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { startHarness, type Harness } from "./harness.js";
+import { startHarness, type Harness, dockerAvailable } from "./harness.js";
 
-const DOCKER_OK = (() => {
-  try {
-    execFileSync("docker", ["info"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-})();
-
-if (!DOCKER_OK) {
-  console.warn("\n[integration] SKIPPED cagg-depth.test.ts: Docker is not available. Not verified.\n");
-}
+const DOCKER_OK = dockerAvailable("Hierarchical continuous aggregates are NOT verified.");
 
 // SensorReading matches the harness's default CREATE TABLE (time / deviceId / temperature).
 const MODELS = `/// @timescale.hypertable(column: "time", chunkInterval: "1 day")

@@ -22,6 +22,11 @@ export const IMAGE = "timescale/timescaledb-ha:pg17.10-ts2.27.2";
 // granted it for this build (their message: "yes"). Required so reset runs unattended.
 const PRISMA_CONSENT = "yes";
 
+/** Retries for the Docker probe, so one hiccup cannot silently cost a file's coverage. */
+const DOCKER_PROBE_ATTEMPTS = 3;
+/** Where Docker is expected, an unavailable daemon is a failure, not a skip. */
+const DOCKER_REQUIRED = process.env["REQUIRE_DOCKER"] === "1" || process.env["CI"] === "true";
+
 export interface Harness {
   container: StartedTestContainer;
   projectDir: string;
@@ -42,6 +47,43 @@ export interface Harness {
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- runtime-generated client, no static types exist
 export type TestPrismaClient = any;
+
+/**
+ * Whether Docker is usable, for the `describe.skipIf` every integration file guards itself with.
+ *
+ * `docker info` is retried, because a single hiccup from a busy daemon used to turn a whole
+ * file's tests into a silent skip while the run still reported green. That is coverage
+ * disappearing without anyone being told, which is the opposite of what these tests are for.
+ *
+ * Where Docker is supposed to exist, an unavailable daemon THROWS instead of skipping. CI runners
+ * ship Docker, so a skip there never means "no Docker available", it means something broke and
+ * the suite quietly proved nothing. Set `REQUIRE_DOCKER=1` to demand the same locally.
+ *
+ * @param whatIsNotVerified what the reader loses by this file being skipped, named concretely.
+ */
+export function dockerAvailable(whatIsNotVerified: string): boolean {
+  for (let attempt = 1; attempt <= DOCKER_PROBE_ATTEMPTS; attempt++) {
+    try {
+      execFileSync("docker", ["info"], { stdio: "ignore" });
+      return true;
+    } catch {
+      // Synchronous: the value is read at collection time, before any hook can await.
+      if (attempt < DOCKER_PROBE_ATTEMPTS) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
+    }
+  }
+
+  if (DOCKER_REQUIRED) {
+    throw new Error(
+      `[integration] Docker is required here (CI, or REQUIRE_DOCKER=1) but \`docker info\` failed ` +
+        `${DOCKER_PROBE_ATTEMPTS} times. Failing instead of skipping: ${whatIsNotVerified}`,
+    );
+  }
+  // Written straight to stderr, not console.warn: vitest buffers console output per test and
+  // drops it for a file whose tests are all skipped, which is precisely this case. The whole
+  // point is that a skip announces what it cost.
+  process.stderr.write(`\n[integration] SKIPPED: Docker is not available. ${whatIsNotVerified}\n`);
+  return false;
+}
 
 /** Ensure the package (incl. the generator binary) is built. */
 export function ensureBuilt(): void {
