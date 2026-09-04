@@ -106,15 +106,24 @@ function orderCaggs(caggs: readonly CaggConfig[]): CaggConfig[] {
   return sorted;
 }
 
-/** Canonicalize a state for comparison: stable object-key and array order, no undefineds. */
+/**
+ * Canonicalize a state for comparison: stable object-key and array order, no undefineds, and
+ * ONLY the fields that reach emitted SQL. `relations`, `columns`, and `model` drive the runtime
+ * registry, not migrations — a rename/@map-only change must not spawn a new (empty) migration.
+ */
 function canonicalState(schema: TimescaleSchema): ObjectsState {
   const hypertables = [...schema.hypertables]
     .sort((a, b) => byCodePoint(qualify(a.schema, a.table), qualify(b.schema, b.table)))
-    // Strip relations: they drive the runtime registry, not migrations — a relation-only
-    // change must not spawn a new migration.
-    .map(({ relations: _relations, ...rest }) => rest);
-  const continuousAggregates = orderCaggs(schema.continuousAggregates);
+    .map(({ relations: _relations, columns: _columns, model: _model, ...rest }) => rest);
+  const continuousAggregates = orderCaggs(schema.continuousAggregates).map(({ model: _model, ...rest }) => rest);
   return { hypertables, continuousAggregates };
+}
+
+/** A cagg's definition WITHOUT its refresh policy — what decides drop-and-recreate. The policy
+ * is managed separately (it can be removed/re-added without touching the materialized data). */
+function caggDefinition(c: CaggConfig): string {
+  const { refresh: _refresh, model: _model, ...definition } = c;
+  return stableStringify(definition);
 }
 
 /** Deep-stable JSON: object keys sorted, so equality is structural. */
@@ -183,13 +192,53 @@ function renderCreates(state: ObjectsState): string[] {
 function renderRemovals(previous: ObjectsState, current: ObjectsState): string[] {
   const parts: string[] = [];
 
-  const currentCaggs = new Set(current.continuousAggregates.map((c) => qualify(c.schema, c.name)));
-  // Reverse topological order so a dropped hierarchical child goes before its dropped parent.
-  for (const c of [...orderCaggs(previous.continuousAggregates)].reverse()) {
-    if (currentCaggs.has(qualify(c.schema, c.name))) continue;
+  const currentCaggByKey = new Map(current.continuousAggregates.map((c) => [qualify(c.schema, c.name), c]));
+  const prevCaggByKey = new Map(previous.continuousAggregates.map((c) => [qualify(c.schema, c.name), c]));
+
+  // Caggs to DROP: removed ones, CHANGED ones (CREATE ... IF NOT EXISTS would silently keep the
+  // old definition), and — transitively — every cagg whose source chain reaches a dropped one
+  // (a matview cannot outlive its source). Dropped-but-still-declared caggs are recreated by
+  // renderCreates in the same migration; their materialized data refills via policy/refresh.
+  const dropSet = new Set<string>();
+  for (const [key, prev] of prevCaggByKey) {
+    const cur = currentCaggByKey.get(key);
+    if (!cur) dropSet.add(key); // removed
+    else if (caggDefinition(prev) !== caggDefinition(cur)) dropSet.add(key); // changed
+  }
+  // Transitive dependents, over the union graph (a child may exist in either state).
+  const unionCaggs = new Map(prevCaggByKey);
+  for (const [key, c] of currentCaggByKey) if (!unionCaggs.has(key)) unionCaggs.set(key, c);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const [key, c] of unionCaggs) {
+      if (dropSet.has(key)) continue;
+      if (dropSet.has(qualify(c.sourceSchema, c.source))) {
+        dropSet.add(key);
+        grew = true;
+      }
+    }
+  }
+  // Reverse topological order so a dependent child is dropped before its parent.
+  for (const c of [...orderCaggs([...unionCaggs.values()])].reverse()) {
+    const key = qualify(c.schema, c.name);
+    if (!dropSet.has(key)) continue;
+    const reason = !currentCaggByKey.has(key) ? "Removed" : "Changed (drop + recreate; materialized data refills on refresh)";
     // Constraint 4: DROP MATERIALIZED VIEW, never DROP VIEW.
+    parts.push(`-- ${reason} continuous aggregate: ${key}\nDROP MATERIALIZED VIEW IF EXISTS ${qualifiedIdent(c.name, c.schema)};`);
+  }
+
+  // Surviving, unchanged caggs whose REFRESH POLICY changed or disappeared: the guarded create
+  // re-adds with if_not_exists, which keeps old parameters — remove the old policy first.
+  // (remove_continuous_aggregate_policy's idempotent flag is confusingly named if_not_exists.)
+  for (const [key, prev] of prevCaggByKey) {
+    if (dropSet.has(key)) continue;
+    const cur = currentCaggByKey.get(key);
+    if (!cur || !prev.refresh) continue;
+    if (cur.refresh && stableStringify(prev.refresh) === stableStringify(cur.refresh)) continue;
+    const rel = relationLiteral(cur.name, cur.schema);
     parts.push(
-      `-- Removed continuous aggregate: ${qualify(c.schema, c.name)}\nDROP MATERIALIZED VIEW IF EXISTS ${qualifiedIdent(c.name, c.schema)};`,
+      `-- ${cur.refresh ? "Changed" : "Removed"} refresh policy: ${key}\nDO $$ BEGIN\n  ${existenceGuard(rel)}\n  PERFORM remove_continuous_aggregate_policy(${rel}, if_not_exists => TRUE);\nEND $$;`,
     );
   }
 
@@ -207,16 +256,19 @@ function renderRemovals(previous: ObjectsState, current: ObjectsState): string[]
       );
       continue;
     }
-    if (prev.retention && !cur.retention) {
+    // A policy REMOVED or CHANGED both need the old one removed first: TimescaleDB never
+    // updates an existing policy whose parameters differ (if_not_exists keeps the old one with
+    // a NOTICE), so the guarded re-add in renderCreates only works on a clean slate.
+    if (prev.retention && (!cur.retention || stableStringify(prev.retention) !== stableStringify(cur.retention))) {
       parts.push(
-        `-- Removed retention policy: ${key}\nDO $$ BEGIN\n  ${guard}\n  PERFORM remove_retention_policy(${rel}, if_exists => TRUE);\nEND $$;`,
+        `-- ${cur.retention ? "Changed" : "Removed"} retention policy: ${key}\nDO $$ BEGIN\n  ${guard}\n  PERFORM remove_retention_policy(${rel}, if_exists => TRUE);\nEND $$;`,
       );
     }
-    if (prev.compression && !cur.compression) {
+    if (prev.compression && (!cur.compression || stableStringify(prev.compression) !== stableStringify(cur.compression))) {
       // remove_columnstore_policy is a PROCEDURE (CALL); leaves the columnstore enabled —
       // disabling fails once any chunk is compressed (same rationale as the builder's down).
       parts.push(
-        `-- Removed compression policy: ${key}\nDO $$ BEGIN\n  ${guard}\n  CALL remove_columnstore_policy(${rel}, if_exists => TRUE);\nEND $$;`,
+        `-- ${cur.compression ? "Changed" : "Removed"} compression policy: ${key}\nDO $$ BEGIN\n  ${guard}\n  CALL remove_columnstore_policy(${rel}, if_exists => TRUE);\nEND $$;`,
       );
     }
     const curSkip = new Set(cur.chunkSkipping ?? []);
@@ -240,6 +292,43 @@ export function objectsMigrationName(sequence: number): string {
 }
 
 /**
+ * Parse and validate a state-file's raw JSON. Returns undefined (never throws) for anything
+ * that is not a fully-shaped v1 state — a hand-edited file with a missing array would
+ * otherwise surface later as a TypeError deep inside the removal diff.
+ */
+export function parseGeneratorState(raw: string | undefined): GeneratorState | undefined {
+  if (raw === undefined) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as Partial<GeneratorState>;
+    if (
+      parsed.version === 1 &&
+      Number.isInteger(parsed.sequence) &&
+      (parsed.sequence as number) >= 1 &&
+      parsed.state !== null &&
+      typeof parsed.state === "object" &&
+      Array.isArray(parsed.state?.hypertables) &&
+      Array.isArray(parsed.state?.continuousAggregates)
+    ) {
+      return parsed as GeneratorState;
+    }
+  } catch {
+    // fall through
+  }
+  return undefined;
+}
+
+/** The highest existing `..._v000N` sequence among migration folder names (0 when none). */
+export function maxObjectsSequence(folderNames: readonly string[]): number {
+  const pattern = new RegExp(`^${OBJECTS_MIGRATION_PREFIX}_v(\\d{4,})$`);
+  let max = 0;
+  for (const name of folderNames) {
+    const m = pattern.exec(name);
+    if (m) max = Math.max(max, Number(m[1]));
+  }
+  return max;
+}
+
+/**
  * Build the migration files to ADD for a parsed schema, given the previously persisted state.
  *
  * - First run (no previous state) with timescale objects: the extension migration plus
@@ -250,15 +339,28 @@ export function objectsMigrationName(sequence: number): string {
  * - Changed state: one new `..._v<n+1>` migration with guarded creates for the full new state
  *   plus explicit removals for objects that disappeared.
  * - No timescale objects and no previous state: nothing to emit.
+ *
+ * `maxExistingSequence` is the highest `..._v000N` folder already on disk (0 when none): the
+ * next sequence never collides with it, so a lost or corrupt state file can never overwrite an
+ * applied versioned migration — recovery emits the FULL state as the next version instead.
  */
-export function emitMigrations(schema: TimescaleSchema, previous?: GeneratorState): EmitResult {
+export function emitMigrations(
+  schema: TimescaleSchema,
+  previous?: GeneratorState,
+  maxExistingSequence = 0,
+): EmitResult {
   const state = canonicalState(schema);
   const empty = state.hypertables.length === 0 && state.continuousAggregates.length === 0;
 
-  if (!previous && empty) return { files: {} };
+  const noHistory = !previous && maxExistingSequence === 0;
+  if (noHistory && empty) return { files: {} };
   if (previous && stableStringify(previous.state) === stableStringify(state)) return { files: {} };
+  // State file lost but versioned migrations exist, and the schema is empty: without the
+  // previous state there is nothing to diff removals against; emit nothing rather than a
+  // migration of pure guesses. (The normal empty case with intact state emits removals.)
+  if (!previous && empty) return { files: {} };
 
-  const sequence = (previous?.sequence ?? 0) + 1;
+  const sequence = Math.max(previous?.sequence ?? 0, maxExistingSequence) + 1;
   const files: FileMap = {};
 
   // The extension migration is fixed-name and content-stable; (re-)emitting it is a

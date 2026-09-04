@@ -53,9 +53,13 @@ export function createHypertableSql(config: HypertableConfig): MigrationSql {
   // Guarded form: skip when the table no longer exists (a later Prisma migration dropped it),
   // so an old migration snapshot replays cleanly on `migrate reset` — verified empirically
   // (PERFORM create_hypertable inside DO works; the guard skips on a missing relation).
+  // set_partitioning_interval re-asserts the chunk interval every apply: create_hypertable's
+  // if_not_exists never updates a LIVE hypertable's interval, so without it a changed
+  // chunkInterval would silently keep the old chunk size (a no-op when already equal).
   const guardedUp = `DO $$ BEGIN
   ${existenceGuard(rel)}
   PERFORM ${indentBody(convert)};${dimension ? `\n  PERFORM ${dimension};` : ""}
+  PERFORM set_partitioning_interval(${rel}, INTERVAL ${quoteLiteral(chunkInterval)});
 END $$;`;
 
   const down = `-- No separate un-hypertable step: dropping "${table}" (Prisma's own down) removes the hypertable.`;

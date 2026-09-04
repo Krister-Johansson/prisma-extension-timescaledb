@@ -5,7 +5,7 @@
 //
 // This file is intentionally NOT imported by the runtime entry (src/index.ts): the client
 // extension must work without the generator (CLAUDE.md resilience requirement).
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 // Default import (not named): @prisma/generator-helper is CommonJS, and Node's ESM loader
 // rejects named imports from it at runtime. Default import resolves to module.exports under
@@ -14,7 +14,14 @@ import generatorHelper from "@prisma/generator-helper";
 import { extractTimescaleSchema } from "./dmmf.js";
 
 const { generatorHandler } = generatorHelper;
-import { emitMigrations, STATE_FILE, type FileMap, type GeneratorState } from "./emit-migrations.js";
+import {
+  emitMigrations,
+  maxObjectsSequence,
+  parseGeneratorState,
+  STATE_FILE,
+  type FileMap,
+  type GeneratorState,
+} from "./emit-migrations.js";
 import { emitTypes } from "./emit-types.js";
 
 const DEFAULT_OUTPUT = "node_modules/.prisma-extension-timescaledb";
@@ -53,9 +60,14 @@ generatorHandler({
         : join(schemaDir, "migrations");
 
     // Previous emitted state, so a changed schema appends the NEXT versioned objects migration
-    // and an unchanged one is a byte-stable no-op. A missing/corrupt file means "no history":
-    // the emitted v1 (or v-next) re-asserts the full state idempotently either way.
-    const { files, nextState } = emitMigrations(schema, readState(join(migrationsDir, STATE_FILE)));
+    // and an unchanged one is a byte-stable no-op. On a missing/corrupt state file, the highest
+    // existing ..._v000N folder pins the next sequence, so recovery re-asserts the full state
+    // as a NEW migration and never overwrites an applied one.
+    const { files, nextState } = emitMigrations(
+      schema,
+      readState(join(migrationsDir, STATE_FILE)),
+      maxObjectsSequence(listDir(migrationsDir)),
+    );
     writeFileMap(migrationsDir, files);
     if (nextState) {
       mkdirSync(migrationsDir, { recursive: true });
@@ -65,22 +77,29 @@ generatorHandler({
   },
 });
 
-/** Read and minimally validate the generator state file; undefined when absent or unusable. */
+/** Read the generator state file; undefined (with a warning) when absent or unusable. The
+ * shape validation lives in parseGeneratorState so it is unit-testable without a filesystem. */
 function readState(path: string): GeneratorState | undefined {
   let raw: string;
   try {
     raw = readFileSync(path, "utf8");
   } catch {
-    return undefined;
+    return undefined; // no file — first run, or pre-v1 project
   }
+  const state = parseGeneratorState(raw);
+  if (state === undefined) {
+    console.warn(
+      `prisma-extension-timescaledb: ignoring unreadable state file at ${path}; re-asserting the full state as a new migration.`,
+    );
+  }
+  return state;
+}
+
+/** Directory entries of `dir`, or empty when it does not exist yet. */
+function listDir(dir: string): string[] {
   try {
-    const parsed = JSON.parse(raw) as Partial<GeneratorState>;
-    if (parsed.version === 1 && Number.isInteger(parsed.sequence) && parsed.state) {
-      return parsed as GeneratorState;
-    }
+    return readdirSync(dir);
   } catch {
-    // fall through
+    return [];
   }
-  console.warn(`prisma-extension-timescaledb: ignoring unreadable state file at ${path}; re-asserting full state.`);
-  return undefined;
 }
