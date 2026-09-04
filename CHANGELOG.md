@@ -1,5 +1,41 @@
 # Changelog
 
+## [1.0.0](https://github.com/Krister-Johansson/prisma-extension-timescaledb/compare/prisma-extension-timescaledb-v0.8.0...prisma-extension-timescaledb-v1.0.0) (2026-09-04)
+
+
+### ⚠ BREAKING CHANGES
+
+* **generator:** append-only versioned migrations for schema evolution ([#122](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/122))
+* **client:** bind $timescale to the calling client so transactions apply ([#118](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/118))
+
+### Features
+
+* **client:** support implicit many-to-many relations in timeBucket filters ([#120](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/120)) ([47694f9](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/47694f9c16ef144a25a1167e65d7cea60bf652ea))
+* **generator:** append-only versioned migrations for schema evolution ([#122](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/122)) ([928aae1](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/928aae1a7e6cae7953bd9b986116a5204f838399))
+* **generator:** fail loudly on unknown annotations + no-any cleanup + CodeRabbit config ([#61](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/61)) ([c7a4253](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/c7a42537239348110ae5bf3ac6d8c06f8593c594))
+* **generator:** validate the time column is in every PK / unique constraint ([#62](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/62)) ([7b9dc85](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/7b9dc85acf30ce94a37d1892300302cd73a7b612))
+
+
+### Bug Fixes
+
+* **ci:** scorecard caller permissions map + shared-configs v1.1.3 ([#66](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/66)) ([de691e9](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/de691e9fab55cb3c093d40c01cedd90c4adcc1af))
+* **client:** accept the relation null shorthand in timeBucket where ([#110](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/110)) ([805db2a](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/805db2aba142353caa396a0427aee8f5c29a6cd4))
+* **client:** bind $timescale to the calling client so transactions apply ([#118](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/118)) ([e31b976](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/e31b9767b4f46b6b31833de22ae02eb2d9991e97))
+* **client:** correct four $timescale defects and dedupe interval rendering ([#112](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/112)) ([afe279e](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/afe279ed72781947932c329ff9b4a5bfe6dca58a))
+* **client:** honor mode: insensitive for equals/not/in/notIn/comparisons in timeBucket where ([#59](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/59)) ([6cb98b9](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/6cb98b96c51b1906c7c5985431b207bd434d854e))
+* **client:** match Prisma semantics for top-level NOT array in timeBucket where ([#57](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/57)) ([4161c6b](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/4161c6b4bd1ce2fe6cda80c87bd43040e8c94f15))
+* export the timeBucket types from the package root ([#116](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/116)) ([4f64380](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/4f64380e528fb5fe9d1b54a507d774d0e551065d))
+* **generator:** close the review gaps in the versioned-migrations design ([#126](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/126)) ([c714b90](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/c714b90bf262f4b8d5d6e47701388a738b11ab4d))
+* **generator:** name the model/field in annotation parse errors ([#67](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/67)) ([87f9b3e](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/87f9b3eebf9cc1f44ba0b6457519ae12abc7626f))
+* **generator:** stop parsing parenthesized doc prose as annotation arguments ([#114](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/114)) ([27fdd4a](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/27fdd4a88a7a33b6895c4265449d0e84f4887e75))
+* **generator:** treat enums as columns, validate chunkSkipping types, reject unannotated cagg fields ([#108](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/108)) ([b670e5d](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/b670e5df01fd58796b0f3a29e966f14f022a50a7))
+* group by expressions, not output aliases, in timeBucket and cagg SQL ([#60](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/60)) ([be39f05](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/be39f05de0a37fbd43e2f023d32d4ac637ec14ed))
+
+
+### Performance Improvements
+
+* **client:** memoize the timeBucket relation lookup maps ([#124](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/124)) ([b8caa38](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/b8caa38c9385bd3079b2fbe06f87b3c07337e0fc))
+
 ## [0.8.0](https://github.com/Krister-Johansson/prisma-extension-timescaledb/compare/prisma-extension-timescaledb-v0.7.0...prisma-extension-timescaledb-v0.8.0) (2026-06-17)
 
 
