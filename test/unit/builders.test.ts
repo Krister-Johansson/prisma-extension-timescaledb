@@ -52,8 +52,9 @@ BEGIN
   PERFORM create_hypertable(
     '"SensorReading"',
     by_range('time', INTERVAL '1 day'),
-    if_not_exists => TRUE,
-    migrate_data  => TRUE
+    if_not_exists          => TRUE,
+    migrate_data           => TRUE,
+    create_default_indexes => FALSE
   );
   PERFORM set_partitioning_interval('"SensorReading"', INTERVAL '1 day');
 END $$;`);
@@ -65,9 +66,17 @@ END $$;`);
   });
 
   it("is idempotent and passes the relation as a quoted string literal", () => {
-    expect(sql.up).toContain("if_not_exists => TRUE");
-    expect(sql.up).toContain("migrate_data  => TRUE");
+    expect(sql.up).toContain("if_not_exists          => TRUE");
+    expect(sql.up).toContain("migrate_data           => TRUE");
     expect(sql.up).toContain(`'"SensorReading"'`);
+  });
+
+  // TimescaleDB's own index on the time column is invisible to Prisma, which then writes a
+  // DROP INDEX migration for it. That migration sorts BEFORE the conversion, so the next
+  // `migrate reset` replays the drop against an index nothing has created yet and dies.
+  it("leaves index creation to the Prisma schema (create_default_indexes => FALSE)", () => {
+    expect(sql.up).toContain("create_default_indexes => FALSE");
+    expect(sql.guardedUp).toContain("create_default_indexes => FALSE");
   });
 
   it("defaults chunkInterval to 7 days when omitted", () => {

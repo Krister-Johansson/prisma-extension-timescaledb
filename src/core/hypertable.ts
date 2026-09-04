@@ -13,6 +13,8 @@ const DEFAULT_CHUNK_INTERVAL = "7 days";
  * - `by_range(...)` is the modern dimension builder; the interval comes from `chunkInterval`
  *   (default `"7 days"`).
  * - `if_not_exists => TRUE, migrate_data => TRUE` make replay safe (constraints 3, 6).
+ * - `create_default_indexes => FALSE` leaves the Prisma schema as the only source of truth for
+ *   the table's indexes (see the comment on the call below).
  *
  * Down: dropping the table (Prisma's own down) removes the hypertable, so there is no
  * separate "un-hypertable" step (SPEC §2.2).
@@ -27,11 +29,26 @@ export function createHypertableSql(config: HypertableConfig): MigrationSql {
   assertInterval(chunkInterval);
 
   const rel = relationLiteral(table, schema);
+  // Default indexes are off on purpose. Left on, `create_hypertable` adds its own index on the
+  // time column (`<table>_<column>_idx`) whenever no index already starts with that column.
+  // Prisma does not know about it, so the next `prisma migrate dev` (`--create-only` included)
+  // writes a migration that drops it:
+  //
+  //   -- DropIndex
+  //   DROP INDEX "measurements_time_idx";
+  //
+  // That migration carries a real timestamp, so it sorts BEFORE the objects migration that does
+  // the conversion. On the next `migrate reset` the drop runs first, against an index nothing has
+  // created yet, and the replay dies with `index "measurements_time_idx" does not exist`: the
+  // reset-safety guarantee broken by an index the user never asked for. With default indexes off,
+  // the Prisma schema is the only thing that creates indexes on the table and there is nothing for
+  // Prisma to read as drift. Declare `@@index([time])` on the model to keep an index on it.
   const convert = `create_hypertable(
   ${rel},
   by_range(${quoteLiteral(column)}, INTERVAL ${quoteLiteral(chunkInterval)}),
-  if_not_exists => TRUE,
-  migrate_data  => TRUE
+  if_not_exists          => TRUE,
+  migrate_data           => TRUE,
+  create_default_indexes => FALSE
 )`;
 
   // Optional hash space dimension: a second partitioning dimension on `column`, added AFTER the

@@ -48,7 +48,6 @@ model Measurement {
   sequence        Int
 
   @@id([signalMappingId, time])
-  @@index([time])
   @@map("measurements")
   @@schema("${SCHEMA}")
 }
@@ -77,12 +76,6 @@ CREATE TABLE "${SCHEMA}"."measurements" (
 
     CONSTRAINT "measurements_pkey" PRIMARY KEY ("signal_mapping_id","time")
 );
-
--- CreateIndex
--- create_hypertable() adds this index itself when it is missing, and Prisma's next
--- \`migrate dev\` would then generate a DROP INDEX for an index its schema does not know
--- about. Declaring it keeps the two in sync.
-CREATE INDEX "measurements_time_idx" ON "${SCHEMA}"."measurements"("time");
 `;
 
 /** Everything the generated migration is supposed to have created, counted in one round trip. */
@@ -285,7 +278,6 @@ model Measurement {
   sequence        Int
 
   @@id([signalMappingId, time])
-  @@index([time])
   @@map("measurements")
   @@schema("${SCHEMA}")
 }

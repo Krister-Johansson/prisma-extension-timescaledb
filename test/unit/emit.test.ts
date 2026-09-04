@@ -194,8 +194,9 @@ describe("emitMigrations (append-only versioned objects migrations)", () => {
         PERFORM create_hypertable(
           '"SensorReading"',
           by_range('time', INTERVAL '1 day'),
-          if_not_exists => TRUE,
-          migrate_data  => TRUE
+          if_not_exists          => TRUE,
+          migrate_data           => TRUE,
+          create_default_indexes => FALSE
         );
         PERFORM set_partitioning_interval('"SensorReading"', INTERVAL '1 day');
       END $$;

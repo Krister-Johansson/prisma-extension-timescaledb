@@ -128,6 +128,13 @@ an unchanged schema writes nothing. The generator keeps its state in
 `migrations/.prisma-extension-timescaledb.json`; commit that file with your
 migrations.
 
+Indexes on a hypertable come from your Prisma schema and nowhere else. The
+generated conversion passes `create_default_indexes => FALSE`, because the
+index TimescaleDB would otherwise add on the time column is invisible to
+Prisma: `migrate dev` writes a `DROP INDEX` migration for it, and that
+migration then breaks the next `migrate reset`. Add `@@index([time])` to the
+model to keep an index on the time column alone.
+
 ```ts
 import { PrismaClient } from "./client/client.js";
 import { PrismaPg } from "@prisma/adapter-pg";
