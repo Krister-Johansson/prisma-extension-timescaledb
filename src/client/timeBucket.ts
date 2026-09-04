@@ -329,6 +329,45 @@ function aggregateExpr(
  * `columns` maps Prisma field names (used in args) to DB column names (@map); output columns
  * keep the Prisma field names so the inferred result row shape is unchanged.
  */
+// Per-registry cache for the field -> RuntimeRelation lookup maps. Weak so a discarded
+// extension instance (tests create many) does not pin its registry.
+const RELMAPS_CACHE = new WeakMap<object, Map<string, Map<string, RuntimeRelation>>>();
+
+/** Build (or reuse) every model's field -> RuntimeRelation map for a relations registry. */
+function relMapsFor(
+  relationsByModel: ReadonlyMap<string, readonly RelationConfig[]>,
+): Map<string, Map<string, RuntimeRelation>> {
+  const cached = RELMAPS_CACHE.get(relationsByModel);
+  if (cached) return cached;
+  const relMaps = new Map<string, Map<string, RuntimeRelation>>();
+  for (const [m, rels] of relationsByModel) {
+    const fieldMap = new Map<string, RuntimeRelation>();
+    for (const r of rels) {
+      fieldMap.set(r.field, {
+        table: qualifiedIdent(r.table, r.schema),
+        list: r.list,
+        on: r.on,
+        ...(r.columns ? { columns: r.columns } : {}),
+        ...(r.fk ? { fk: r.fk } : {}),
+        ...(r.targetModel ? { targetModel: r.targetModel } : {}),
+        ...(r.required ? { required: true } : {}),
+        ...(r.through
+          ? {
+              through: {
+                table: qualifiedIdent(r.through.table, r.through.schema),
+                outerColumn: r.through.outerColumn,
+                relatedColumn: r.through.relatedColumn,
+              },
+            }
+          : {}),
+      });
+    }
+    relMaps.set(m, fieldMap);
+  }
+  RELMAPS_CACHE.set(relationsByModel, relMaps);
+  return relMaps;
+}
+
 export function buildTimeBucketQuery(
   table: string,
   timeColumn: string,
@@ -529,34 +568,12 @@ export function buildTimeBucketQuery(
     select.push(`${aggregateExpr(SQL_FN[fn] ?? fn, src, outputAs, fill, gapfill, resultName, distinct === true)} AS ${alias}`);
   }
 
-  // Relation-filter lookup (some/none/every/is/isNot -> EXISTS). Precompute every model's
-  // field -> RuntimeRelation map once: the entry model drives the top level, and `relationsOf`
-  // resolves relations reached THROUGH a relation (nested filters) by the related model's name.
-  const relMaps = new Map<string, Map<string, RuntimeRelation>>();
-  for (const [m, rels] of relationsByModel) {
-    const fieldMap = new Map<string, RuntimeRelation>();
-    for (const r of rels) {
-      fieldMap.set(r.field, {
-        table: qualifiedIdent(r.table, r.schema),
-        list: r.list,
-        on: r.on,
-        ...(r.columns ? { columns: r.columns } : {}),
-        ...(r.fk ? { fk: r.fk } : {}),
-        ...(r.targetModel ? { targetModel: r.targetModel } : {}),
-        ...(r.required ? { required: true } : {}),
-        ...(r.through
-          ? {
-              through: {
-                table: qualifiedIdent(r.through.table, r.through.schema),
-                outerColumn: r.through.outerColumn,
-                relatedColumn: r.through.relatedColumn,
-              },
-            }
-          : {}),
-      });
-    }
-    relMaps.set(m, fieldMap);
-  }
+  // Relation-filter lookup (some/none/every/is/isNot -> EXISTS): the entry model drives the
+  // top level, and `relationsOf` resolves relations reached THROUGH a relation (nested
+  // filters) by the related model's name. Memoized per registry map — it is immutable after
+  // timescaledb() builds it, and rebuilding O(models x relations) Maps, objects, and
+  // qualified-identifier strings on every timeBucket call was pure allocation churn.
+  const relMaps = relMapsFor(relationsByModel);
   const relationsOf = (m: string): ((f: string) => RuntimeRelation | undefined) | undefined => {
     const fieldMap = relMaps.get(m);
     return fieldMap ? (f: string) => fieldMap.get(f) : undefined;
