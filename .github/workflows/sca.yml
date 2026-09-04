@@ -23,4 +23,18 @@ jobs:
       - name: Audit production dependencies (fail on high or critical)
         # --registry pins the advisory source: a PR-supplied .npmrc must not be
         # able to point the audit at a registry that returns no advisories.
-        run: npm audit --registry=https://registry.npmjs.org/ --omit=dev --audit-level=high
+        # Three attempts with backoff: npm's advisory endpoint intermittently
+        # times out ("audit endpoint returned an error"), and a transient
+        # network failure must not read as a vulnerability finding. A REAL
+        # finding fails all three attempts identically.
+        run: |
+          for attempt in 1 2 3; do
+            if npm audit --registry=https://registry.npmjs.org/ --omit=dev --audit-level=high; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "npm audit attempt $attempt failed; retrying in $((attempt * 30))s"
+              sleep $((attempt * 30))
+            fi
+          done
+          exit 1

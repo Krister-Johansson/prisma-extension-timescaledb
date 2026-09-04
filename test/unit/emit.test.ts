@@ -8,6 +8,8 @@ import { extractTimescaleSchema, type TimescaleSchema } from "../../src/generato
 import {
   emitMigrations,
   objectsMigrationName,
+  maxObjectsSequence,
+  parseGeneratorState,
   EXTENSION_MIGRATION,
   OBJECTS_MIGRATION_PREFIX,
   type GeneratorState,
@@ -140,6 +142,7 @@ describe("emitMigrations (append-only versioned objects migrations)", () => {
           if_not_exists => TRUE,
           migrate_data  => TRUE
         );
+        PERFORM set_partitioning_interval('"SensorReading"', INTERVAL '1 day');
       END $$;
 
       -- Continuous aggregate: SensorHourly
@@ -438,5 +441,198 @@ model Device {
     expect(source).toContain(`"relationsByModel"`);
     expect(source).toContain(`"targetModel": "Reading"`); // Device.readings -> Reading, for nesting
     expect(typeCheck(source)).toEqual([]);
+  });
+});
+
+describe("emitMigrations — review follow-up behaviors", () => {
+  const V2 = `${objectsMigrationName(2)}/migration.sql`;
+
+  it("registry-only changes (model rename, @map columns) do not spawn a migration", async () => {
+    const schema = await loadSchema();
+    const first = emitMigrations(schema);
+    const renamed: typeof schema = {
+      ...schema,
+      hypertables: schema.hypertables.map((h) => ({ ...h, model: "RenamedModel", columns: { deviceId: "device_id" } })),
+      continuousAggregates: schema.continuousAggregates.map((c) => ({ ...c, model: "RenamedView" })),
+    };
+    expect(emitMigrations(renamed, first.nextState).files).toEqual({});
+  });
+
+  it("a CHANGED cagg is dropped and recreated; its dependents are dropped first", async () => {
+    const dmmf = await getDMMF({
+      datamodel: `
+generator client {
+  provider = "prisma-client"
+  output = "../generated/prisma"
+  previewFeatures = ["views"]
+}
+datasource db {
+  provider = "postgresql"
+}
+
+/// @timescale.hypertable(column: "time", chunkInterval: "1 day")
+model SensorReading {
+  time        DateTime
+  temperature Float
+  @@id([time])
+}
+
+/// @timescale.continuousAggregate(source: "SensorReading", bucket: "1 hour", timeColumn: "time")
+view Hourly {
+  bucket  DateTime /// @timescale.bucket
+  avgTemp Float    /// @timescale.aggregate(fn: "avg", column: "temperature")
+  @@unique([bucket])
+}
+
+/// @timescale.continuousAggregate(source: "Hourly", bucket: "1 day", timeColumn: "bucket")
+view Daily {
+  bucket  DateTime /// @timescale.bucket
+  avgTemp Float    /// @timescale.aggregate(fn: "avg", column: "avgTemp")
+  @@unique([bucket])
+}
+`,
+    });
+    const schema = extractTimescaleSchema(dmmf);
+    const first = emitMigrations(schema);
+    // Change the PARENT cagg's bucket: it and its dependent Daily must be dropped, child first.
+    const changed: typeof schema = {
+      ...schema,
+      continuousAggregates: schema.continuousAggregates.map((c) =>
+        c.name === "Hourly" ? { ...c, bucket: "2 hours" as (typeof c)["bucket"] } : c,
+      ),
+    };
+    const v2 = emitMigrations(changed, first.nextState).files[V2]!;
+    const dropDaily = v2.indexOf(`DROP MATERIALIZED VIEW IF EXISTS "Daily";`);
+    const dropHourly = v2.indexOf(`DROP MATERIALIZED VIEW IF EXISTS "Hourly";`);
+    expect(dropDaily).toBeGreaterThanOrEqual(0);
+    expect(dropHourly).toBeGreaterThanOrEqual(0);
+    expect(dropDaily).toBeLessThan(dropHourly); // child before parent
+    // Both are recreated after the drops (creates section re-asserts the full state),
+    // the dependent included — dropping Daily without recreating it would lose the view.
+    expect(v2.indexOf(`CREATE MATERIALIZED VIEW IF NOT EXISTS "Hourly"`)).toBeGreaterThan(dropHourly);
+    expect(v2.indexOf(`CREATE MATERIALIZED VIEW IF NOT EXISTS "Daily"`)).toBeGreaterThan(dropHourly);
+    expect(v2).toContain("2 hours");
+  });
+
+  it("a changed or removed refresh policy on an UNCHANGED cagg removes the old policy without dropping the view", async () => {
+    const schema = await loadSchema(); // SensorHourly has a refresh policy
+    const first = emitMigrations(schema);
+    const withoutRefresh: typeof schema = {
+      ...schema,
+      continuousAggregates: schema.continuousAggregates.map(({ refresh: _refresh, ...rest }) => rest),
+    };
+    const v2 = emitMigrations(withoutRefresh, first.nextState).files[V2]!;
+    expect(v2).toContain(`PERFORM remove_continuous_aggregate_policy('"SensorHourly"', if_not_exists => TRUE);`);
+    expect(v2).not.toContain(`DROP MATERIALIZED VIEW IF EXISTS "SensorHourly"`);
+  });
+
+  it("a changed retention policy is removed before the new one is re-added", async () => {
+    const dmmf = await getDMMF({
+      datamodel: `
+generator client {
+  provider = "prisma-client"
+  output = "../generated/prisma"
+  previewFeatures = ["views"]
+}
+datasource db {
+  provider = "postgresql"
+}
+
+/// @timescale.hypertable(column: "time", chunkInterval: "1 day")
+/// @timescale.retention(dropAfter: "30 days")
+model SensorReading {
+  time DateTime
+  @@id([time])
+}
+`,
+    });
+    const schema = extractTimescaleSchema(dmmf);
+    const first = emitMigrations(schema);
+    const changed: typeof schema = {
+      ...schema,
+      hypertables: schema.hypertables.map((h) => ({
+        ...h,
+        retention: { dropAfter: "60 days" as NonNullable<(typeof h)["retention"]>["dropAfter"] },
+      })),
+    };
+    const v2 = emitMigrations(changed, first.nextState).files[V2]!;
+    const remove = v2.indexOf(`remove_retention_policy('"SensorReading"', if_exists => TRUE)`);
+    const add = v2.indexOf(`add_retention_policy('"SensorReading"', drop_after => INTERVAL '60 days'`);
+    expect(remove).toBeGreaterThanOrEqual(0);
+    expect(add).toBeGreaterThan(remove);
+  });
+
+  it("the guarded hypertable block re-asserts the chunk interval (converges after a change)", async () => {
+    const schema = await loadSchema();
+    const v1 = emitMigrations(schema).files[`${objectsMigrationName(1)}/migration.sql`]!;
+    expect(v1).toContain(`PERFORM set_partitioning_interval('"SensorReading"', INTERVAL '1 day');`);
+  });
+
+  it("a lost state file never reuses an existing version number (recovery appends)", async () => {
+    const schema = await loadSchema();
+    // No previous state, but v0001..v0003 already exist on disk.
+    const { files, nextState } = emitMigrations(schema, undefined, 3);
+    expect(Object.keys(files)).toContain(`${objectsMigrationName(4)}/migration.sql`);
+    expect(nextState?.sequence).toBe(4);
+    // Recovery has no previous state to diff against: full re-assert, no removals.
+    expect(files[`${objectsMigrationName(4)}/migration.sql`]).not.toContain("DROP MATERIALIZED VIEW");
+  });
+
+  it("parseGeneratorState rejects malformed shapes instead of passing them through", async () => {
+    const schema = await loadSchema();
+    const good = emitMigrations(schema).nextState!;
+    expect(parseGeneratorState(JSON.stringify(good))).toEqual(good);
+    expect(parseGeneratorState(undefined)).toBeUndefined();
+    expect(parseGeneratorState("not json")).toBeUndefined();
+    expect(parseGeneratorState(JSON.stringify({ version: 1, sequence: 1 }))).toBeUndefined(); // no state
+    expect(
+      parseGeneratorState(JSON.stringify({ version: 1, sequence: 1, state: { hypertables: [] } })), // no caggs array
+    ).toBeUndefined();
+    expect(
+      parseGeneratorState(JSON.stringify({ version: 2, sequence: 1, state: { hypertables: [], continuousAggregates: [] } })),
+    ).toBeUndefined(); // unknown version
+    expect(parseGeneratorState(JSON.stringify({ version: 1, sequence: 0, state: { hypertables: [], continuousAggregates: [] } }))).toBeUndefined();
+  });
+
+  it("maxObjectsSequence reads the highest versioned folder and ignores everything else", () => {
+    expect(maxObjectsSequence([])).toBe(0);
+    expect(
+      maxObjectsSequence([
+        "20260101000000_init",
+        "00000000000000_timescaledb_extension",
+        "99999999999999_timescaledb_objects", // pre-v1 legacy: not versioned
+        "99999999999999_timescaledb_objects_v0001",
+        "99999999999999_timescaledb_objects_v0012",
+        ".prisma-extension-timescaledb.json",
+      ]),
+    ).toBe(12);
+  });
+});
+
+describe("emitMigrations — second-round review behaviors", () => {
+  it("rejects state files with malformed ENTRIES, not just malformed containers", () => {
+    const base = { version: 1, sequence: 1 };
+    expect(
+      parseGeneratorState(JSON.stringify({ ...base, state: { hypertables: [null], continuousAggregates: [] } })),
+    ).toBeUndefined();
+    expect(
+      parseGeneratorState(JSON.stringify({ ...base, state: { hypertables: [{ table: "T" }], continuousAggregates: [] } })),
+    ).toBeUndefined(); // hypertable entry missing column
+    expect(
+      parseGeneratorState(
+        JSON.stringify({ ...base, state: { hypertables: [], continuousAggregates: [{ name: "V", source: "T" }] } }),
+      ),
+    ).toBeUndefined(); // cagg entry missing aggregates
+  });
+
+  it("a legacy state file carrying registry-only fields does not read as a change", async () => {
+    const schema = await loadSchema();
+    const { nextState } = emitMigrations(schema);
+    // Simulate a state persisted before canonicalState stripped model/columns.
+    const legacy: GeneratorState = JSON.parse(JSON.stringify(nextState)) as GeneratorState;
+    (legacy.state.hypertables[0] as { model?: string; columns?: Record<string, string> }).model = "SensorReading";
+    (legacy.state.hypertables[0] as { model?: string; columns?: Record<string, string> }).columns = { deviceId: "device_id" };
+    (legacy.state.continuousAggregates[0] as { model?: string }).model = "SensorHourly";
+    expect(emitMigrations(schema, legacy).files).toEqual({});
   });
 });
