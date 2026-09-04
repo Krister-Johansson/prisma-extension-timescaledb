@@ -12,7 +12,7 @@ import {
   type TimeBucketRuntimeArgs,
 } from "./timeBucket.js";
 import { makeManage, type RawClient, type TimescaleManage } from "./manage.js";
-import { memoizeFnPrefix, type FnPrefix } from "./searchPath.js";
+import { createPrefixResolver } from "./searchPath.js";
 
 /** Manual configuration accepted by `timescaledb()` (also satisfied by the generated registry). */
 export interface TimescaleConfig {
@@ -108,36 +108,6 @@ export function timescaledb<const C extends TimescaleConfig = TimescaleConfig>(c
     caggViewByModel.set(c.model ?? c.name, { name: c.name, ...(c.schema !== undefined ? { schema: c.schema } : {}) });
   }
 
-  /**
-   * The `model.timeBucket(...)` method: resolve the model to its hypertable config, build the
-   * parameterized query (incl. where / relation filters), and run it via `$queryRawUnsafe`.
-   */
-  const timeBucket = async function (this: unknown, args: TimeBucketRuntimeArgs) {
-    const ctx = Prisma.getExtensionContext(this);
-    const model = ctx.$name;
-    if (typeof model !== "string") {
-      throw new Error("timeBucket: could not resolve the model name from the extension context.");
-    }
-    const ht = hypertableByModel.get(model);
-    if (!ht) {
-      throw new Error(
-        `timeBucket: "${model}" is not a registered hypertable. Pass it via timescaledb({ hypertables: [...] }) or run the generator.`,
-      );
-    }
-    assertInterval(args.bucket);
-    const client = ctx.$parent as UnsafeRawClient;
-    const prefix = await resolvePrefix(client);
-    const { sql, params } = buildTimeBucketQuery(
-      ht.table, ht.column, args, ht.columns, ht.schema, relationsByModel, model, prefix,
-    );
-    return client.$queryRawUnsafe(sql, ...params);
-  } as unknown as TimeBucketMethod;
-
-  // Where TimescaleDB's functions live, probed once and reused. Keyed on the client the
-  // extension was applied to rather than the executing one, so a transaction client does not
-  // pay a probe of its own: connections from one pool share the search path that decides it.
-  let probe: (() => Promise<FnPrefix>) | undefined;
-  const resolvePrefix = (fallback: RawClient): Promise<FnPrefix> => (probe ?? memoizeFnPrefix(fallback))();
 
   // One namespace per executing client, keyed weakly so transaction clients can be collected.
   const manageCache = new WeakMap<
@@ -146,7 +116,36 @@ export function timescaledb<const C extends TimescaleConfig = TimescaleConfig>(c
   >();
 
   return Prisma.defineExtension((client) => {
-    probe ??= memoizeFnPrefix(client as unknown as RawClient);
+    // Per application, not per timescaledb(config) call: one extension can be applied to several
+    // base clients, and two clients can have different search paths. Transaction clients derived
+    // from this one share the answer rather than probing again.
+    const resolvePrefix = createPrefixResolver();
+
+    /**
+     * The `model.timeBucket(...)` method: resolve the model to its hypertable config, build the
+     * parameterized query (incl. where / relation filters), and run it via `$queryRawUnsafe`.
+     */
+    const timeBucket = async function (this: unknown, args: TimeBucketRuntimeArgs) {
+      const ctx = Prisma.getExtensionContext(this);
+      const model = ctx.$name;
+      if (typeof model !== "string") {
+        throw new Error("timeBucket: could not resolve the model name from the extension context.");
+      }
+      const ht = hypertableByModel.get(model);
+      if (!ht) {
+        throw new Error(
+          `timeBucket: "${model}" is not a registered hypertable. Pass it via timescaledb({ hypertables: [...] }) or run the generator.`,
+        );
+      }
+      assertInterval(args.bucket);
+      const client = ctx.$parent as UnsafeRawClient;
+      const prefix = await resolvePrefix(client);
+      const { sql, params } = buildTimeBucketQuery(
+        ht.table, ht.column, args, ht.columns, ht.schema, relationsByModel, model, prefix,
+      );
+      return client.$queryRawUnsafe(sql, ...params);
+    } as unknown as TimeBucketMethod;
+
     return client.$extends({
       name: "prisma-extension-timescaledb",
       model: {

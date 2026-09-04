@@ -704,6 +704,10 @@ describe("makeManage: schema-qualified function names", () => {
     await manage.showChunks("SensorReading");
     await manage.compressChunk("_timescaledb_internal._hyper_1_1_chunk");
     await manage.decompressChunk("_timescaledb_internal._hyper_1_1_chunk");
+    await manage.hypertableDetailedSize("SensorReading");
+    await manage.compressionStats("SensorReading");
+    await manage.enableChunkSkipping("SensorReading", "seq");
+    await manage.disableChunkSkipping("SensorReading", "seq");
 
     const expected = [
       "refresh_continuous_aggregate",
@@ -723,6 +727,12 @@ describe("makeManage: schema-qualified function names", () => {
       "show_chunks",
       "compress_chunk",
       "decompress_chunk",
+      // Reached through a FROM clause and through a shared DO-block helper rather than a
+      // `SELECT <fn>(` of their own, which is how they were missed the first time.
+      "hypertable_detailed_size",
+      "hypertable_columnstore_stats",
+      "enable_chunk_skipping",
+      "disable_chunk_skipping",
     ];
     const all = sql.join("\n");
     for (const fn of expected) {
@@ -731,6 +741,61 @@ describe("makeManage: schema-qualified function names", () => {
       // means a missed call site.
       expect(all.includes(`CALL ${fn}(`) || all.includes(`SELECT ${fn}(`) || all.includes(`FROM ${fn}(`)).toBe(false);
     }
+  });
+
+  // The list above is only as good as someone remembering to extend it. This reads the SQL back
+  // and fails on ANY TimescaleDB name that reached the wire without a schema in front of it,
+  // whatever syntax carried it there.
+  it("leaves no TimescaleDB function unqualified, whatever syntax reaches it", async () => {
+    const { sql, manage } = capturing();
+    for (const call of [
+      () => manage.refreshContinuousAggregate("SensorHourly"),
+      () => manage.addRetentionPolicy("SensorReading", { dropAfter: "30 days" }),
+      () => manage.removeRetentionPolicy("SensorReading"),
+      () => manage.addCompressionPolicy("SensorReading", { after: "7 days" }),
+      () => manage.removeCompressionPolicy("SensorReading"),
+      () => manage.dropChunks("SensorReading", { olderThan: "1 day" }),
+      () => manage.hypertableSize("SensorReading"),
+      () => manage.hypertableDetailedSize("SensorReading"),
+      () => manage.compressionStats("SensorReading"),
+      () => manage.approximateRowCount("SensorReading"),
+      () => manage.setChunkInterval("SensorReading", "12 hours"),
+      () => manage.alterJob(1, { scheduleInterval: "1 hour" }),
+      () => manage.deleteJob(1),
+      () => manage.runJob(1),
+      () => manage.listJobs(),
+      () => manage.jobStats(),
+      () => manage.jobErrors(),
+      () => manage.showChunks("SensorReading"),
+      () => manage.compressChunk("_timescaledb_internal._hyper_1_1_chunk"),
+      () => manage.decompressChunk("_timescaledb_internal._hyper_1_1_chunk"),
+      () => manage.enableChunkSkipping("SensorReading", "seq"),
+      () => manage.disableChunkSkipping("SensorReading", "seq"),
+      () => manage.addContinuousAggregatePolicy("SensorHourly", {
+        startOffset: "1 month",
+        endOffset: "1 hour",
+        scheduleInterval: "1 hour",
+      }),
+      () => manage.removeContinuousAggregatePolicy("SensorHourly"),
+    ]) {
+      await call();
+    }
+
+    // `timescaledb_information.*` views carry their own schema and are not function calls.
+    const bare = new RegExp(
+      String.raw`(?<!["\w.])(` +
+        [
+          "refresh_continuous_aggregate", "add_continuous_aggregate_policy", "remove_continuous_aggregate_policy",
+          "add_retention_policy", "remove_retention_policy", "add_columnstore_policy", "remove_columnstore_policy",
+          "drop_chunks", "hypertable_detailed_size", "hypertable_columnstore_stats", "hypertable_size",
+          "approximate_row_count", "set_partitioning_interval", "alter_job", "delete_job", "run_job",
+          "show_chunks", "compress_chunk", "decompress_chunk", "enable_chunk_skipping", "disable_chunk_skipping",
+        ].join("|") +
+        String.raw`)\(`,
+      "g",
+    );
+    const offenders = sql.flatMap((q) => q.match(bare) ?? []);
+    expect(offenders).toEqual([]);
   });
 
   it("emits the unqualified form by default, which is what a reachable search path needs", async () => {

@@ -42,6 +42,7 @@ model SensorReading {
   deviceId    Int
   temperature Float
   volume      Float
+  seq         Int
 
   @@id([deviceId, time])
   @@schema("${SCHEMA}")
@@ -56,16 +57,17 @@ CREATE TABLE "${SCHEMA}"."SensorReading" (
     "deviceId" INTEGER NOT NULL,
     "temperature" DOUBLE PRECISION NOT NULL,
     "volume" DOUBLE PRECISION NOT NULL,
+    "seq" INTEGER NOT NULL,
 
     CONSTRAINT "SensorReading_pkey" PRIMARY KEY ("deviceId","time")
 );
 `;
 
 const ROWS = [
-  { time: new Date("2026-06-15T10:05:00Z"), deviceId: 1, temperature: 20, volume: 5 },
-  { time: new Date("2026-06-15T10:25:00Z"), deviceId: 1, temperature: 22, volume: 7 },
-  { time: new Date("2026-06-15T10:45:00Z"), deviceId: 1, temperature: 24, volume: 9 },
-  { time: new Date("2026-06-15T11:10:00Z"), deviceId: 1, temperature: 30, volume: 3 },
+  { time: new Date("2026-06-15T10:05:00Z"), deviceId: 1, temperature: 20, volume: 5, seq: 1 },
+  { time: new Date("2026-06-15T10:25:00Z"), deviceId: 1, temperature: 22, volume: 7, seq: 2 },
+  { time: new Date("2026-06-15T10:45:00Z"), deviceId: 1, temperature: 24, volume: 9, seq: 3 },
+  { time: new Date("2026-06-15T11:10:00Z"), deviceId: 1, temperature: 30, volume: 3, seq: 4 },
 ];
 const RANGE = { start: new Date("2026-06-15T00:00:00Z"), end: new Date("2026-06-16T00:00:00Z") };
 
@@ -170,6 +172,10 @@ describe.skipIf(!DOCKER_OK)("runtime queries under a narrowed search path", () =
     expect((await ts.showChunks("SensorReading")).length).toBeGreaterThan(0);
     expect(await ts.hypertableSize("SensorReading")).toBeGreaterThan(0);
     expect(await ts.approximateRowCount("SensorReading")).toBeGreaterThanOrEqual(0n);
+    // These two reach their function through a FROM clause rather than a SELECT of their own,
+    // which is how they were missed on the first pass.
+    expect((await ts.hypertableDetailedSize("SensorReading")).totalBytes).toBeGreaterThan(0n);
+    expect((await ts.compressionStats("SensorReading")).totalChunks).toBeGreaterThanOrEqual(0);
 
     await ts.addRetentionPolicy("SensorReading", { dropAfter: "30 days" });
     await ts.addCompressionPolicy("SensorReading", { after: "7 days", segmentBy: "deviceId" });
@@ -185,6 +191,10 @@ describe.skipIf(!DOCKER_OK)("runtime queries under a narrowed search path", () =
     await ts.compressChunk(chunk);
     await ts.decompressChunk(chunk);
 
+    // Chunk skipping goes through a shared DO-block helper, the other shape that was missed.
+    await ts.enableChunkSkipping("SensorReading", "seq");
+    await ts.disableChunkSkipping("SensorReading", "seq");
+
     await ts.removeCompressionPolicy("SensorReading");
     await ts.removeRetentionPolicy("SensorReading");
     expect(await ts.listJobs("SensorReading")).toEqual([]);
@@ -197,7 +207,7 @@ describe.skipIf(!DOCKER_OK)("runtime queries under a narrowed search path", () =
   it("works inside an interactive transaction", async () => {
     const size = await prisma.$transaction(async (tx: TestPrismaClient) => {
       await tx.sensorReading.createMany({
-        data: [{ time: new Date("2026-06-15T12:00:00Z"), deviceId: 2, temperature: 19, volume: 1 }],
+        data: [{ time: new Date("2026-06-15T12:00:00Z"), deviceId: 2, temperature: 19, volume: 1, seq: 9 }],
       });
       return tx.$timescale().hypertableSize("SensorReading");
     });

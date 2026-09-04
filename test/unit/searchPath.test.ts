@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { memoizeFnPrefix, probeFnPrefix, NO_PREFIX } from "../../src/client/searchPath.js";
+import { createPrefixResolver, probeFnPrefix, NO_PREFIX } from "../../src/client/searchPath.js";
 import type { RawClient } from "../../src/client/manage.js";
 
 /** A RawClient whose $queryRawUnsafe returns a canned probe row (or throws). */
@@ -56,15 +56,15 @@ describe("probeFnPrefix", () => {
   });
 });
 
-describe("memoizeFnPrefix", () => {
+describe("createPrefixResolver", () => {
   it("probes once however many callers ask", async () => {
     const c = stubClient({ ts_schema: "public", tk_schema: "public", ts_visible: false, tk_visible: false });
-    const resolve = memoizeFnPrefix(c);
-    const [a, b, d] = await Promise.all([resolve(), resolve(), resolve()]);
+    const resolve = createPrefixResolver();
+    const [a, b, d] = await Promise.all([resolve(c), resolve(c), resolve(c)]);
     expect(c.calls).toBe(1);
     expect(a).toEqual(b);
     expect(b).toEqual(d);
-    await resolve();
+    await resolve(c);
     expect(c.calls).toBe(1);
   });
 
@@ -80,12 +80,37 @@ describe("memoizeFnPrefix", () => {
       $executeRawUnsafe: async () => 0,
       $queryRawUnsafe: query as unknown as RawClient["$queryRawUnsafe"],
     };
-    const resolve = memoizeFnPrefix(client);
+    const resolve = createPrefixResolver();
 
-    expect(await resolve()).toEqual(NO_PREFIX); // fell back, cached nothing
+    expect(await resolve(client)).toEqual(NO_PREFIX); // fell back, cached nothing
     fail = false;
-    expect(await resolve()).toEqual({ ts: `"public".`, tk: `"public".` });
-    expect(await resolve()).toEqual({ ts: `"public".`, tk: `"public".` });
+    expect(await resolve(client)).toEqual({ ts: `"public".`, tk: `"public".` });
+    expect(await resolve(client)).toEqual({ ts: `"public".`, tk: `"public".` });
     expect(query).toHaveBeenCalledTimes(2); // the successful answer is cached
+  });
+
+  // The client is a per-call argument, not a captured one. Inside $transaction the caller is the
+  // transaction client, and probing on that joins the transaction instead of asking the pool for
+  // a second connection, which on a pool of one would deadlock.
+  it("probes on whichever client asks first", async () => {
+    const tx = stubClient({ ts_schema: "public", tk_schema: null, ts_visible: false, tk_visible: false });
+    const base = stubClient({ ts_schema: "public", tk_schema: null, ts_visible: false, tk_visible: false });
+    const resolve = createPrefixResolver();
+    await resolve(tx);
+    await resolve(base);
+    expect(tx.calls).toBe(1);
+    expect(base.calls).toBe(0);
+  });
+
+  // One timescaledb(config) result can be applied to several base clients. A resolver shared
+  // across them would answer for the first one's search path; each application makes its own.
+  it("keeps separate applications independent", async () => {
+    const reachable = stubClient({ ts_schema: "public", tk_schema: null, ts_visible: true, tk_visible: true });
+    const narrowed = stubClient({ ts_schema: "public", tk_schema: null, ts_visible: false, tk_visible: false });
+
+    const forReachable = createPrefixResolver();
+    const forNarrowed = createPrefixResolver();
+    expect(await forReachable(reachable)).toEqual({ ts: "", tk: "" });
+    expect(await forNarrowed(narrowed)).toEqual({ ts: `"public".`, tk: "" });
   });
 });

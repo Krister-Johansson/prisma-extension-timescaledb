@@ -80,24 +80,29 @@ export async function probeFnPrefix(client: RawClient): Promise<FnPrefix | undef
 }
 
 /**
- * Memoize the probe for the life of a client. One extra round trip on the first `timeBucket` or
- * `$timescale` call, nothing after that.
+ * A memoized resolver. One probe per extension application, whatever asks for it first.
  *
- * The answer is cached against the client the extension was applied to, so transaction clients
- * derived from it reuse it rather than probing per transaction. That assumes the search path does
- * not change between connections of one pool, which is what a role default or a connection option
- * gives you. A session that runs its own `SET search_path` mid-flight can outrun the cache; the
- * failure mode there is the unqualified SQL this package sent before, not something new.
+ * The client is passed per call rather than captured, for two reasons. `Prisma.defineExtension`
+ * results are meant to be reused across clients, so binding to the first one applied would answer
+ * for a second client with a different search path. And inside `$transaction` the caller is the
+ * transaction client: probing on that joins the transaction instead of asking the pool for a
+ * second connection, which on a pool of one would deadlock.
+ *
+ * The answer is shared with transaction clients derived from the same base, so a transaction does
+ * not pay for a probe of its own. That assumes the search path does not change between connections
+ * of one pool, which is what a role default or a connection option gives you. A session that runs
+ * its own `SET search_path` mid-flight can outrun the cache; the failure mode there is the
+ * unqualified SQL this package sent before, not something new.
  *
  * Only a real answer is cached. A probe that could not reach the database falls back to
  * `NO_PREFIX` for that call alone: caching it would leave a client emitting unqualified SQL for
  * the rest of its life because of one connection blip, which on a narrowed search path means
  * every later query fails.
  */
-export function memoizeFnPrefix(client: RawClient): () => Promise<FnPrefix> {
+export function createPrefixResolver(): (client: RawClient) => Promise<FnPrefix> {
   let cached: FnPrefix | undefined;
   let pending: Promise<FnPrefix | undefined> | undefined;
-  return async () => {
+  return async (client) => {
     if (cached) return cached;
     // Concurrent callers share one probe; whoever resolves first clears the slot, and the
     // others already hold the promise.
