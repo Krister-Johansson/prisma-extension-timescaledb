@@ -8,7 +8,7 @@ import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import pg from "pg";
-import { GenericContainer, type StartedTestContainer } from "testcontainers";
+import { GenericContainer, Wait, type StartedTestContainer } from "testcontainers";
 
 export const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const PRISMA_BIN = join(REPO_ROOT, "node_modules", ".bin", "prisma");
@@ -113,9 +113,17 @@ export interface HarnessOptions {
 export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> {
   ensureBuilt();
 
+  // The image declares no HEALTHCHECK (`docker inspect` reports null), so testcontainers would
+  // fall back to waiting on the mapped port alone. A bound port only means something is
+  // listening, not that Postgres will accept a connection. The entrypoint starts a throwaway
+  // server to run the init scripts and then restarts, so the ready line appears exactly twice;
+  // waiting for the second one is what actually says the real server is up.
   const container = await new GenericContainer(IMAGE)
     .withEnvironment({ POSTGRES_USER: "postgres", POSTGRES_PASSWORD: "postgres", POSTGRES_DB: "app" })
     .withExposedPorts(5432)
+    .withWaitStrategy(
+      Wait.forAll([Wait.forListeningPorts(), Wait.forLogMessage(/database system is ready to accept connections/, 2)]),
+    )
     .start();
 
   const host = container.getHost();
@@ -125,10 +133,17 @@ export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> 
   const databaseUrl = `${baseUrl}/app?schema=${urlSchema}`;
   const shadowUrl = `${baseUrl}/shadow?schema=${urlSchema}`;
 
-  // Wait until Postgres actually accepts connections (the image restarts once during init).
-  await waitForReady(`${baseUrl}/app`);
-  // Shadow DB on the same server (TimescaleDB-capable), required by migrate reset/dev.
-  await runOnce(`${baseUrl}/postgres`, "CREATE DATABASE shadow");
+  // Belt and braces on top of the wait strategy: prove a real client session works.
+  await withContainerLogs(container, "waiting for Postgres to accept connections", () =>
+    waitForReady(`${baseUrl}/app`),
+  );
+  // Shadow DB on the same server (TimescaleDB-capable), required by migrate reset/dev. Retried
+  // like everything else that touches the network here: an unretried statement between container
+  // start and the first test is exactly the shape of failure that shows up as a beforeAll throw
+  // once in a few hundred container starts, with no output left behind to explain it.
+  await withContainerLogs(container, "creating the shadow database", () =>
+    retry(() => runOnce(`${baseUrl}/postgres`, "CREATE DATABASE shadow")),
+  );
 
   const projectDir = mkdtempSync(join(REPO_ROOT, ".tmp-int-"));
   scaffoldProject(projectDir, opts);
@@ -271,6 +286,63 @@ async function waitForReady(connectionString: string, attempts = 30): Promise<vo
     }
   }
   throw new Error("TimescaleDB did not become ready in time");
+}
+
+/**
+ * Retry a step that touches the container, with a short backoff.
+ *
+ * A step that runs exactly once between container start and the first test has no second chance:
+ * if it throws, `startHarness` throws, the `beforeAll` throws, and vitest marks the file failed
+ * and skips its tests (verified against @vitest/runner: a failing beforeAll calls `failTask` then
+ * `markTasksAsSkipped`). That is a whole file of coverage lost to one transient.
+ */
+async function retry<T>(fn: () => Promise<T>, attempts = 5): Promise<T> {
+  let last: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await fn();
+    } catch (e) {
+      last = e;
+      // "already exists" means a previous attempt actually succeeded and the failure was in
+      // the acknowledgement; nothing is gained by trying again.
+      if (e instanceof Error && /already exists/i.test(e.message)) return undefined as T;
+      if (attempt < attempts) await new Promise((r) => setTimeout(r, 250 * attempt));
+    }
+  }
+  throw last;
+}
+
+/**
+ * Run a startup step, and on failure attach the container's log tail to the error.
+ *
+ * The reason the one observed failure of this harness could not be diagnosed is that nothing
+ * survived it. Postgres writes the reason it refused a connection to its own log, so put that in
+ * front of whoever reads the failure instead of leaving them to reconstruct it.
+ */
+async function withContainerLogs<T>(
+  container: StartedTestContainer,
+  step: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    let tail = "(container logs unavailable)";
+    try {
+      const stream = await container.logs();
+      const chunks: string[] = [];
+      await new Promise<void>((resolve) => {
+        stream.on("data", (c: Buffer | string) => chunks.push(String(c)));
+        stream.on("end", () => resolve());
+        stream.on("error", () => resolve());
+        setTimeout(resolve, 5000).unref?.();
+      });
+      tail = chunks.join("").split("\n").slice(-40).join("\n");
+    } catch {
+      // fall through to the placeholder
+    }
+    throw new Error(`[harness] failed while ${step}: ${(e as Error).message}\n--- container logs (tail) ---\n${tail}`);
+  }
 }
 
 async function runOnce(connectionString: string, sql: string): Promise<void> {
