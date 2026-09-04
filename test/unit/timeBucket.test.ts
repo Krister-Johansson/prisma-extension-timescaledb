@@ -529,3 +529,71 @@ describe("buildTimeBucketQuery", () => {
     ).toThrow(/cannot be combined with gapfill/);
   });
 });
+
+// Issue follow-up to #129: the runtime half. When the connection's search path does not reach
+// TimescaleDB, the probe (searchPath.ts) hands the builder a schema prefix and every function
+// name carries it. Core TimescaleDB and timescaledb_toolkit are separate extensions, so they get
+// separate prefixes.
+describe("buildTimeBucketQuery: schema-qualified function names", () => {
+  const PREFIX = { ts: `"tsdb".`, tk: `"tk".` };
+  const range = { start: new Date("2026-01-01T00:00:00Z"), end: new Date("2026-01-02T00:00:00Z") };
+  const build = (args: Parameters<typeof buildTimeBucketQuery>[2]) =>
+    buildTimeBucketQuery("SensorReading", "time", args, {}, undefined, new Map(), undefined, PREFIX).sql;
+
+  it("qualifies time_bucket and its gapfill and modifier forms", () => {
+    const agg = { a: { avg: "temperature" } } as const;
+    expect(build({ bucket: "1 hour", range, aggregate: agg })).toContain(`"tsdb".time_bucket($1, "time")`);
+    expect(build({ bucket: "1 hour", range, gapfill: true, aggregate: agg })).toContain(`"tsdb".time_bucket_gapfill($1, "time")`);
+    expect(build({ bucket: "1 hour", range, timezone: "Europe/Stockholm", aggregate: agg })).toContain(
+      `"tsdb".time_bucket($1, "time", 'Europe/Stockholm')`,
+    );
+  });
+
+  it("qualifies locf, interpolate, first, last and histogram (core TimescaleDB)", () => {
+    const filled = build({
+      bucket: "1 hour",
+      range,
+      gapfill: true,
+      aggregate: { a: { avg: "temperature", fill: "locf" }, b: { avg: "temperature", fill: "interpolate" } },
+    });
+    expect(filled).toContain(`"tsdb".locf(`);
+    expect(filled).toContain(`"tsdb".interpolate(`);
+
+    const firstLast = build({ bucket: "1 hour", range, aggregate: { f: { first: "temperature" }, l: { last: "temperature" } } });
+    expect(firstLast).toContain(`"tsdb".first("temperature", "time")`);
+    expect(firstLast).toContain(`"tsdb".last("temperature", "time")`);
+
+    expect(build({ bucket: "1 hour", range, aggregate: { h: { histogram: "temperature", min: 0, max: 10, buckets: 5 } } })).toContain(
+      `"tsdb".histogram("temperature", 0, 10, 5)`,
+    );
+  });
+
+  it("qualifies the Toolkit hyperfunctions and their accessors with the toolkit prefix", () => {
+    const sql = build({
+      bucket: "1 hour",
+      range,
+      aggregate: {
+        p: { percentile: "temperature", p: 0.9 },
+        r: { rate: "temperature" },
+        w: { timeWeightedAverage: "temperature" },
+        c: { candlestick: "temperature", volume: "volume" },
+        s: { stats: "temperature" },
+      },
+    });
+    expect(sql).toContain(`"tk".approx_percentile(0.9, "tk".percentile_agg("temperature"))`);
+    expect(sql).toContain(`"tk".rate("tk".counter_agg("time", "temperature"))`);
+    expect(sql).toContain(`"tk".average("tk".time_weight('LOCF', "time", "temperature"))`);
+    expect(sql).toContain(`"tk".candlestick_agg("time", "temperature", "volume")`);
+    expect(sql).toContain(`"tk".open("tk".candlestick_agg(`);
+    expect(sql).toContain(`"tk".stats_agg("temperature")`);
+    expect(sql).toContain(`"tk".kurtosis("tk".stats_agg("temperature"))`);
+    // The plain-SQL aggregates keep resolving through pg_catalog, so they stay unqualified.
+    expect(sql).not.toContain(`"tsdb".avg(`);
+  });
+
+  it("emits the unqualified form by default, which is what a reachable search path needs", () => {
+    const sql = buildTimeBucketQuery("SensorReading", "time", { bucket: "1 hour", range, aggregate: { a: { avg: "temperature" } } }).sql;
+    expect(sql).toContain("time_bucket($1, \"time\")");
+    expect(sql).not.toContain('".time_bucket');
+  });
+});

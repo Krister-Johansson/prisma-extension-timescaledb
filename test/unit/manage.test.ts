@@ -655,3 +655,97 @@ describe("makeManage chunk operations", () => {
     await expect(m.decompressChunk("has space")).rejects.toThrow(/Invalid chunk name/);
   });
 });
+
+// Issue follow-up to #129: when the connection's search path does not reach TimescaleDB, the
+// probe (searchPath.ts) hands makeManage a schema prefix and every function name carries it.
+describe("makeManage: schema-qualified function names", () => {
+  const resolvePrefix = () => Promise.resolve({ ts: `"tsdb".`, tk: "" });
+
+  /** Capture the SQL each helper sends, with the prefix wired in as the extension does. */
+  function capturing() {
+    const sql: string[] = [];
+    const client: RawClient = {
+      async $executeRawUnsafe(query: string) {
+        sql.push(query);
+        return 0;
+      },
+      async $queryRawUnsafe<T>(query: string): Promise<T> {
+        sql.push(query);
+        return [] as T;
+      },
+    };
+    const manage = makeManage(client, new Map([["SensorHourly", { name: "SensorHourly" }]]), {
+      hypertableByModel: new Map([["SensorReading", { table: "SensorReading", column: "time" }]]),
+      resolvePrefix,
+    });
+    return { sql, manage };
+  }
+
+  it("qualifies every TimescaleDB function it calls", async () => {
+    const { sql, manage } = capturing();
+    await manage.refreshContinuousAggregate("SensorHourly");
+    await manage.addContinuousAggregatePolicy("SensorHourly", {
+      startOffset: "1 month",
+      endOffset: "1 hour",
+      scheduleInterval: "1 hour",
+    });
+    await manage.removeContinuousAggregatePolicy("SensorHourly");
+    await manage.addRetentionPolicy("SensorReading", { dropAfter: "30 days" });
+    await manage.removeRetentionPolicy("SensorReading");
+    await manage.addCompressionPolicy("SensorReading", { after: "7 days" });
+    await manage.removeCompressionPolicy("SensorReading");
+    await manage.dropChunks("SensorReading", { olderThan: "1 day" });
+    await manage.hypertableSize("SensorReading");
+    await manage.approximateRowCount("SensorReading");
+    await manage.setChunkInterval("SensorReading", "12 hours");
+    await manage.alterJob(1, { scheduleInterval: "1 hour" });
+    await manage.deleteJob(1);
+    await manage.runJob(1);
+    await manage.showChunks("SensorReading");
+    await manage.compressChunk("_timescaledb_internal._hyper_1_1_chunk");
+    await manage.decompressChunk("_timescaledb_internal._hyper_1_1_chunk");
+
+    const expected = [
+      "refresh_continuous_aggregate",
+      "add_continuous_aggregate_policy",
+      "remove_continuous_aggregate_policy",
+      "add_retention_policy",
+      "remove_retention_policy",
+      "add_columnstore_policy",
+      "remove_columnstore_policy",
+      "drop_chunks",
+      "hypertable_size",
+      "approximate_row_count",
+      "set_partitioning_interval",
+      "alter_job",
+      "delete_job",
+      "run_job",
+      "show_chunks",
+      "compress_chunk",
+      "decompress_chunk",
+    ];
+    const all = sql.join("\n");
+    for (const fn of expected) {
+      expect(all, `${fn} should be schema-qualified`).toContain(`"tsdb".${fn}(`);
+      // No unqualified call left behind. The names are distinctive enough that a bare match
+      // means a missed call site.
+      expect(all.includes(`CALL ${fn}(`) || all.includes(`SELECT ${fn}(`) || all.includes(`FROM ${fn}(`)).toBe(false);
+    }
+  });
+
+  it("emits the unqualified form by default, which is what a reachable search path needs", async () => {
+    const sql: string[] = [];
+    const client: RawClient = {
+      async $executeRawUnsafe(q: string) {
+        sql.push(q);
+        return 0;
+      },
+      $queryRawUnsafe: async <T>() => [] as T,
+    } as unknown as RawClient;
+    const manage = makeManage(client, new Map(), {
+      hypertableByModel: new Map([["SensorReading", { table: "SensorReading", column: "time" }]]),
+    });
+    await manage.addRetentionPolicy("SensorReading", { dropAfter: "30 days" });
+    expect(sql[0]).toContain("SELECT add_retention_policy(");
+  });
+});

@@ -12,6 +12,7 @@ import {
   type TimeBucketRuntimeArgs,
 } from "./timeBucket.js";
 import { makeManage, type RawClient, type TimescaleManage } from "./manage.js";
+import { memoizeFnPrefix, type FnPrefix } from "./searchPath.js";
 
 /** Manual configuration accepted by `timescaledb()` (also satisfied by the generated registry). */
 export interface TimescaleConfig {
@@ -124,9 +125,19 @@ export function timescaledb<const C extends TimescaleConfig = TimescaleConfig>(c
       );
     }
     assertInterval(args.bucket);
-    const { sql, params } = buildTimeBucketQuery(ht.table, ht.column, args, ht.columns, ht.schema, relationsByModel, model);
-    return (ctx.$parent as UnsafeRawClient).$queryRawUnsafe(sql, ...params);
+    const client = ctx.$parent as UnsafeRawClient;
+    const prefix = await resolvePrefix(client);
+    const { sql, params } = buildTimeBucketQuery(
+      ht.table, ht.column, args, ht.columns, ht.schema, relationsByModel, model, prefix,
+    );
+    return client.$queryRawUnsafe(sql, ...params);
   } as unknown as TimeBucketMethod;
+
+  // Where TimescaleDB's functions live, probed once and reused. Keyed on the client the
+  // extension was applied to rather than the executing one, so a transaction client does not
+  // pay a probe of its own: connections from one pool share the search path that decides it.
+  let probe: (() => Promise<FnPrefix>) | undefined;
+  const resolvePrefix = (fallback: RawClient): Promise<FnPrefix> => (probe ?? memoizeFnPrefix(fallback))();
 
   // One namespace per executing client, keyed weakly so transaction clients can be collected.
   const manageCache = new WeakMap<
@@ -134,8 +145,9 @@ export function timescaledb<const C extends TimescaleConfig = TimescaleConfig>(c
     TimescaleManage<NamesOrString<HypertableModelNames<C>>, NamesOrString<CaggModelNames<C>>>
   >();
 
-  return Prisma.defineExtension((client) =>
-    client.$extends({
+  return Prisma.defineExtension((client) => {
+    probe ??= memoizeFnPrefix(client as unknown as RawClient);
+    return client.$extends({
       name: "prisma-extension-timescaledb",
       model: {
         $allModels: { timeBucket },
@@ -157,15 +169,15 @@ export function timescaledb<const C extends TimescaleConfig = TimescaleConfig>(c
             manage = makeManage<NamesOrString<HypertableModelNames<C>>, NamesOrString<CaggModelNames<C>>>(
               ctx as unknown as RawClient,
               caggViewByModel,
-              { hypertableByModel },
+              { hypertableByModel, resolvePrefix: () => resolvePrefix(ctx as unknown as RawClient) },
             );
             manageCache.set(ctx, manage);
           }
           return manage;
         },
       },
-    }),
-  );
+    });
+  });
 }
 
 export type { TimeBucketArgs, TimeBucketRow, AggregateInput } from "./timeBucket.js";

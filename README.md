@@ -168,6 +168,31 @@ A runnable NestJS app with hypertables, continuous aggregates, and
 `timeBucket` queries wired up end to end:
 [prisma-extension-timescaledb-nestjs-example](https://github.com/Krister-Johansson/prisma-extension-timescaledb-nestjs-example).
 
+## Search path
+
+TimescaleDB installs into `public`, and both the generated migrations and the runtime helpers
+call its functions by name. If the connection's `search_path` does not reach `public`, those
+names do not resolve:
+
+```
+ERROR: function by_range(unknown, interval) does not exist
+```
+
+Two settings put you there. A datasource schema other than `public`
+(`?schema=data_collection`, which is also where Prisma keeps `_prisma_migrations`) narrows the
+path Prisma runs migrations under. A role default (`ALTER ROLE app SET search_path TO
+data_collection`), common in a database shared by several services, narrows it for every
+connection.
+
+You do not need to configure anything for either. The generated migrations read the extension's
+own schema out of `pg_extension` and put it on the search path for the statement, and the runtime
+probes once per client and qualifies the function names it sends. Prisma's own queries were never
+affected, because the engine schema-qualifies the relations it generates.
+
+Adding `public` to the URL is not a workaround: `?schema=data_collection,public` moves where
+Prisma looks for its migrations table, and `migrate deploy` then fails with
+`Invariant violation: migration persistence is not initialized`.
+
 ## Upgrading
 
 An upgrade never rewrites a migration you have already applied. Fixes reach a
