@@ -5,6 +5,13 @@ import type { Interval } from "./interval.js";
 export interface MigrationSql {
   up: string;
   down: string;
+  /**
+   * Replay-resilient variant of `up`: the same statements inside a `DO` block that returns
+   * early when the target relation no longer exists (`to_regclass(...) IS NULL`). Emitted
+   * migrations use this form so an old migration snapshot still replays cleanly on
+   * `migrate reset` after a later Prisma migration dropped the table.
+   */
+  guardedUp: string;
 }
 
 /** Optional data-retention policy attached to a hypertable (drops chunks older than `dropAfter`). */

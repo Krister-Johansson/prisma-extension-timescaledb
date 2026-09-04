@@ -1,7 +1,7 @@
 // Continuous aggregate SQL builder (SPEC §2.3 / CLAUDE.md constraints 3, 4).
 import type { AggregateSpec, CaggConfig, MigrationSql } from "./types.js";
 import { assertInterval } from "./interval.js";
-import { assertSafeIdent, qualifiedIdent, quoteIdent, quoteLiteral, relationLiteral } from "./sql.js";
+import { assertSafeIdent, existenceGuard, qualifiedIdent, quoteIdent, quoteLiteral, relationLiteral } from "./sql.js";
 
 /** The supported continuous-aggregate functions. Shared with the generator's annotation
  * validation (src/generator/dmmf.ts) so the two lists cannot drift. */
@@ -75,30 +75,39 @@ export function createContinuousAggregateSql(config: CaggConfig): MigrationSql {
   const withOpts = ["timescaledb.continuous"];
   if (materializedOnly !== undefined) withOpts.push(`timescaledb.materialized_only = ${materializedOnly ? "true" : "false"}`);
 
-  let up = `CREATE MATERIALIZED VIEW IF NOT EXISTS ${qualifiedIdent(name, schema)}
+  const create = `CREATE MATERIALIZED VIEW IF NOT EXISTS ${qualifiedIdent(name, schema)}
   WITH (${withOpts.join(", ")}) AS
 SELECT
   ${selectLines.join(",\n  ")}
 FROM ${qualifiedIdent(source, sourceSchema)}
 GROUP BY ${groupByCols}
-WITH NO DATA;`;
+WITH NO DATA`;
 
+  let policy: string | undefined;
   if (refresh) {
     assertInterval(refresh.startOffset);
     assertInterval(refresh.endOffset);
     assertInterval(refresh.scheduleInterval);
-    up += `
-
-SELECT add_continuous_aggregate_policy(${relationLiteral(name, schema)},
+    policy = `add_continuous_aggregate_policy(${relationLiteral(name, schema)},
   start_offset      => INTERVAL ${quoteLiteral(refresh.startOffset)},
   end_offset        => INTERVAL ${quoteLiteral(refresh.endOffset)},
   schedule_interval => INTERVAL ${quoteLiteral(refresh.scheduleInterval)},
   if_not_exists     => TRUE
-);`;
+)`;
   }
+
+  const up = `${create};` + (policy ? `\n\nSELECT ${policy};` : "");
+
+  // Guarded form for emitted migrations: skip when the SOURCE relation no longer exists (a
+  // later Prisma migration dropped the hypertable, or an earlier guarded block skipped the
+  // parent cagg). CREATE MATERIALIZED VIEW inside a DO block verified empirically on 2.27.2.
+  const guardedUp = `DO $$ BEGIN
+  ${existenceGuard(relationLiteral(source, sourceSchema))}
+  ${create.replace(/\n/g, "\n  ")};${policy ? `\n  PERFORM ${policy.replace(/\n/g, "\n  ")};` : ""}
+END $$;`;
 
   // Constraint 4: a cagg appears in the views catalog but DROP VIEW errors on it.
   const down = `DROP MATERIALIZED VIEW IF EXISTS ${qualifiedIdent(name, schema)};`;
 
-  return { up, down };
+  return { up, down, guardedUp };
 }

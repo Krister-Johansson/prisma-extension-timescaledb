@@ -7,8 +7,11 @@ import type { MigrationSql } from "./types.js";
  * is idempotent so `migrate reset` can replay it from scratch without error (constraint 3).
  */
 export function createExtensionSql(): MigrationSql {
+  const up = `CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;`;
   return {
-    up: `CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;`,
+    up,
+    // IF NOT EXISTS already makes the up replay-safe with no relation to guard on.
+    guardedUp: up,
     // Inverse of CREATE EXTENSION. CASCADE because dependent objects exist; rarely run by
     // Prisma (it does not auto-apply downs) but provided for a complete reversible pair.
     down: `DROP EXTENSION IF EXISTS timescaledb CASCADE;`,

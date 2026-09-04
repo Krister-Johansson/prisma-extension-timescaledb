@@ -2,7 +2,7 @@
 import type { MigrationSql } from "./types.js";
 import type { Interval } from "./interval.js";
 import { assertInterval } from "./interval.js";
-import { assertSafeIdent, quoteLiteral, relationLiteral } from "./sql.js";
+import { assertSafeIdent, existenceGuard, quoteLiteral, relationLiteral } from "./sql.js";
 
 /** Retention-policy builder input. All names are DB names (post-@@map / @@schema). */
 export interface RetentionPolicyConfig {
@@ -34,8 +34,14 @@ export function createRetentionPolicySql(config: RetentionPolicyConfig): Migrati
   assertInterval(dropAfter);
 
   const rel = relationLiteral(table, schema);
-  const up = `SELECT add_retention_policy(${rel}, drop_after => INTERVAL ${quoteLiteral(dropAfter)}, if_not_exists => TRUE);`;
+  const call = `add_retention_policy(${rel}, drop_after => INTERVAL ${quoteLiteral(dropAfter)}, if_not_exists => TRUE)`;
+  const up = `SELECT ${call};`;
+  // Guarded form for emitted migrations: a later-dropped table makes replay skip, not fail.
+  const guardedUp = `DO $$ BEGIN
+  ${existenceGuard(rel)}
+  PERFORM ${call};
+END $$;`;
   const down = `SELECT remove_retention_policy(${rel}, if_exists => TRUE);`;
 
-  return { up, down };
+  return { up, down, guardedUp };
 }

@@ -13,7 +13,7 @@
 // self-contained: the block runs atomically (its own implicit transaction when none is active), so
 // the GUC is reliably on for the calls whether or not Prisma wraps the migration in a transaction.
 import type { MigrationSql } from "./types.js";
-import { assertSafeIdent, quoteLiteral, relationLiteral } from "./sql.js";
+import { assertSafeIdent, existenceGuard, quoteLiteral, relationLiteral } from "./sql.js";
 
 /** Chunk-skipping builder input. All names are DB names (post-@@map / @@schema). */
 export interface ChunkSkippingConfig {
@@ -58,7 +58,15 @@ export function createChunkSkippingSql(config: ChunkSkippingConfig): MigrationSq
 ${performs}
 END $$;`;
 
+  // Guarded form for emitted migrations: same block plus an existence check, so an old
+  // snapshot replays cleanly after a later Prisma migration dropped the table.
+  const guardedUp = `DO $$ BEGIN
+  ${existenceGuard(rel)}
+  SET LOCAL timescaledb.enable_chunk_skipping = on;
+${performs}
+END $$;`;
+
   const down = `-- No separate disable step: dropping "${table}" (Prisma's own down) removes its chunk-skipping settings.`;
 
-  return { up, down };
+  return { up, down, guardedUp };
 }

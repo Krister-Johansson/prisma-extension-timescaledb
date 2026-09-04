@@ -1,7 +1,7 @@
 // Hypertable conversion SQL builder (SPEC §2.2 / CLAUDE.md constraints 2, 3, 6).
 import type { HypertableConfig, MigrationSql } from "./types.js";
 import { assertInterval } from "./interval.js";
-import { assertSafeIdent, quoteLiteral, relationLiteral } from "./sql.js";
+import { assertSafeIdent, existenceGuard, quoteLiteral, relationLiteral } from "./sql.js";
 
 const DEFAULT_CHUNK_INTERVAL = "7 days";
 
@@ -27,16 +27,17 @@ export function createHypertableSql(config: HypertableConfig): MigrationSql {
   assertInterval(chunkInterval);
 
   const rel = relationLiteral(table, schema);
-  let up = `SELECT create_hypertable(
+  const convert = `create_hypertable(
   ${rel},
   by_range(${quoteLiteral(column)}, INTERVAL ${quoteLiteral(chunkInterval)}),
   if_not_exists => TRUE,
   migrate_data  => TRUE
-);`;
+)`;
 
   // Optional hash space dimension: a second partitioning dimension on `column`, added AFTER the
   // hypertable exists. The column name is a string literal (NAME) — preserves case, no cast — and
   // `if_not_exists => TRUE` makes replay a no-op (constraint 3). Verified transaction-safe.
+  let dimension: string | undefined;
   if (spacePartition) {
     assertSafeIdent(spacePartition.column, "space partition column");
     if (!Number.isInteger(spacePartition.partitions) || spacePartition.partitions < 1) {
@@ -44,10 +45,25 @@ export function createHypertableSql(config: HypertableConfig): MigrationSql {
         `createHypertableSql: spacePartition.partitions must be a positive integer (got ${JSON.stringify(spacePartition.partitions)}).`,
       );
     }
-    up += `\nSELECT add_dimension(${rel}, by_hash(${quoteLiteral(spacePartition.column)}, ${spacePartition.partitions}), if_not_exists => TRUE);`;
+    dimension = `add_dimension(${rel}, by_hash(${quoteLiteral(spacePartition.column)}, ${spacePartition.partitions}), if_not_exists => TRUE)`;
   }
+
+  const up = `SELECT ${convert};` + (dimension ? `\nSELECT ${dimension};` : "");
+
+  // Guarded form: skip when the table no longer exists (a later Prisma migration dropped it),
+  // so an old migration snapshot replays cleanly on `migrate reset` — verified empirically
+  // (PERFORM create_hypertable inside DO works; the guard skips on a missing relation).
+  const guardedUp = `DO $$ BEGIN
+  ${existenceGuard(rel)}
+  PERFORM ${indentBody(convert)};${dimension ? `\n  PERFORM ${dimension};` : ""}
+END $$;`;
 
   const down = `-- No separate un-hypertable step: dropping "${table}" (Prisma's own down) removes the hypertable.`;
 
-  return { up, down };
+  return { up, down, guardedUp };
+}
+
+/** Re-indent a multi-line call expression by two spaces for embedding in a DO body. */
+function indentBody(sql: string): string {
+  return sql.replace(/\n/g, "\n  ");
 }

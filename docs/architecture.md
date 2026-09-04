@@ -54,12 +54,22 @@ test/
    extracts models, views, and their `///` annotations from the DMMF;
    `annotations.ts` parses them and rejects anything it does not recognize,
    naming the model and field in the error.
-2. **Emission.** `emit-migrations.ts` produces two fixed-name migrations as a
-   pure path-to-content map, with no filesystem access and no timestamps, so
-   output is deterministic and snapshot-testable. The extension migration
-   sorts before every Prisma migration and the objects migration sorts after
-   them; within the objects migration, hypertable conversions come before
-   continuous aggregates, which need their source to already be a hypertable.
+2. **Emission.** `emit-migrations.ts` produces migrations as a pure
+   path-to-content map, with no filesystem access and no timestamps, so output
+   is deterministic and snapshot-testable. The extension migration has a fixed
+   name and sorts before every Prisma migration. The timescale objects live in
+   append-only versioned migrations (`99999999999999_timescaledb_objects_v0001`,
+   `_v0002`, ...) that sort after every Prisma migration: each time the set of
+   annotated objects changes, the generator appends the next version instead of
+   rewriting an applied file, because `migrate deploy` tracks migrations by
+   name and would silently skip a rewrite. Every version re-asserts the full
+   desired state with idempotent, existence-guarded DO blocks (a block skips
+   when a later Prisma migration dropped its table) and removes objects that
+   disappeared from the schema, so a full replay of all versions converges on
+   the current state. The previous state is persisted in
+   `migrations/.prisma-extension-timescaledb.json`; an unchanged schema emits
+   nothing. Within a version, hypertable conversions come before continuous
+   aggregates, which need their source to already be a hypertable.
    `emit-types.ts` writes the typed registry the client extension imports.
 3. **Runtime.** The client extension reads the registry (or a manual config)
    and adds a `timeBucket` method per hypertable model plus the `$timescale`
@@ -83,7 +93,9 @@ because the naive Prisma plus TimescaleDB setup breaks on
 The reset-safety guarantee (a fresh database plus `migrate reset` plus
 `migrate deploy` reproduces everything with zero manual steps) is proven by an
 integration test against a real TimescaleDB container, and every change to
-emitted SQL must keep that test green.
+emitted SQL must keep that test green. The evolution test extends it: objects
+added after the first deploy are applied by the next deploy, and a replay
+through dropped tables and removed annotations still converges.
 
 Three code rules matter throughout:
 
