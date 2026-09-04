@@ -59,7 +59,8 @@ export interface GeneratorState {
 }
 
 export interface EmitResult {
-  /** New files to write (empty when the state is unchanged). Never rewrites an existing migration. */
+  /** New files to write. Empty when the state is unchanged and the extension migration is
+   * already on disk. Never rewrites an existing migration. */
   files: FileMap;
   /** Updated state-file content to persist, or undefined when nothing changed. */
   nextState?: GeneratorState;
@@ -364,7 +365,8 @@ export function maxObjectsSequence(folderNames: readonly string[]): number {
  *
  * `extensionMigrationExists` says whether `00000000000000_timescaledb_extension` is already on
  * disk. It is emitted only when absent: it is applied history, and rewriting it would change
- * the checksum Prisma recorded for it.
+ * the checksum Prisma recorded for it. A missing one is re-emitted even when nothing else
+ * changed, so deleting the folder heals on the next generate.
  */
 export function emitMigrations(
   schema: TimescaleSchema,
@@ -379,28 +381,33 @@ export function emitMigrations(
   // registry-only fields the canonical form strips, and that must not read as a change.
   const prevState = previous ? canonicalObjects(previous.state) : undefined;
 
-  const noHistory = !previous && maxExistingSequence === 0;
-  if (noHistory && empty) return { files: {} };
-  if (prevState && stableStringify(prevState) === stableStringify(state)) return { files: {} };
-  // State file lost but versioned migrations exist, and the schema is empty: without the
-  // previous state there is nothing to diff removals against; emit nothing rather than a
-  // migration of pure guesses. (The normal empty case with intact state emits removals.)
-  if (!previous && empty) return { files: {} };
-
-  const sequence = Math.max(previous?.sequence ?? 0, maxExistingSequence) + 1;
-  const files: FileMap = {};
-
   // The extension migration is fixed-name, and once it exists on disk it is applied history:
   // rewriting it would change its checksum and make `migrate dev` reject it as "modified after
   // it was applied". Emit it only when it is absent, so a package upgrade that improves the
   // extension SQL reaches new projects without breaking existing ones.
-  if (!extensionMigrationExists) {
+  //
+  // This is decided BEFORE the unchanged-state returns below. A project whose objects have not
+  // changed still needs the extension migration if the folder is missing (deleted by hand, lost
+  // in a merge, or half-removed during a recovery), and without it every objects migration fails
+  // on a fresh database. An empty schema declares no timescale objects at all, so it gets none.
+  const files: FileMap = {};
+  if (!extensionMigrationExists && !empty) {
     files[`${EXTENSION_MIGRATION}/migration.sql`] = `${GENERATED_BANNER}
 -- TimescaleDB extension setup. Standalone & leading so it runs before any table or
 -- hypertable DDL (CLAUDE.md constraint 1).
 ${createExtensionSql().up}
 `;
   }
+
+  const noHistory = !previous && maxExistingSequence === 0;
+  if (noHistory && empty) return { files };
+  if (prevState && stableStringify(prevState) === stableStringify(state)) return { files };
+  // State file lost but versioned migrations exist, and the schema is empty: without the
+  // previous state there is nothing to diff removals against; emit nothing rather than a
+  // migration of pure guesses. (The normal empty case with intact state emits removals.)
+  if (!previous && empty) return { files };
+
+  const sequence = Math.max(previous?.sequence ?? 0, maxExistingSequence) + 1;
 
   const creates = renderCreates(state);
   const removals = prevState ? renderRemovals(prevState, state) : [];

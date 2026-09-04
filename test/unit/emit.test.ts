@@ -88,7 +88,7 @@ describe("emitMigrations (append-only versioned objects migrations)", () => {
   it("unchanged schema: regeneration is a no-op (no files, no state write)", async () => {
     const schema = await loadSchema();
     const first = emitMigrations(schema);
-    const again = emitMigrations(schema, first.nextState);
+    const again = emitMigrations(schema, first.nextState, 1, true);
     expect(again.files).toEqual({});
     expect(again.nextState).toBeUndefined();
   });
@@ -116,6 +116,23 @@ describe("emitMigrations (append-only versioned objects migrations)", () => {
   it("never rewrites the extension migration once it exists on disk", async () => {
     const { files } = emitMigrations(await loadSchema(), undefined, 0, true);
     expect(Object.keys(files)).toEqual([V1]);
+  });
+
+  // A project can lose the extension migration folder without its objects changing: deleted by
+  // hand, dropped in a merge, half-removed during a recovery. Without it every objects migration
+  // fails on a fresh database, so the unchanged-state no-op must still restore it.
+  it("re-emits a missing extension migration even when the state is unchanged", async () => {
+    const schema = await loadSchema();
+    const first = emitMigrations(schema);
+    const again = emitMigrations(schema, first.nextState, 1, false);
+    expect(Object.keys(again.files)).toEqual([`${EXTENSION_MIGRATION}/migration.sql`]);
+    expect(again.nextState).toBeUndefined(); // no new objects version, nothing changed
+  });
+
+  // ...but a schema that declares no timescale objects has no use for the extension.
+  it("emits no extension migration for a schema with no timescale objects", () => {
+    const bare = { hypertables: [], continuousAggregates: [], relationsByModel: {} };
+    expect(emitMigrations(bare, undefined, 0, false)).toEqual({ files: {} });
   });
 
   // Issue #129: Prisma runs migrations with `search_path` set to the datasource schema alone,
@@ -161,9 +178,14 @@ describe("emitMigrations (append-only versioned objects migrations)", () => {
         IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'timescaledb') THEN RETURN; END IF;
         IF to_regnamespace('public') IS NOT NULL THEN
           EXECUTE 'CREATE EXTENSION timescaledb WITH SCHEMA public CASCADE';
-        ELSE
+        ELSIF current_schema() IS NOT NULL THEN
           EXECUTE 'CREATE EXTENSION timescaledb CASCADE';
+        ELSE
+          RAISE EXCEPTION 'prisma-extension-timescaledb: cannot install the timescaledb extension. No schema on the search path (%) exists, and this migration runs before the one that creates it. Create the schema first, or install the extension yourself with CREATE EXTENSION timescaledb.', current_setting('search_path');
         END IF;
+      EXCEPTION
+        -- Another session installed it between the check above and the CREATE.
+        WHEN duplicate_object OR unique_violation THEN NULL;
       END $$;
       "
     `);
@@ -394,7 +416,7 @@ model Unrelated {
       })),
       relationsByModel: { X: [{ field: "readings", table: "SensorReading", list: true, on: [{ related: "xId", outer: "id" }] }] },
     };
-    const again = emitMigrations(withRelations, first.nextState);
+    const again = emitMigrations(withRelations, first.nextState, 1, true);
     expect(again.files).toEqual({});
   });
 
@@ -402,7 +424,7 @@ model Unrelated {
     const schema = await loadSchema();
     const first = emitMigrations(schema);
     const reloaded = JSON.parse(JSON.stringify(first.nextState)) as GeneratorState;
-    expect(emitMigrations(schema, reloaded).files).toEqual({});
+    expect(emitMigrations(schema, reloaded, 1, true).files).toEqual({});
   });
 });
 
@@ -517,7 +539,7 @@ describe("emitMigrations — review follow-up behaviors", () => {
       hypertables: schema.hypertables.map((h) => ({ ...h, model: "RenamedModel", columns: { deviceId: "device_id" } })),
       continuousAggregates: schema.continuousAggregates.map((c) => ({ ...c, model: "RenamedView" })),
     };
-    expect(emitMigrations(renamed, first.nextState).files).toEqual({});
+    expect(emitMigrations(renamed, first.nextState, 1, true).files).toEqual({});
   });
 
   it("a CHANGED cagg is dropped and recreated; its dependents are dropped first", async () => {
@@ -695,6 +717,6 @@ describe("emitMigrations — second-round review behaviors", () => {
     (legacy.state.hypertables[0] as { model?: string; columns?: Record<string, string> }).model = "SensorReading";
     (legacy.state.hypertables[0] as { model?: string; columns?: Record<string, string> }).columns = { deviceId: "device_id" };
     (legacy.state.continuousAggregates[0] as { model?: string }).model = "SensorHourly";
-    expect(emitMigrations(schema, legacy).files).toEqual({});
+    expect(emitMigrations(schema, legacy, 1, true).files).toEqual({});
   });
 });

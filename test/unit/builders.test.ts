@@ -11,14 +11,21 @@ describe("createExtensionSql", () => {
   const { up, down } = createExtensionSql();
 
   it("emits an idempotent standalone extension migration", () => {
-    expect(up).toBe(`DO $$ BEGIN
-  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'timescaledb') THEN RETURN; END IF;
-  IF to_regnamespace('public') IS NOT NULL THEN
-    EXECUTE 'CREATE EXTENSION timescaledb WITH SCHEMA public CASCADE';
-  ELSE
-    EXECUTE 'CREATE EXTENSION timescaledb CASCADE';
-  END IF;
-END $$;`);
+    expect(up).toMatchInlineSnapshot(`
+      "DO $$ BEGIN
+        IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'timescaledb') THEN RETURN; END IF;
+        IF to_regnamespace('public') IS NOT NULL THEN
+          EXECUTE 'CREATE EXTENSION timescaledb WITH SCHEMA public CASCADE';
+        ELSIF current_schema() IS NOT NULL THEN
+          EXECUTE 'CREATE EXTENSION timescaledb CASCADE';
+        ELSE
+          RAISE EXCEPTION 'prisma-extension-timescaledb: cannot install the timescaledb extension. No schema on the search path (%) exists, and this migration runs before the one that creates it. Create the schema first, or install the extension yourself with CREATE EXTENSION timescaledb.', current_setting('search_path');
+        END IF;
+      EXCEPTION
+        -- Another session installed it between the check above and the CREATE.
+        WHEN duplicate_object OR unique_violation THEN NULL;
+      END $$;"
+    `);
     expect(down).toBe("DROP EXTENSION IF EXISTS timescaledb CASCADE;");
   });
 
@@ -28,13 +35,30 @@ END $$;`);
   // fails with "no schema has been selected to create in".
   it("pins the extension to public instead of following the search path", () => {
     expect(up).toContain("WITH SCHEMA public");
-    // ...unless public was dropped, where a bare CREATE EXTENSION is the only option left.
+    // ...unless public was dropped, where the search path is the only option left.
     expect(up).toContain("to_regnamespace('public') IS NOT NULL");
     expect(up).toContain("EXECUTE 'CREATE EXTENSION timescaledb CASCADE'");
   });
 
   it("leaves an extension that already lives in another schema alone", () => {
     expect(up).toContain("IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'timescaledb') THEN RETURN;");
+  });
+
+  // No public schema and no datasource schema yet: this migration runs before the one that
+  // creates it, so there is nowhere to install. PostgreSQL's own "no schema has been selected
+  // to create in" says nothing about what to do next.
+  it("raises an explanatory error when no schema on the search path exists", () => {
+    expect(up).toContain("current_schema() IS NOT NULL");
+    expect(up).toContain("RAISE EXCEPTION 'prisma-extension-timescaledb: cannot install");
+    expect(up).toContain("Create the schema first");
+  });
+
+  // Prisma's migration engine serializes its own runs with an advisory lock, but this builder
+  // is public API for hand-written migrations and PRISMA_SCHEMA_DISABLE_ADVISORY_LOCK turns
+  // Prisma's lock off. A session that loses the race between the check and the CREATE gets
+  // duplicate_object or, when it blocked on the unique index, unique_violation.
+  it("swallows the error a lost creation race produces", () => {
+    expect(up).toContain("WHEN duplicate_object OR unique_violation THEN NULL;");
   });
 });
 

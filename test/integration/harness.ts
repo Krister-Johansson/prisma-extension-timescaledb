@@ -16,7 +16,7 @@ const GENERATOR_PROVIDER = join(REPO_ROOT, "dist", "generator", "index.js");
 // Pinned to an immutable version tag for reproducible CI (not a rolling tag). The `-ha` image
 // carries the same TimescaleDB 2.27.2 PLUS the `timescaledb_toolkit` extension (hyperfunctions),
 // which the slim `timescaledb` image lacks — needed for the percentile / hyperfunction tests.
-const IMAGE = "timescale/timescaledb-ha:pg17.10-ts2.27.2";
+export const IMAGE = "timescale/timescaledb-ha:pg17.10-ts2.27.2";
 
 // Prisma 7 blocks destructive commands from AI agents without explicit consent; the user
 // granted it for this build (their message: "yes"). Required so reset runs unattended.
