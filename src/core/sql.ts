@@ -66,3 +66,44 @@ export function assertSafeIdent(name: string, label = "identifier"): void {
 export function existenceGuard(rel: string): string {
   return `IF to_regclass(${rel}) IS NULL THEN RAISE WARNING 'prisma-extension-timescaledb: relation % does not exist; skipping (table dropped by a later migration, or its CREATE TABLE migration is missing)', ${rel}; RETURN; END IF;`;
 }
+
+/**
+ * The plpgsql lines that put TimescaleDB's own schema on the search path for the rest of a
+ * `DO` block. Emitted SQL calls `create_hypertable`, `by_range`, `time_bucket` and friends
+ * unqualified, and Prisma runs migrations with `search_path` set to the datasource schema
+ * alone (`?schema=data_collection`). TimescaleDB installs into `public` (or wherever
+ * `CREATE EXTENSION` put it), so on a project whose tables live outside `public` those
+ * functions are unresolvable and `migrate deploy` fails with
+ * `function by_range(unknown, interval) does not exist` (issue #129).
+ *
+ * The path is APPENDED, never replaced, so unqualified relation names in the same block still
+ * resolve to the caller's schema first. `concat_ws` skips NULLs, so a missing extension leaves
+ * the search path untouched instead of resetting it, and an empty search path yields the
+ * extension schema alone. `set_config(..., is_local => true)` scopes the change to the
+ * surrounding transaction, which for a `DO` block with no explicit transaction is the block.
+ */
+const SEARCH_PATH_LINES = `SELECT n.nspname INTO ts_schema
+    FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace
+   WHERE e.extname = 'timescaledb';
+  PERFORM set_config('search_path', concat_ws(', ', nullif(current_setting('search_path'), ''), quote_ident(ts_schema)), true);`;
+
+/**
+ * Wrap statements in the standard emitted `DO` block: declare the extension-schema variable,
+ * optionally skip when `guardRel` no longer exists, then extend the search path (see
+ * SEARCH_PATH_LINES) before running `body`.
+ *
+ * The existence guard comes FIRST so its `RETURN` cannot leave a half-applied search path, and
+ * because `to_regclass` is a `pg_catalog` builtin that needs no search-path help.
+ *
+ * @param body plpgsql statements, each already terminated with `;`, indented by two spaces.
+ * @param guardRel quoted relation literal to guard on; omitted for an unguarded block.
+ */
+export function timescaleDoBlock(body: string, guardRel?: string): string {
+  const guard = guardRel === undefined ? "" : `${existenceGuard(guardRel)}\n  `;
+  return `DO $$
+DECLARE ts_schema text;
+BEGIN
+  ${guard}${SEARCH_PATH_LINES}
+${body}
+END $$;`;
+}

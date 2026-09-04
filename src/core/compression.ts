@@ -9,7 +9,7 @@
 // It is transaction-safe, so the two statements run fine inside Prisma's migration transaction.
 import type { CompressionConfig, CompressionOrderBy, MigrationSql } from "./types.js";
 import { assertInterval } from "./interval.js";
-import { assertSafeIdent, existenceGuard, quoteIdent, quoteLiteral, qualifiedIdent, relationLiteral } from "./sql.js";
+import { assertSafeIdent, quoteIdent, quoteLiteral, qualifiedIdent, relationLiteral, timescaleDoBlock } from "./sql.js";
 
 /** Compression-policy builder input. All names are DB names (post-@@map / @@schema). */
 export interface CompressionPolicyConfig extends CompressionConfig {
@@ -128,17 +128,16 @@ export function createCompressionPolicySql(config: CompressionPolicyConfig): Mig
 )`;
   const call = `CALL add_columnstore_policy(${rel}, after => INTERVAL ${quoteLiteral(after)}, if_not_exists => TRUE)`;
 
-  const up = `${alter};
-${call};`;
-  // Guarded form for emitted migrations: skip when the table is gone, and run the ALTER + CALL
-  // in one block (ALTER TABLE and CALL inside plpgsql verified empirically on 2.27.2).
-  const guardedUp = `DO $$ BEGIN
-  ${existenceGuard(rel)}
-  ${alter.replace(/\n/g, "\n  ")};
-  ${call};
-END $$;`;
+  // Both statements share one DO block that first puts TimescaleDB's schema on the search path
+  // (`add_columnstore_policy` is emitted unqualified; issue #129) and keeps them together, since
+  // add_columnstore_policy errors unless the columnstore is already enabled. ALTER TABLE and
+  // CALL inside plpgsql verified empirically on 2.27.2.
+  const body = `  ${alter.replace(/\n/g, "\n  ")};\n  ${call};`;
+  const up = timescaleDoBlock(body);
+  // Guarded form for emitted migrations: skip when the table is gone.
+  const guardedUp = timescaleDoBlock(body, rel);
 
-  const down = `CALL remove_columnstore_policy(${rel}, if_exists => TRUE);`;
+  const down = timescaleDoBlock(`  CALL remove_columnstore_policy(${rel}, if_exists => TRUE);`);
 
   return { up, down, guardedUp };
 }

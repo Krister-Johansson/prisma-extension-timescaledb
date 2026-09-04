@@ -18,6 +18,7 @@ import {
   emitMigrations,
   maxObjectsSequence,
   parseGeneratorState,
+  EXTENSION_MIGRATION,
   STATE_FILE,
   type FileMap,
   type GeneratorState,
@@ -63,10 +64,12 @@ generatorHandler({
     // and an unchanged one is a byte-stable no-op. On a missing/corrupt state file, the highest
     // existing ..._v000N folder pins the next sequence, so recovery re-asserts the full state
     // as a NEW migration and never overwrites an applied one.
+    const existing = listDir(migrationsDir);
     const { files, nextState } = emitMigrations(
       schema,
       readState(join(migrationsDir, STATE_FILE)),
-      maxObjectsSequence(listDir(migrationsDir)),
+      maxObjectsSequence(existing),
+      existing.includes(EXTENSION_MIGRATION),
     );
     writeFileMap(migrationsDir, files);
     if (nextState) {

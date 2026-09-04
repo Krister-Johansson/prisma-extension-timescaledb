@@ -59,6 +59,13 @@ export interface HarnessOptions {
   previewFeatures?: string[];
   /** Datasource schemas (enables multiSchema); when set, adds `schemas = [...]`. */
   schemas?: string[];
+  /**
+   * The `?schema=` on the connection string, which is the search_path Prisma runs migrations
+   * under. Defaults to "public". Set it to a non-public schema to reproduce a project that keeps
+   * its tables (and `_prisma_migrations`) out of `public`, where TimescaleDB's own functions are
+   * no longer on the search path (issue #129).
+   */
+  urlSchema?: string;
 }
 
 export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> {
@@ -72,8 +79,9 @@ export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> 
   const host = container.getHost();
   const port = container.getMappedPort(5432);
   const baseUrl = `postgresql://postgres:postgres@${host}:${port}`;
-  const databaseUrl = `${baseUrl}/app?schema=public`;
-  const shadowUrl = `${baseUrl}/shadow?schema=public`;
+  const urlSchema = opts.urlSchema ?? "public";
+  const databaseUrl = `${baseUrl}/app?schema=${urlSchema}`;
+  const shadowUrl = `${baseUrl}/shadow?schema=${urlSchema}`;
 
   // Wait until Postgres actually accepts connections (the image restarts once during init).
   await waitForReady(`${baseUrl}/app`);

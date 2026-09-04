@@ -8,11 +8,33 @@ import { createChunkSkippingSql } from "../../src/core/chunkSkipping.js";
 import type { CaggConfig } from "../../src/core/types.js";
 
 describe("createExtensionSql", () => {
+  const { up, down } = createExtensionSql();
+
   it("emits an idempotent standalone extension migration", () => {
-    const { up, down } = createExtensionSql();
-    expect(up).toBe("CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;");
-    expect(up).toContain("IF NOT EXISTS");
+    expect(up).toBe(`DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'timescaledb') THEN RETURN; END IF;
+  IF to_regnamespace('public') IS NOT NULL THEN
+    EXECUTE 'CREATE EXTENSION timescaledb WITH SCHEMA public CASCADE';
+  ELSE
+    EXECUTE 'CREATE EXTENSION timescaledb CASCADE';
+  END IF;
+END $$;`);
     expect(down).toBe("DROP EXTENSION IF EXISTS timescaledb CASCADE;");
+  });
+
+  // Issue #129: `timescaledb.control` names no schema, so a bare CREATE EXTENSION follows the
+  // search_path Prisma runs migrations under. Under `?schema=data_collection` that either
+  // installs TimescaleDB into the application's own schema or, before that schema exists,
+  // fails with "no schema has been selected to create in".
+  it("pins the extension to public instead of following the search path", () => {
+    expect(up).toContain("WITH SCHEMA public");
+    // ...unless public was dropped, where a bare CREATE EXTENSION is the only option left.
+    expect(up).toContain("to_regnamespace('public') IS NOT NULL");
+    expect(up).toContain("EXECUTE 'CREATE EXTENSION timescaledb CASCADE'");
+  });
+
+  it("leaves an extension that already lives in another schema alone", () => {
+    expect(up).toContain("IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'timescaledb') THEN RETURN;");
   });
 });
 
@@ -20,12 +42,21 @@ describe("createHypertableSql", () => {
   const sql = createHypertableSql({ table: "SensorReading", column: "time", chunkInterval: "1 day" });
 
   it("matches the spike-proven, cast-free, idempotent form", () => {
-    expect(sql.up).toBe(`SELECT create_hypertable(
-  '"SensorReading"',
-  by_range('time', INTERVAL '1 day'),
-  if_not_exists => TRUE,
-  migrate_data  => TRUE
-);`);
+    expect(sql.up).toBe(`DO $$
+DECLARE ts_schema text;
+BEGIN
+  SELECT n.nspname INTO ts_schema
+    FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace
+   WHERE e.extname = 'timescaledb';
+  PERFORM set_config('search_path', concat_ws(', ', nullif(current_setting('search_path'), ''), quote_ident(ts_schema)), true);
+  PERFORM create_hypertable(
+    '"SensorReading"',
+    by_range('time', INTERVAL '1 day'),
+    if_not_exists => TRUE,
+    migrate_data  => TRUE
+  );
+  PERFORM set_partitioning_interval('"SensorReading"', INTERVAL '1 day');
+END $$;`);
   });
 
   it("contains NO ::regclass and NO ::name casts (CLAUDE.md constraint 2)", () => {
@@ -65,8 +96,8 @@ describe("createHypertableSql", () => {
       chunkInterval: "1 day",
       spacePartition: { column: "deviceId", partitions: 4 },
     });
-    expect(up).toContain("SELECT create_hypertable(");
-    expect(up).toContain(`SELECT add_dimension('"SensorReading"', by_hash('deviceId', 4), if_not_exists => TRUE);`);
+    expect(up).toContain("PERFORM create_hypertable(");
+    expect(up).toContain(`PERFORM add_dimension('"SensorReading"', by_hash('deviceId', 4), if_not_exists => TRUE);`);
     // create_hypertable must come before add_dimension (the table must be a hypertable first).
     expect(up.indexOf("create_hypertable")).toBeLessThan(up.indexOf("add_dimension"));
     expect(up).not.toContain("::regclass");
@@ -79,7 +110,7 @@ describe("createHypertableSql", () => {
       schema: "metrics",
       spacePartition: { column: "device_id", partitions: 8 },
     });
-    expect(up).toContain(`SELECT add_dimension('"metrics"."sensor_readings"', by_hash('device_id', 8), if_not_exists => TRUE);`);
+    expect(up).toContain(`PERFORM add_dimension('"metrics"."sensor_readings"', by_hash('device_id', 8), if_not_exists => TRUE);`);
   });
 
   it("space partition rejects a non-positive / non-integer count and a bad column", () => {
@@ -111,23 +142,30 @@ describe("createContinuousAggregateSql", () => {
   };
 
   it("matches the expected create + policy SQL", () => {
-    expect(createContinuousAggregateSql(base).up).toBe(`CREATE MATERIALIZED VIEW IF NOT EXISTS "SensorHourly"
-  WITH (timescaledb.continuous) AS
-SELECT
-  time_bucket('1 hour', "time") AS "bucket",
-  "deviceId" AS "deviceId",
-  avg("temperature") AS "avgTemp",
-  max("temperature") AS "maxTemp"
-FROM "SensorReading"
-GROUP BY time_bucket('1 hour', "time"), "deviceId"
-WITH NO DATA;
-
-SELECT add_continuous_aggregate_policy('"SensorHourly"',
-  start_offset      => INTERVAL '1 month',
-  end_offset        => INTERVAL '1 hour',
-  schedule_interval => INTERVAL '1 hour',
-  if_not_exists     => TRUE
-);`);
+    expect(createContinuousAggregateSql(base).up).toBe(`DO $$
+DECLARE ts_schema text;
+BEGIN
+  SELECT n.nspname INTO ts_schema
+    FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace
+   WHERE e.extname = 'timescaledb';
+  PERFORM set_config('search_path', concat_ws(', ', nullif(current_setting('search_path'), ''), quote_ident(ts_schema)), true);
+  CREATE MATERIALIZED VIEW IF NOT EXISTS "SensorHourly"
+    WITH (timescaledb.continuous) AS
+  SELECT
+    time_bucket('1 hour', "time") AS "bucket",
+    "deviceId" AS "deviceId",
+    avg("temperature") AS "avgTemp",
+    max("temperature") AS "maxTemp"
+  FROM "SensorReading"
+  GROUP BY time_bucket('1 hour', "time"), "deviceId"
+  WITH NO DATA;
+  PERFORM add_continuous_aggregate_policy('"SensorHourly"',
+    start_offset      => INTERVAL '1 month',
+    end_offset        => INTERVAL '1 hour',
+    schedule_interval => INTERVAL '1 hour',
+    if_not_exists     => TRUE
+  );
+END $$;`);
   });
 
   it("is idempotent (view + policy guards)", () => {
@@ -148,7 +186,7 @@ SELECT add_continuous_aggregate_policy('"SensorHourly"',
     void refresh;
     const { up } = createContinuousAggregateSql(noRefresh);
     expect(up).not.toContain("add_continuous_aggregate_policy");
-    expect(up.trimEnd().endsWith("WITH NO DATA;")).toBe(true);
+    expect(up.trimEnd().endsWith("WITH NO DATA;\nEND $$;")).toBe(true);
   });
 
   it("supports a cagg with no groupBy columns", () => {
@@ -215,9 +253,17 @@ describe("createRetentionPolicySql", () => {
 
   it("matches the reset-safe add/remove retention SQL", () => {
     expect(sql.up).toBe(
-      `SELECT add_retention_policy('"SensorReading"', drop_after => INTERVAL '30 days', if_not_exists => TRUE);`,
+      `DO $$
+DECLARE ts_schema text;
+BEGIN
+  SELECT n.nspname INTO ts_schema
+    FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace
+   WHERE e.extname = 'timescaledb';
+  PERFORM set_config('search_path', concat_ws(', ', nullif(current_setting('search_path'), ''), quote_ident(ts_schema)), true);
+  PERFORM add_retention_policy('"SensorReading"', drop_after => INTERVAL '30 days', if_not_exists => TRUE);
+END $$;`,
     );
-    expect(sql.down).toBe(`SELECT remove_retention_policy('"SensorReading"', if_exists => TRUE);`);
+    expect(sql.down).toContain(`PERFORM remove_retention_policy('"SensorReading"', if_exists => TRUE);`);
   });
 
   it("contains NO ::regclass cast; passes the relation as a quoted string literal (constraint 2)", () => {
@@ -253,13 +299,21 @@ describe("createCompressionPolicySql", () => {
   });
 
   it("enables the columnstore then adds a reset-safe columnstore policy (CALL, not SELECT)", () => {
-    expect(sql.up).toBe(`ALTER TABLE "SensorReading" SET (
-  timescaledb.enable_columnstore = true,
-  timescaledb.segmentby = '"deviceId"',
-  timescaledb.orderby = '"time" DESC'
-);
-CALL add_columnstore_policy('"SensorReading"', after => INTERVAL '7 days', if_not_exists => TRUE);`);
-    expect(sql.down).toBe(`CALL remove_columnstore_policy('"SensorReading"', if_exists => TRUE);`);
+    expect(sql.up).toBe(`DO $$
+DECLARE ts_schema text;
+BEGIN
+  SELECT n.nspname INTO ts_schema
+    FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace
+   WHERE e.extname = 'timescaledb';
+  PERFORM set_config('search_path', concat_ws(', ', nullif(current_setting('search_path'), ''), quote_ident(ts_schema)), true);
+  ALTER TABLE "SensorReading" SET (
+    timescaledb.enable_columnstore = true,
+    timescaledb.segmentby = '"deviceId"',
+    timescaledb.orderby = '"time" DESC'
+  );
+  CALL add_columnstore_policy('"SensorReading"', after => INTERVAL '7 days', if_not_exists => TRUE);
+END $$;`);
+    expect(sql.down).toContain(`CALL remove_columnstore_policy('"SensorReading"', if_exists => TRUE);`);
   });
 
   it("contains NO ::regclass cast; passes the policy relation as a quoted string literal (constraint 2)", () => {
@@ -328,7 +382,13 @@ describe("createChunkSkippingSql", () => {
     // The GUC `timescaledb.enable_chunk_skipping` must be on for the function to be callable;
     // doing it as `SET LOCAL` inside one DO block keeps it self-contained and works whether or
     // not Prisma wraps the migration in a transaction (verified empirically against 2.27.2).
-    expect(sql.up).toBe(`DO $$ BEGIN
+    expect(sql.up).toBe(`DO $$
+DECLARE ts_schema text;
+BEGIN
+  SELECT n.nspname INTO ts_schema
+    FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace
+   WHERE e.extname = 'timescaledb';
+  PERFORM set_config('search_path', concat_ws(', ', nullif(current_setting('search_path'), ''), quote_ident(ts_schema)), true);
   SET LOCAL timescaledb.enable_chunk_skipping = on;
   PERFORM enable_chunk_skipping('"SensorReading"', 'eventId', if_not_exists => TRUE);
 END $$;`);
