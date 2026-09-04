@@ -66,7 +66,11 @@ test/
    desired state with idempotent, existence-guarded DO blocks (a block skips
    when a later Prisma migration dropped its table) and removes objects that
    disappeared from the schema, so a full replay of all versions converges on
-   the current state. The previous state is persisted in
+   the current state. A continuous aggregate whose definition changed is
+   dropped and recreated (together with any caggs built on top of it, children
+   first): its materialized data is discarded and refills on the next refresh.
+   A changed refresh, retention, or compression policy is removed and re-added,
+   since TimescaleDB never updates an existing policy in place. The previous state is persisted in
    `migrations/.prisma-extension-timescaledb.json`; an unchanged schema emits
    nothing. Within a version, hypertable conversions come before continuous
    aggregates, which need their source to already be a hypertable.
