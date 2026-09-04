@@ -110,13 +110,19 @@ function orderCaggs(caggs: readonly CaggConfig[]): CaggConfig[] {
  * Canonicalize a state for comparison: stable object-key and array order, no undefineds, and
  * ONLY the fields that reach emitted SQL. `relations`, `columns`, and `model` drive the runtime
  * registry, not migrations — a rename/@map-only change must not spawn a new (empty) migration.
+ * Also applied to a PERSISTED previous state before diffing: a pre-versioning state file may
+ * still carry the registry-only fields, which must not read as a change after an upgrade.
  */
-function canonicalState(schema: TimescaleSchema): ObjectsState {
-  const hypertables = [...schema.hypertables]
+function canonicalObjects(state: ObjectsState): ObjectsState {
+  const hypertables = [...state.hypertables]
     .sort((a, b) => byCodePoint(qualify(a.schema, a.table), qualify(b.schema, b.table)))
     .map(({ relations: _relations, columns: _columns, model: _model, ...rest }) => rest);
-  const continuousAggregates = orderCaggs(schema.continuousAggregates).map(({ model: _model, ...rest }) => rest);
+  const continuousAggregates = orderCaggs(state.continuousAggregates).map(({ model: _model, ...rest }) => rest);
   return { hypertables, continuousAggregates };
+}
+
+function canonicalState(schema: TimescaleSchema): ObjectsState {
+  return canonicalObjects({ hypertables: schema.hypertables, continuousAggregates: schema.continuousAggregates });
 }
 
 /** A cagg's definition WITHOUT its refresh policy — what decides drop-and-recreate. The policy
@@ -307,7 +313,20 @@ export function parseGeneratorState(raw: string | undefined): GeneratorState | u
       parsed.state !== null &&
       typeof parsed.state === "object" &&
       Array.isArray(parsed.state?.hypertables) &&
-      Array.isArray(parsed.state?.continuousAggregates)
+      Array.isArray(parsed.state?.continuousAggregates) &&
+      // Entry-level shape: the removal diff reads these fields directly, so a null or
+      // truncated entry must fall back to full re-assert, not throw mid-diff.
+      parsed.state.hypertables.every(
+        (h) => h !== null && typeof h === "object" && typeof h.table === "string" && typeof h.column === "string",
+      ) &&
+      parsed.state.continuousAggregates.every(
+        (c) =>
+          c !== null &&
+          typeof c === "object" &&
+          typeof c.name === "string" &&
+          typeof c.source === "string" &&
+          Array.isArray(c.aggregates),
+      )
     ) {
       return parsed as GeneratorState;
     }
@@ -352,9 +371,13 @@ export function emitMigrations(
   const state = canonicalState(schema);
   const empty = state.hypertables.length === 0 && state.continuousAggregates.length === 0;
 
+  // Canonicalize the persisted state too: a pre-versioning state file may carry the
+  // registry-only fields the canonical form strips, and that must not read as a change.
+  const prevState = previous ? canonicalObjects(previous.state) : undefined;
+
   const noHistory = !previous && maxExistingSequence === 0;
   if (noHistory && empty) return { files: {} };
-  if (previous && stableStringify(previous.state) === stableStringify(state)) return { files: {} };
+  if (prevState && stableStringify(prevState) === stableStringify(state)) return { files: {} };
   // State file lost but versioned migrations exist, and the schema is empty: without the
   // previous state there is nothing to diff removals against; emit nothing rather than a
   // migration of pure guesses. (The normal empty case with intact state emits removals.)
@@ -372,7 +395,7 @@ ${createExtensionSql().up}
 `;
 
   const creates = renderCreates(state);
-  const removals = previous ? renderRemovals(previous.state, state) : [];
+  const removals = prevState ? renderRemovals(prevState, state) : [];
   const sections = [...removals, ...creates];
 
   files[`${objectsMigrationName(sequence)}/migration.sql`] = `${GENERATED_BANNER}

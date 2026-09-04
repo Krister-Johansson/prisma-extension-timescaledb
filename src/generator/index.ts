@@ -95,11 +95,14 @@ function readState(path: string): GeneratorState | undefined {
   return state;
 }
 
-/** Directory entries of `dir`, or empty when it does not exist yet. */
+/** Directory entries of `dir`, or empty when it does not exist yet. Any error other than
+ * ENOENT rethrows: an unreadable migrations dir (EACCES) must abort, not read as "no history"
+ * and let a later write truncate an existing versioned migration. */
 function listDir(dir: string): string[] {
   try {
     return readdirSync(dir);
-  } catch {
-    return [];
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw e;
   }
 }

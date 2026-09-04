@@ -507,8 +507,10 @@ view Daily {
     expect(dropDaily).toBeGreaterThanOrEqual(0);
     expect(dropHourly).toBeGreaterThanOrEqual(0);
     expect(dropDaily).toBeLessThan(dropHourly); // child before parent
-    // Both are recreated after the drops (creates section re-asserts the full state).
+    // Both are recreated after the drops (creates section re-asserts the full state),
+    // the dependent included — dropping Daily without recreating it would lose the view.
     expect(v2.indexOf(`CREATE MATERIALIZED VIEW IF NOT EXISTS "Hourly"`)).toBeGreaterThan(dropHourly);
+    expect(v2.indexOf(`CREATE MATERIALIZED VIEW IF NOT EXISTS "Daily"`)).toBeGreaterThan(dropHourly);
     expect(v2).toContain("2 hours");
   });
 
@@ -604,5 +606,33 @@ model SensorReading {
         ".prisma-extension-timescaledb.json",
       ]),
     ).toBe(12);
+  });
+});
+
+describe("emitMigrations — second-round review behaviors", () => {
+  it("rejects state files with malformed ENTRIES, not just malformed containers", () => {
+    const base = { version: 1, sequence: 1 };
+    expect(
+      parseGeneratorState(JSON.stringify({ ...base, state: { hypertables: [null], continuousAggregates: [] } })),
+    ).toBeUndefined();
+    expect(
+      parseGeneratorState(JSON.stringify({ ...base, state: { hypertables: [{ table: "T" }], continuousAggregates: [] } })),
+    ).toBeUndefined(); // hypertable entry missing column
+    expect(
+      parseGeneratorState(
+        JSON.stringify({ ...base, state: { hypertables: [], continuousAggregates: [{ name: "V", source: "T" }] } }),
+      ),
+    ).toBeUndefined(); // cagg entry missing aggregates
+  });
+
+  it("a legacy state file carrying registry-only fields does not read as a change", async () => {
+    const schema = await loadSchema();
+    const { nextState } = emitMigrations(schema);
+    // Simulate a state persisted before canonicalState stripped model/columns.
+    const legacy: GeneratorState = JSON.parse(JSON.stringify(nextState)) as GeneratorState;
+    (legacy.state.hypertables[0] as { model?: string; columns?: Record<string, string> }).model = "SensorReading";
+    (legacy.state.hypertables[0] as { model?: string; columns?: Record<string, string> }).columns = { deviceId: "device_id" };
+    (legacy.state.continuousAggregates[0] as { model?: string }).model = "SensorHourly";
+    expect(emitMigrations(schema, legacy).files).toEqual({});
   });
 });
