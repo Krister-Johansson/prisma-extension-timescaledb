@@ -133,20 +133,31 @@ export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> 
   const databaseUrl = `${baseUrl}/app?schema=${urlSchema}`;
   const shadowUrl = `${baseUrl}/shadow?schema=${urlSchema}`;
 
-  // Belt and braces on top of the wait strategy: prove a real client session works.
-  await withContainerLogs(container, "waiting for Postgres to accept connections", () =>
-    waitForReady(`${baseUrl}/app`),
-  );
-  // Shadow DB on the same server (TimescaleDB-capable), required by migrate reset/dev. Retried
-  // like everything else that touches the network here: an unretried statement between container
-  // start and the first test is exactly the shape of failure that shows up as a beforeAll throw
-  // once in a few hundred container starts, with no output left behind to explain it.
-  await withContainerLogs(container, "creating the shadow database", () =>
-    retry(() => runOnce(`${baseUrl}/postgres`, "CREATE DATABASE shadow")),
-  );
+  // Everything from here on can throw, and until we return a Harness the caller has no stop() to
+  // reach. Without this the container outlives the failed startup, and a run that trips the same
+  // failure in several files leaves that many containers behind.
+  const projectDir = await onFailureStopContainer(container, async () => {
+    // Belt and braces on top of the wait strategy: prove a real client session works.
+    await withContainerLogs(container, "waiting for Postgres to accept connections", () =>
+      waitForReady(`${baseUrl}/app`),
+    );
+    // Shadow DB on the same server (TimescaleDB-capable), required by migrate reset/dev. Retried
+    // like everything else that touches the network here: an unretried statement between container
+    // start and the first test is exactly the shape of failure that shows up as a beforeAll throw
+    // once in a few hundred container starts, with no output left behind to explain it.
+    await withContainerLogs(container, "creating the shadow database", () =>
+      retry(() => runOnce(`${baseUrl}/postgres`, "CREATE DATABASE shadow")),
+    );
 
-  const projectDir = mkdtempSync(join(REPO_ROOT, ".tmp-int-"));
-  scaffoldProject(projectDir, opts);
+    const dir = mkdtempSync(join(REPO_ROOT, ".tmp-int-"));
+    try {
+      scaffoldProject(dir, opts);
+    } catch (err) {
+      rmSync(dir, { recursive: true, force: true });
+      throw err;
+    }
+    return dir;
+  });
 
   const env = {
     ...process.env,
@@ -342,6 +353,24 @@ async function withContainerLogs<T>(
       // fall through to the placeholder
     }
     throw new Error(`[harness] failed while ${step}: ${(e as Error).message}\n--- container logs (tail) ---\n${tail}`);
+  }
+}
+
+/**
+ * Run the startup steps that happen after `container.start()` but before a `Harness` exists. On
+ * failure the container is stopped, since the caller never gets a `stop()` to call, and the
+ * original error is rethrown: a failure to stop must not replace the reason startup failed.
+ */
+async function onFailureStopContainer<T>(container: StartedTestContainer, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    try {
+      await container.stop();
+    } catch {
+      // The startup failure is the useful one; a failed stop would only mask it.
+    }
+    throw e;
   }
 }
 
