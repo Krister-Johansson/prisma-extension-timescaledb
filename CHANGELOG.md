@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.2](https://github.com/Krister-Johansson/prisma-extension-timescaledb/compare/prisma-extension-timescaledb-v1.0.1...prisma-extension-timescaledb-v1.0.2) (2026-09-05)
+
+
+### Miscellaneous Chores
+
+* release 1.0.2 ([#139](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/139)) ([36451ec](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/36451eca3cca5ea333e541e67359a02a07a62632))
+
 ## [1.0.1](https://github.com/Krister-Johansson/prisma-extension-timescaledb/compare/prisma-extension-timescaledb-v1.0.0...prisma-extension-timescaledb-v1.0.1) (2026-09-05)
 
 
