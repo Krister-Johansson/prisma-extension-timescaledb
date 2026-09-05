@@ -14,6 +14,7 @@
 // only thing that creates indexes on the table, so there is nothing for Prisma to read as drift.
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startHarness, type Harness, dockerAvailable } from "./harness.js";
 
@@ -53,6 +54,24 @@ describe.skipIf(!DOCKER_OK)("migrate dev after a hypertable conversion", () => {
 
   it("creates only the indexes the Prisma schema declares", async () => {
     expect(await indexes(h)).toEqual(["SensorReading_deviceId_time_idx", "SensorReading_pkey"]);
+  });
+
+  // Both `migrate dev` calls below reset the shadow three times each, and every reset drops and
+  // re-creates the extension. That restarts TimescaleDB's telemetry job, whose catalog locks can
+  // deadlock the next reset and send Prisma down `best_effort_reset`, which drops the continuous
+  // aggregate with `DROP VIEW` and fails with P3016 (issue #135). The harness turns telemetry off
+  // on the shadow database for that reason; this pins it, so the flake cannot return unnoticed.
+  it("runs migrate dev against a shadow database with TimescaleDB telemetry off", async () => {
+    const client = new pg.Client({ connectionString: h.shadowUrl });
+    await client.connect();
+    try {
+      const { rows } = await client.query<{ level: string }>(
+        "SELECT current_setting('timescaledb.telemetry_level') AS level",
+      );
+      expect(rows[0]?.level).toBe("off");
+    } finally {
+      await client.end();
+    }
   });
 
   it("writes no drift migration on migrate dev --create-only (the documented flow)", () => {

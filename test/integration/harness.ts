@@ -148,6 +148,20 @@ export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> 
     await withContainerLogs(container, "creating the shadow database", () =>
       retry(() => runOnce(`${baseUrl}/postgres`, "CREATE DATABASE shadow")),
     );
+    // Prisma resets the shadow with `DROP SCHEMA "public" CASCADE` before each of the three shadow
+    // uses inside one `migrate dev`. The image installs the extension into `public`, so every
+    // reset drops it and kills the shadow's TimescaleDB scheduler; the first migration re-creates
+    // the extension, the scheduler restarts, and its first act is the "Telemetry Reporter" job,
+    // which builds its report in one transaction while holding AccessShareLocks on the extension
+    // catalog. A reset that lands in that window deadlocks on `_timescaledb_catalog.bgw_job`,
+    // Prisma swallows the error and falls back to `best_effort_reset`, and THAT issues `DROP VIEW`
+    // on the continuous aggregate: the intermittent P3016 of issue #135. With telemetry off the
+    // job returns before opening a transaction and never holds a lock. Verified with the
+    // interleaving pinned: 20/20 failures with telemetry on, 0/20 with it off. Database-level
+    // settings are honoured by the background worker, so the app database keeps its defaults.
+    await withContainerLogs(container, "disabling TimescaleDB telemetry on the shadow database", () =>
+      retry(() => runOnce(`${baseUrl}/postgres`, "ALTER DATABASE shadow SET timescaledb.telemetry_level = 'off'")),
+    );
 
     const dir = mkdtempSync(join(REPO_ROOT, ".tmp-int-"));
     try {
