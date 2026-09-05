@@ -283,6 +283,27 @@ export default defineConfig({
 
 Tiger Cloud rejects Prisma's auto-created shadow-database name, so a dedicated
 `shadowDatabaseUrl` is mandatory there; this package cannot paper over it.
+
+Turn TimescaleDB telemetry off on the shadow database once, after you create
+it. `shadow` here is the database name from your `shadowDatabaseUrl`; the
+repo's `docker/init-shadow-db.sql` already does this for the local setup:
+
+```sql
+ALTER DATABASE shadow SET timescaledb.telemetry_level = 'off';
+```
+
+Without it, `migrate dev` can fail intermittently with `P3016` and
+`cannot drop continuous aggregate using DROP VIEW` when the schema declares a
+continuous aggregate. Prisma resets the shadow with `DROP SCHEMA "public"
+CASCADE` before each use, which also drops the extension when it lives in
+`public`. Re-creating the extension restarts TimescaleDB's telemetry job, which
+holds locks on the extension catalog while it builds its report; a reset that
+arrives in that window deadlocks, Prisma silently falls back to a per-view
+`DROP VIEW`, and that fails on the aggregate. With telemetry off the job takes
+no locks. Dropping the aggregates from the shadow yourself before `migrate dev`
+does not cover this, because the migrations re-create them inside the command
+and the later resets of the same command still see them. In CI you can set it
+for the whole server instead with `-c timescaledb.telemetry_level=off`.
 Full details in
 [Setup → Shadow database](https://github.com/Krister-Johansson/prisma-extension-timescaledb/wiki/Setup#shadow-database).
 
