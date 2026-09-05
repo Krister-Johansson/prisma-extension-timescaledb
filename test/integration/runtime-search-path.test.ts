@@ -9,27 +9,13 @@
 //
 // Prisma's own queries survive it, because the engine schema-qualifies the relations it
 // generates. This covers the raw SQL, which does not.
-import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { startHarness, type Harness, type TestPrismaClient } from "./harness.js";
+import { startHarness, type Harness, type TestPrismaClient, dockerAvailable } from "./harness.js";
 import { timescaledb } from "../../src/client/index.js";
 
-const DOCKER_OK = (() => {
-  try {
-    execFileSync("docker", ["info"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-})();
-
-if (!DOCKER_OK) {
-  console.warn(
-    "\n[integration] SKIPPED runtime-search-path.test.ts: Docker is not available. Runtime queries under a narrowed search path are NOT verified.\n",
-  );
-}
+const DOCKER_OK = dockerAvailable("Runtime queries under a narrowed search path are NOT verified.");
 
 // The tables live in the service's own schema and the search path points at them, which is what
 // `?schema=data_collection` plus a matching role default gives you. Relations therefore still

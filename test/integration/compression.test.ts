@@ -2,27 +2,13 @@
 // reset-safe `enable_columnstore` + `add_columnstore_policy` from @timescale.compression, and the
 // $timescale runtime helpers add/remove a policy. Verified against timescaledb_information.jobs and
 // hypertable_columnstore_settings. Requires TimescaleDB >= 2.18 (the columnstore API).
-import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { startHarness, type Harness } from "./harness.js";
+import { startHarness, type Harness, dockerAvailable } from "./harness.js";
 import { timescaledb } from "../../src/client/index.js";
 
-const DOCKER_OK = (() => {
-  try {
-    execFileSync("docker", ["info"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-})();
-
-if (!DOCKER_OK) {
-  console.warn(
-    "\n[integration] SKIPPED compression.test.ts: Docker is not available. Compression policies are NOT verified.\n",
-  );
-}
+const DOCKER_OK = dockerAvailable("Compression policies are NOT verified.");
 
 // Hypertable with a columnstore-compression policy (matches the harness default CREATE TABLE).
 const MODELS = `/// @timescale.hypertable(column: "time", chunkInterval: "1 day")

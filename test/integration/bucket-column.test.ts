@@ -3,27 +3,13 @@
 // the "bucket" alias used to fail every timeBucket() on such a model with "column ... must appear
 // in the GROUP BY clause" — and the same alias capture broke the cagg CREATE at migrate deploy.
 // Proves both builders group by the expression instead.
-import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { startHarness, type Harness, type TestPrismaClient } from "./harness.js";
+import { startHarness, type Harness, type TestPrismaClient, dockerAvailable } from "./harness.js";
 import { timescaledb } from "../../src/client/index.js";
 
-const DOCKER_OK = (() => {
-  try {
-    execFileSync("docker", ["info"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-})();
-
-if (!DOCKER_OK) {
-  console.warn(
-    "\n[integration] SKIPPED bucket-column.test.ts: Docker is not available. bucket-column collision is NOT verified.\n",
-  );
-}
+const DOCKER_OK = dockerAvailable("bucket-column collision is NOT verified.");
 
 const MODELS = `/// @timescale.hypertable(column: "time", chunkInterval: "1 day")
 model Reading {

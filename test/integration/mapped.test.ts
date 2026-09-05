@@ -1,27 +1,13 @@
 // End-to-end proof that @@map / @map work: a fully renamed schema (table "sensor_readings",
 // columns "ts"/"device_id", view "sensor_hourly", "avg_temp"). Proves the generator emits
 // DB-mapped SQL and the runtime resolves Prisma names -> DB names against real TimescaleDB.
-import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { startHarness, type Harness } from "./harness.js";
+import { startHarness, type Harness, dockerAvailable } from "./harness.js";
 import { timescaledb } from "../../src/client/index.js";
 
-const DOCKER_OK = (() => {
-  try {
-    execFileSync("docker", ["info"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-})();
-
-if (!DOCKER_OK) {
-  console.warn(
-    "\n[integration] SKIPPED: Docker is not available. The @@map/@map reset-safety + runtime checks are NOT verified.\n",
-  );
-}
+const DOCKER_OK = dockerAvailable("The @@map/@map reset-safety + runtime checks are NOT verified.");
 
 const MODELS = `/// @timescale.hypertable(column: "time", chunkInterval: "1 day")
 model SensorReading {

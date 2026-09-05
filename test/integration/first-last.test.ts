@@ -1,25 +1,13 @@
 // first() / last() aggregates in timeBucket, end-to-end on real TimescaleDB: the value of one
 // column at the earliest / latest time in each bucket (ordered by the model's time column by
 // default). Verified for a numeric and a text column against known per-bucket extremes.
-import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { startHarness, type Harness, type TestPrismaClient } from "./harness.js";
+import { startHarness, type Harness, type TestPrismaClient, dockerAvailable } from "./harness.js";
 import { timescaledb } from "../../src/client/index.js";
 
-const DOCKER_OK = (() => {
-  try {
-    execFileSync("docker", ["info"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-})();
-
-if (!DOCKER_OK) {
-  console.warn("\n[integration] SKIPPED first-last.test.ts: Docker is not available. first/last are NOT verified.\n");
-}
+const DOCKER_OK = dockerAvailable("first/last are NOT verified.");
 
 const MODELS = `/// @timescale.hypertable(column: "time", chunkInterval: "1 day")
 model SensorReading {

@@ -12,26 +12,12 @@
 // So a changed value only lands because the generator emits an explicit removal ahead of the
 // idempotent re-add. That diff is unit-tested as SQL strings; this runs it against a real
 // TimescaleDB and reads the values back out of the catalog.
-import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { startHarness, type Harness } from "./harness.js";
+import { startHarness, type Harness, dockerAvailable } from "./harness.js";
 
-const DOCKER_OK = (() => {
-  try {
-    execFileSync("docker", ["info"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-})();
-
-if (!DOCKER_OK) {
-  console.warn(
-    "\n[integration] SKIPPED evolution-values.test.ts: Docker is not available. Changed annotation values are NOT verified.\n",
-  );
-}
+const DOCKER_OK = dockerAvailable("Changed annotation values are NOT verified.");
 
 const TABLE = `model SensorReading {
   time        DateTime

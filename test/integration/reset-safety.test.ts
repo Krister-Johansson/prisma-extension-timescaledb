@@ -1,27 +1,13 @@
 // THE reset-safety proof (BUILD_PLAN M5): apply the GENERATED migrations through Prisma's
 // engine on a real TimescaleDB, then `migrate reset` twice and confirm the hypertable +
 // continuous aggregate + policy are reproduced with zero manual steps and zero errors.
-import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { startHarness, type Harness } from "./harness.js";
+import { startHarness, type Harness, dockerAvailable } from "./harness.js";
 import { timescaledb } from "../../src/client/index.js";
 
-const DOCKER_OK = (() => {
-  try {
-    execFileSync("docker", ["info"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-})();
-
-if (!DOCKER_OK) {
-  console.warn(
-    "\n[integration] SKIPPED: Docker is not available. The reset-safety guarantee is NOT verified.\n",
-  );
-}
+const DOCKER_OK = dockerAvailable("The reset-safety guarantee is NOT verified.");
 
 async function counts(h: Harness) {
   const [hyper] = await h.query<{ n: number }>(

@@ -12,26 +12,12 @@
 //
 // The builder passes `create_default_indexes => FALSE`, which leaves the Prisma schema as the
 // only thing that creates indexes on the table, so there is nothing for Prisma to read as drift.
-import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { startHarness, type Harness } from "./harness.js";
+import { startHarness, type Harness, dockerAvailable } from "./harness.js";
 
-const DOCKER_OK = (() => {
-  try {
-    execFileSync("docker", ["info"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-})();
-
-if (!DOCKER_OK) {
-  console.warn(
-    "\n[integration] SKIPPED migrate-dev-drift.test.ts: Docker is not available. migrate dev after a hypertable conversion is NOT verified.\n",
-  );
-}
+const DOCKER_OK = dockerAvailable("migrate dev after a hypertable conversion is NOT verified.");
 
 /** Every migration.sql in the project, so a drift migration cannot hide in a new folder. */
 function migrationSql(h: Harness): string {

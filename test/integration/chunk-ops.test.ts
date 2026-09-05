@@ -4,25 +4,13 @@
 //
 // Runtime-only feature (these $timescale methods emit no migration SQL), so — like the other runtime
 // $timescale tests — it uses migrate deploy without a migrate-reset assertion.
-import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { startHarness, type Harness, type TestPrismaClient } from "./harness.js";
+import { startHarness, type Harness, type TestPrismaClient, dockerAvailable } from "./harness.js";
 import { timescaledb } from "../../src/client/index.js";
 
-const DOCKER_OK = (() => {
-  try {
-    execFileSync("docker", ["info"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-})();
-
-if (!DOCKER_OK) {
-  console.warn("\n[integration] SKIPPED chunk-ops.test.ts: Docker is not available. Not verified.\n");
-}
+const DOCKER_OK = dockerAvailable("On-demand chunk operations are NOT verified.");
 
 const MODELS = `/// @timescale.hypertable(column: "time", chunkInterval: "1 day")
 /// @timescale.compression(after: "7 days", segmentBy: "deviceId")

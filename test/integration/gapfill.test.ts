@@ -2,25 +2,13 @@
 // bucket across the range (via time_bucket_gapfill, bounds inferred from the range WHERE), and the
 // per-aggregate fill modes carry forward (locf) / interpolate empty buckets. Values verified
 // against a known gap (bucket 01:00 has no data between 00:00 and 02:00).
-import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { startHarness, type Harness, type TestPrismaClient } from "./harness.js";
+import { startHarness, type Harness, type TestPrismaClient, dockerAvailable } from "./harness.js";
 import { timescaledb } from "../../src/client/index.js";
 
-const DOCKER_OK = (() => {
-  try {
-    execFileSync("docker", ["info"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-})();
-
-if (!DOCKER_OK) {
-  console.warn("\n[integration] SKIPPED gapfill.test.ts: Docker is not available. Gap-filling is NOT verified.\n");
-}
+const DOCKER_OK = dockerAvailable("Gap-filling is NOT verified.");
 
 const MODELS = `/// @timescale.hypertable(column: "time", chunkInterval: "1 day")
 model SensorReading {

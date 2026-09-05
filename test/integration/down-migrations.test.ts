@@ -4,26 +4,12 @@
 // executed against a real database (it's only asserted as a string snapshot in unit tests).
 // This proves it end to end: `DROP VIEW` is rejected, the generated `DROP MATERIALIZED VIEW`
 // drops the cagg cleanly, and re-running it is an idempotent no-op (constraint 3).
-import { execFileSync } from "node:child_process";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { startHarness, type Harness } from "./harness.js";
+import { startHarness, type Harness, dockerAvailable } from "./harness.js";
 import { createContinuousAggregateSql } from "../../src/core/index.js";
 import type { CaggConfig } from "../../src/core/types.js";
 
-const DOCKER_OK = (() => {
-  try {
-    execFileSync("docker", ["info"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-})();
-
-if (!DOCKER_OK) {
-  console.warn(
-    "\n[integration] SKIPPED: Docker is not available. Down-migration (constraint 4) is NOT verified.\n",
-  );
-}
+const DOCKER_OK = dockerAvailable("Down-migration (constraint 4) is NOT verified.");
 
 // Mirrors the harness DEFAULT_MODELS `SensorHourly` cagg. Only `name`/`schema` drive the
 // `down` SQL, but the builder validates the whole config, so it must be well-formed.

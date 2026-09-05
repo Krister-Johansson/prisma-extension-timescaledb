@@ -2,27 +2,13 @@
 // parity with Prisma's own engine (findMany count on the same filter), proving the LOWER(...)
 // translation matches what Prisma emits for insensitive equality, lists, comparisons, and
 // negation — including NULL exclusion.
-import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { startHarness, type Harness, type TestPrismaClient } from "./harness.js";
+import { startHarness, type Harness, type TestPrismaClient, dockerAvailable } from "./harness.js";
 import { timescaledb } from "../../src/client/index.js";
 
-const DOCKER_OK = (() => {
-  try {
-    execFileSync("docker", ["info"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-})();
-
-if (!DOCKER_OK) {
-  console.warn(
-    "\n[integration] SKIPPED where-insensitive.test.ts: Docker is not available. Insensitive mode is NOT verified.\n",
-  );
-}
+const DOCKER_OK = dockerAvailable("Insensitive mode is NOT verified.");
 
 const MODELS = `/// @timescale.hypertable(column: "time", chunkInterval: "1 day")
 model Reading {

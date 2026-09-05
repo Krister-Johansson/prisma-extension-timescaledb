@@ -7,26 +7,14 @@
 // runtime $timescale tests (cagg-policy, chunk-helpers, set-chunk-interval) — it uses migrate deploy
 // without a migrate-reset assertion. Reset-safety of the underlying retention/cagg refresh policies
 // is covered by retention.test.ts / reset-safety.test.ts.
-import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { startHarness, type Harness, type TestPrismaClient } from "./harness.js";
+import { startHarness, type Harness, type TestPrismaClient, dockerAvailable } from "./harness.js";
 import { timescaledb } from "../../src/client/index.js";
 import type { TimescaleJob } from "../../src/client/manage.js";
 
-const DOCKER_OK = (() => {
-  try {
-    execFileSync("docker", ["info"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-})();
-
-if (!DOCKER_OK) {
-  console.warn("\n[integration] SKIPPED jobs.test.ts: Docker is not available. Not verified.\n");
-}
+const DOCKER_OK = dockerAvailable("Job control and introspection are NOT verified.");
 
 // Default harness columns (time / deviceId / temperature) + a retention policy on the hypertable and
 // a refresh policy on the cagg.

@@ -1,27 +1,13 @@
 // Retention policies end-to-end on a real TimescaleDB: the generator emits a reset-safe
 // add_retention_policy from @timescale.retention, and the $timescale runtime helpers
 // add/remove a policy. Verified against timescaledb_information.jobs.
-import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { startHarness, type Harness } from "./harness.js";
+import { startHarness, type Harness, dockerAvailable } from "./harness.js";
 import { timescaledb } from "../../src/client/index.js";
 
-const DOCKER_OK = (() => {
-  try {
-    execFileSync("docker", ["info"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-})();
-
-if (!DOCKER_OK) {
-  console.warn(
-    "\n[integration] SKIPPED retention.test.ts: Docker is not available. Retention policies are NOT verified.\n",
-  );
-}
+const DOCKER_OK = dockerAvailable("Retention policies are NOT verified.");
 
 // Hypertable-only schema with a retention policy (matches the harness default CREATE TABLE).
 const MODELS = `/// @timescale.hypertable(column: "time", chunkInterval: "1 day")
