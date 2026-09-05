@@ -123,7 +123,11 @@ describe.skipIf(!DOCKER_OK)("migrations under a non-public search path (issue #1
   // `migrate dev` replays every migration against the shadow database, which carries the same
   // `?schema=` and so the same search path. The reported flow starts with a `migrate dev`, so
   // the shadow replay has to survive it too.
-  it("passes migrate dev, which replays the migrations on the shadow database", () => {
+  it("passes migrate dev, which replays the migrations on the shadow database", async () => {
+    // Clear any cagg the shadow is holding first: Prisma resets it on some runs and its reset
+    // uses DROP VIEW, which TimescaleDB refuses on a cagg (#135). Unrelated to the search path,
+    // which is what this test is for.
+    await h.resetShadow();
     expect(() => h.prisma(["migrate", "dev", "--name", "noop"])).not.toThrow();
   }, 120_000);
 

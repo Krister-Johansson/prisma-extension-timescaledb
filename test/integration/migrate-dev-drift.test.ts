@@ -55,13 +55,18 @@ describe.skipIf(!DOCKER_OK)("migrate dev after a hypertable conversion", () => {
     expect(await indexes(h)).toEqual(["SensorReading_deviceId_time_idx", "SensorReading_pkey"]);
   });
 
-  it("writes no drift migration on migrate dev --create-only (the documented flow)", () => {
+  it("writes no drift migration on migrate dev --create-only (the documented flow)", async () => {
+    await h.resetShadow();
     h.prisma(["migrate", "dev", "--create-only", "--name", "check"]);
     expect(migrationSql(h)).not.toContain("DropIndex");
     expect(migrationSql(h)).not.toContain("DROP INDEX");
   }, 120_000);
 
-  it("writes no drift migration on a full migrate dev either", () => {
+  it("writes no drift migration on a full migrate dev either", async () => {
+    // The previous migrate dev left a cagg in the shadow, and Prisma resets the shadow on some
+    // runs (see #135), where DROP VIEW on a cagg fails the command outright. Clearing it first is
+    // the recovery the README documents; what this test is actually about is the drift below.
+    await h.resetShadow();
     h.prisma(["migrate", "dev", "--name", "check_applied"]);
     expect(migrationSql(h)).not.toContain("DROP INDEX");
   }, 120_000);

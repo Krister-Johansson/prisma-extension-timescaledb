@@ -36,6 +36,16 @@ export interface Harness {
   query<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<T[]>;
   /** Run the prisma CLI in the temp project. */
   prisma(args: string[]): void;
+  /**
+   * Drop any continuous aggregate the shadow database is holding, with DROP MATERIALIZED VIEW.
+   *
+   * Prisma leaves the shadow holding whatever the migration history built, a cagg included, and
+   * its own cleanup is a *soft* reset (`best_effort_reset`) whenever `shadowDatabaseUrl` is
+   * configured — which this package requires. That reset drops views before tables, with
+   * `DROP VIEW`, and TimescaleDB refuses that on a cagg. See the Troubleshooting section of the
+   * README: this is the same recovery a user has to perform by hand.
+   */
+  resetShadow(): Promise<void>;
   stop(): Promise<void>;
 }
 
@@ -188,6 +198,9 @@ export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> 
     shadowUrl,
     query,
     prisma,
+    async resetShadow() {
+      await dropContinuousAggregates(shadowUrl);
+    },
     async stop() {
       rmSync(projectDir, { recursive: true, force: true });
       await container.stop();
@@ -371,6 +384,34 @@ async function onFailureStopContainer<T>(container: StartedTestContainer, fn: ()
       // The startup failure is the useful one; a failed stop would only mask it.
     }
     throw e;
+  }
+}
+
+/**
+ * Drop every continuous aggregate in a database, with the only statement TimescaleDB accepts.
+ *
+ * `DROP MATERIALIZED VIEW` is mandatory (CLAUDE.md constraint #4): a cagg is a view in the
+ * catalog, so anything that enumerates views and issues `DROP VIEW` fails with "cannot drop
+ * continuous aggregate using DROP VIEW". Prisma's `best_effort_reset` is exactly such a thing.
+ *
+ * Only the caggs are removed. Everything else in the shadow is ordinary and Prisma's own reset
+ * handles it; dropping the schema instead would take the `timescaledb` extension with it, since
+ * the extension migration pins it to `public`.
+ */
+async function dropContinuousAggregates(connectionString: string): Promise<void> {
+  const client = new pg.Client({ connectionString });
+  await client.connect();
+  try {
+    // Hierarchical caggs read from other caggs, so CASCADE removes dependents and a later row in
+    // this list may already be gone. IF EXISTS covers that.
+    const caggs = await client.query<{ view_schema: string; view_name: string }>(
+      "SELECT view_schema, view_name FROM timescaledb_information.continuous_aggregates",
+    );
+    for (const c of caggs.rows) {
+      await client.query(`DROP MATERIALIZED VIEW IF EXISTS "${c.view_schema}"."${c.view_name}" CASCADE`);
+    }
+  } finally {
+    await client.end();
   }
 }
 

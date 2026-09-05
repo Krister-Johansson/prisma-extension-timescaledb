@@ -286,6 +286,55 @@ Tiger Cloud rejects Prisma's auto-created shadow-database name, so a dedicated
 Full details in
 [Setup → Shadow database](https://github.com/Krister-Johansson/prisma-extension-timescaledb/wiki/Setup#shadow-database).
 
+### `migrate dev` fails with P3016 and `cannot drop continuous aggregate using DROP VIEW`
+
+```
+Error: P3016
+The fallback method for database resets failed, meaning Migrate could not clean up the database entirely. Original error:
+ERROR: cannot drop continuous aggregate using DROP VIEW
+HINT: Use DROP MATERIALIZED VIEW to drop a continuous aggregate.
+```
+
+The message names no database, and the one to clean is the **shadow**, not your
+application database.
+
+`migrate dev` replays your migration history onto the shadow and leaves the
+result there, continuous aggregates included. Cleaning that shadow up again is
+Prisma's job, but because you configured `shadowDatabaseUrl` — which the section
+above requires — Prisma cannot drop and recreate the database, so it does a
+*soft* reset instead: it enumerates the views it can see and drops each one with
+`DROP VIEW`. A continuous aggregate is a view in the catalog, and TimescaleDB
+refuses `DROP VIEW` on one. The command dies before it does anything else.
+
+Clear the aggregates out of the shadow database and re-run:
+
+```sql
+-- Against your SHADOW database, not the application one.
+DO $$
+DECLARE c record;
+BEGIN
+  FOR c IN SELECT view_schema, view_name FROM timescaledb_information.continuous_aggregates LOOP
+    EXECUTE format('DROP MATERIALIZED VIEW IF EXISTS %I.%I CASCADE', c.view_schema, c.view_name);
+  END LOOP;
+END $$;
+```
+
+Nothing of yours is lost: the shadow database holds only a throwaway replay of
+your migrations, and the next `migrate dev` rebuilds it.
+
+Two things worth knowing:
+
+- **It does not happen on every run.** Prisma only resets the shadow on some
+  invocations, and which ones is not established
+  ([#135](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/135)).
+  A `migrate dev` that worked yesterday can fail today with no change from you.
+- **Prefer letting Prisma manage the shadow database where you can.** When
+  `shadowDatabaseUrl` is unset, Prisma creates and drops a shadow database of its
+  own, so no `DROP VIEW` is ever issued and this cannot happen. That is only an
+  option when your server lets Prisma create databases and has `timescaledb`
+  available to the new one — not the case on Tiger Cloud, and not the case for a
+  user without `CREATEDB`.
+
 ## License
 
 MIT © Krister Johansson
