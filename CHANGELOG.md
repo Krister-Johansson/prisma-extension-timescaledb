@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/Krister-Johansson/prisma-extension-timescaledb/compare/prisma-extension-timescaledb-v1.0.0...prisma-extension-timescaledb-v1.0.1) (2026-09-05)
+
+
+### Bug Fixes
+
+* resolve TimescaleDB's schema in generated migrations and at runtime ([#130](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/130)) ([cd683e4](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/cd683e4f2778038cebc7fd1ed89ca6e9b7514a78))
+
 ## [1.0.0](https://github.com/Krister-Johansson/prisma-extension-timescaledb/compare/prisma-extension-timescaledb-v0.8.0...prisma-extension-timescaledb-v1.0.0) (2026-09-04)
 
 
