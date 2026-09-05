@@ -284,7 +284,9 @@ export default defineConfig({
 Tiger Cloud rejects Prisma's auto-created shadow-database name, so a dedicated
 `shadowDatabaseUrl` is mandatory there; this package cannot paper over it.
 
-Turn TimescaleDB telemetry off on the shadow database once, after you create it:
+Turn TimescaleDB telemetry off on the shadow database once, after you create
+it. `shadow` here is the database name from your `shadowDatabaseUrl`; the
+repo's `docker/init-shadow-db.sql` already does this for the local setup:
 
 ```sql
 ALTER DATABASE shadow SET timescaledb.telemetry_level = 'off';
