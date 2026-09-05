@@ -1,28 +1,32 @@
-// TEMPORARY PROBE for #135 — not intended to be merged.
+// TEMPORARY PROBE v2 for #135 — not intended to be merged.
 //
-// Question: after `prisma migrate dev`, does the SHADOW database still hold the continuous
-// aggregate? Prisma's reset is a *soft* reset whenever shadowDatabaseUrl is configured
-// (schema-engine: `if soft || self.inner.reset(..).is_err() { best_effort_reset(..) }`), and
-// best_effort_reset drops every view it can describe with DROP VIEW, which TimescaleDB refuses
-// on a cagg. If the shadow retains the cagg between runs, the second migrate dev must fail
-// every time — which contradicts the observed pass rate, so something in that model is wrong.
+// Probe v1 established two things and refuted a third:
+//   - the shadow database DOES keep the cagg after a migrate dev (shadow caggs: SensorHourly)
+//   - five alternating --create-only / full migrate dev runs all PASSED with it sitting there
+//   - so "cagg in the shadow" is NOT sufficient to fail, even though best_effort_reset drops
+//     views before tables and TimescaleDB refuses DROP VIEW on a cagg
 //
-// This records the actual state rather than reasoning about it.
+// Therefore Prisma only resets the shadow on some runs. This probe replays the exact sequence
+// from migrate-dev-drift.test.ts (the one that actually fails) on FRESH harnesses, several
+// times, recording the shadow around every single prisma invocation plus the migration folder
+// and _prisma_migrations rows, so a failing repetition can be compared against a passing one.
 import { execFileSync } from "node:child_process";
+import { readdirSync } from "node:fs";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, it } from "vitest";
+import { describe, it } from "vitest";
 import pg from "pg";
 import { startHarness, type Harness, dockerAvailable } from "./harness.js";
 
-const DOCKER_OK = dockerAvailable("PROBE #135 did not run.");
+const DOCKER_OK = dockerAvailable("PROBE #135 v2 did not run.");
 
 const PRISMA_BIN = join(process.cwd(), "node_modules", ".bin", "prisma");
 
+/** One line per observation, on stderr so it survives vitest's per-test console buffering. */
 function log(msg: string): void {
-  process.stderr.write(`[probe135] ${msg}\n`);
+  process.stderr.write(`[probe135v2] ${msg}\n`);
 }
 
-/** Relations in `public`, by kind, so a cagg (a view) and its matview are both visible. */
+/** Relations in `public` by kind, so a cagg view and a plain table are distinguishable. */
 async function relations(connectionString: string): Promise<string> {
   const client = new pg.Client({ connectionString });
   await client.connect();
@@ -40,16 +44,16 @@ async function relations(connectionString: string): Promise<string> {
   }
 }
 
-/** Does TimescaleDB consider anything here a continuous aggregate? */
-async function caggs(connectionString: string): Promise<string> {
+/** Applied migration names, to see what the history looked like when a run failed. */
+async function applied(connectionString: string): Promise<string> {
   const client = new pg.Client({ connectionString });
   await client.connect();
   try {
     const res = await client.query(
-      "SELECT view_name FROM timescaledb_information.continuous_aggregates ORDER BY 1",
+      "SELECT migration_name, finished_at IS NOT NULL AS done FROM _prisma_migrations ORDER BY started_at",
     );
-    const rows = res.rows as { view_name: string }[];
-    return rows.length === 0 ? "(none)" : rows.map((r) => r.view_name).join(", ");
+    const rows = res.rows as { migration_name: string; done: boolean }[];
+    return rows.length === 0 ? "(none)" : rows.map((r) => `${r.migration_name}${r.done ? "" : "(UNFINISHED)"}`).join(", ");
   } catch (e) {
     return `(query failed: ${(e as Error).message})`;
   } finally {
@@ -57,61 +61,64 @@ async function caggs(connectionString: string): Promise<string> {
   }
 }
 
-describe.skipIf(!DOCKER_OK)("PROBE #135", () => {
-  let h: Harness;
-  let devUrl: string;
-  let shadowUrl: string;
+/** Run the Prisma CLI, returning its outcome instead of throwing, so the probe always reports. */
+function runPrisma(h: Harness, args: string[]): { ok: boolean; out: string } {
+  try {
+    const out = execFileSync(PRISMA_BIN, args, {
+      cwd: h.projectDir,
+      env: {
+        ...process.env,
+        DATABASE_URL: h.databaseUrl,
+        SHADOW_DATABASE_URL: h.shadowUrl,
+        PRISMA_USER_CONSENT_FOR_DANGEROUS_AI_ACTION: "yes",
+      },
+      stdio: "pipe",
+      encoding: "utf8",
+    });
+    return { ok: true, out: out.trim().replace(/\n/g, " | ") };
+  } catch (e) {
+    const err = e as { stdout?: string; stderr?: string };
+    return { ok: false, out: `${(err.stdout ?? "").trim()} ${(err.stderr ?? "").trim()}`.replace(/\n/g, " | ") };
+  }
+}
 
-  beforeAll(async () => {
-    h = await startHarness();
-    devUrl = h.databaseUrl;
-    shadowUrl = h.shadowUrl;
-    h.prisma(["generate"]);
-    h.prisma(["migrate", "deploy"]);
-  }, 180_000);
+describe.skipIf(!DOCKER_OK)("PROBE #135 v2", () => {
+  it("replays the migrate-dev-drift sequence on fresh harnesses", async () => {
+    const REPS = 4;
+    const outcomes: string[] = [];
 
-  afterAll(async () => {
-    await h?.stop();
-  });
-
-  it("records dev + shadow state across repeated migrate dev runs", async () => {
-    log(`dev    after deploy: ${await relations(devUrl)}`);
-    log(`dev    caggs:        ${await caggs(devUrl)}`);
-    log(`shadow after deploy: ${await relations(shadowUrl)}`);
-    log(`shadow caggs:        ${await caggs(shadowUrl)}`);
-
-    for (let i = 1; i <= 5; i++) {
-      const args =
-        i % 2 === 1
-          ? ["migrate", "dev", "--create-only", "--name", `probe_co_${i}`]
-          : ["migrate", "dev", "--name", `probe_full_${i}`];
-
-      log(`--- iteration ${i}: prisma ${args.join(" ")} ---`);
-      let outcome = "OK";
+    for (let rep = 1; rep <= REPS; rep++) {
+      log(`===== repetition ${rep} =====`);
+      const h = await startHarness();
       try {
-        const out = execFileSync(PRISMA_BIN, args, {
-          cwd: h.projectDir,
-          env: {
-            ...process.env,
-            DATABASE_URL: devUrl,
-            SHADOW_DATABASE_URL: shadowUrl,
-            PRISMA_USER_CONSENT_FOR_DANGEROUS_AI_ACTION: "yes",
-          },
-          stdio: "pipe",
-          encoding: "utf8",
-        });
-        log(`stdout: ${out.trim().replace(/\n/g, " | ")}`);
-      } catch (e) {
-        const err = e as { stdout?: string; stderr?: string; message: string };
-        outcome = "FAILED";
-        log(`stdout: ${(err.stdout ?? "").trim().replace(/\n/g, " | ")}`);
-        log(`stderr: ${(err.stderr ?? "").trim().replace(/\n/g, " | ")}`);
+        runPrisma(h, ["generate"]);
+        const deploy = runPrisma(h, ["migrate", "deploy"]);
+        log(`rep${rep} deploy: ${deploy.ok ? "OK" : "FAILED"}`);
+        log(`rep${rep}   dev relations:    ${await relations(h.databaseUrl)}`);
+        log(`rep${rep}   shadow relations: ${await relations(h.shadowUrl)}`);
+        log(`rep${rep}   dev applied:      ${await applied(h.databaseUrl)}`);
+        log(`rep${rep}   migrations dir:   ${readdirSync(join(h.projectDir, "migrations")).join(", ")}`);
+
+        const co = runPrisma(h, ["migrate", "dev", "--create-only", "--name", "check"]);
+        log(`rep${rep} create-only: ${co.ok ? "OK" : "FAILED"} :: ${co.out}`);
+        log(`rep${rep}   dev relations:    ${await relations(h.databaseUrl)}`);
+        log(`rep${rep}   shadow relations: ${await relations(h.shadowUrl)}`);
+        log(`rep${rep}   dev applied:      ${await applied(h.databaseUrl)}`);
+        log(`rep${rep}   migrations dir:   ${readdirSync(join(h.projectDir, "migrations")).join(", ")}`);
+
+        const full = runPrisma(h, ["migrate", "dev", "--name", "check_applied"]);
+        log(`rep${rep} full migrate dev: ${full.ok ? "OK" : "FAILED"} :: ${full.out}`);
+        log(`rep${rep}   dev relations:    ${await relations(h.databaseUrl)}`);
+        log(`rep${rep}   shadow relations: ${await relations(h.shadowUrl)}`);
+        log(`rep${rep}   dev applied:      ${await applied(h.databaseUrl)}`);
+
+        outcomes.push(`rep${rep}: create-only=${co.ok ? "OK" : "FAIL"} full=${full.ok ? "OK" : "FAIL"}`);
+      } finally {
+        await h.stop();
       }
-      log(`iteration ${i}: ${outcome}`);
-      log(`  dev    relations: ${await relations(devUrl)}`);
-      log(`  dev    caggs:     ${await caggs(devUrl)}`);
-      log(`  shadow relations: ${await relations(shadowUrl)}`);
-      log(`  shadow caggs:     ${await caggs(shadowUrl)}`);
     }
-  }, 600_000);
+
+    log("===== summary =====");
+    for (const o of outcomes) log(o);
+  }, 900_000);
 });
