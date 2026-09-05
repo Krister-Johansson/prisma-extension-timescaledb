@@ -1,25 +1,13 @@
 // timezone / offset for timeBucket, end-to-end on real TimescaleDB. Two rows straddling UTC
 // midnight bucket into ONE local day under a +2h timezone but TWO buckets under default UTC —
 // the DST-aware calendar behaviour. Requires a timestamptz column (@db.Timestamptz).
-import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { startHarness, type Harness, type TestPrismaClient } from "./harness.js";
+import { startHarness, type Harness, type TestPrismaClient, dockerAvailable } from "./harness.js";
 import { timescaledb } from "../../src/client/index.js";
 
-const DOCKER_OK = (() => {
-  try {
-    execFileSync("docker", ["info"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-})();
-
-if (!DOCKER_OK) {
-  console.warn("\n[integration] SKIPPED timezone.test.ts: Docker is not available. Not verified.\n");
-}
+const DOCKER_OK = dockerAvailable("timeBucket's timezone and offset handling is NOT verified.");
 
 const MODELS = `/// @timescale.hypertable(column: "time", chunkInterval: "1 day")
 model Reading {

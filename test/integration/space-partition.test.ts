@@ -1,22 +1,10 @@
 // Hash space partitioning end-to-end on real TimescaleDB: the generator emits a reset-safe
 // add_dimension(by_hash(...)) from partitionColumn / partitions, giving the hypertable a second
 // (space) dimension. Verified against timescaledb_information.dimensions, including migrate reset.
-import { execFileSync } from "node:child_process";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { startHarness, type Harness } from "./harness.js";
+import { startHarness, type Harness, dockerAvailable } from "./harness.js";
 
-const DOCKER_OK = (() => {
-  try {
-    execFileSync("docker", ["info"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-})();
-
-if (!DOCKER_OK) {
-  console.warn("\n[integration] SKIPPED space-partition.test.ts: Docker is not available. Not verified.\n");
-}
+const DOCKER_OK = dockerAvailable("Space partitioning is NOT verified.");
 
 // deviceId is in the @@id, so it's eligible as a partitioning column. Matches the harness default
 // CREATE TABLE (time / deviceId / temperature).

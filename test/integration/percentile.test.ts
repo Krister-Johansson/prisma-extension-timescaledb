@@ -2,25 +2,13 @@
 // { percentile: col, p } -> approx_percentile(p, percentile_agg(col)). Requires the
 // timescaledb_toolkit extension, which the test harness's `-ha` image provides. Values 1..100 in one
 // bucket make p50/p95 predictable (approximate, so asserted within a tolerance).
-import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { startHarness, type Harness, type TestPrismaClient } from "./harness.js";
+import { startHarness, type Harness, type TestPrismaClient, dockerAvailable } from "./harness.js";
 import { timescaledb } from "../../src/client/index.js";
 
-const DOCKER_OK = (() => {
-  try {
-    execFileSync("docker", ["info"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-})();
-
-if (!DOCKER_OK) {
-  console.warn("\n[integration] SKIPPED percentile.test.ts: Docker is not available. Not verified.\n");
-}
+const DOCKER_OK = dockerAvailable("timeBucket's approximate percentiles are NOT verified.");
 
 const MODELS = `/// @timescale.hypertable(column: "time", chunkInterval: "1 day")
 model SensorReading {

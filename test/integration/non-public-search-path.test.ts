@@ -11,30 +11,16 @@
 // retention, compression, chunk skipping, and a continuous aggregate whose view body calls
 // `time_bucket`. `test/integration/multi-schema.test.ts` is the sibling case that keeps
 // `?schema=public` and only moves the MODELS, which never exercised this.
-import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import pg from "pg";
-import { startHarness, type Harness, type TestPrismaClient } from "./harness.js";
+import { startHarness, type Harness, type TestPrismaClient, dockerAvailable } from "./harness.js";
 import { timescaledb } from "../../src/client/index.js";
 import { createHypertableSql } from "../../src/core/index.js";
 
-const DOCKER_OK = (() => {
-  try {
-    execFileSync("docker", ["info"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-})();
-
-if (!DOCKER_OK) {
-  console.warn(
-    "\n[integration] SKIPPED: Docker is not available. Migrations under a non-public search path (issue #129) are NOT verified.\n",
-  );
-}
+const DOCKER_OK = dockerAvailable("Migrations under a non-public search path (issue #129) are NOT verified.");
 
 const SCHEMA = "data_collection";
 

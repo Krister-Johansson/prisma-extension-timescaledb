@@ -2,25 +2,13 @@
 // $timescale().setChunkInterval -> set_partitioning_interval. The default harness hypertable is
 // created with chunkInterval "1 day"; we resize it and confirm via timescaledb_information.dimensions.
 // Runtime-only feature (no migration emitted), so no migrate-reset assertion is needed.
-import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { startHarness, type Harness, type TestPrismaClient } from "./harness.js";
+import { startHarness, type Harness, type TestPrismaClient, dockerAvailable } from "./harness.js";
 import { timescaledb } from "../../src/client/index.js";
 
-const DOCKER_OK = (() => {
-  try {
-    execFileSync("docker", ["info"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-})();
-
-if (!DOCKER_OK) {
-  console.warn("\n[integration] SKIPPED set-chunk-interval.test.ts: Docker is not available. Not verified.\n");
-}
+const DOCKER_OK = dockerAvailable("Setting the chunk interval at runtime is NOT verified.");
 
 /** The hypertable's current time-dimension chunk interval, in seconds (robust to interval display). */
 async function chunkIntervalSeconds(h: Harness): Promise<number> {

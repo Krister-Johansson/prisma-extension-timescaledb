@@ -6,20 +6,9 @@ import { execFileSync } from "node:child_process";
 import { readdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { startHarness, type Harness } from "./harness.js";
+import { startHarness, type Harness, dockerAvailable } from "./harness.js";
 
-const DOCKER_OK = (() => {
-  try {
-    execFileSync("docker", ["info"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-})();
-
-if (!DOCKER_OK) {
-  console.warn("\n[integration] SKIPPED evolution.test.ts: Docker is not available. Schema evolution is NOT verified.\n");
-}
+const DOCKER_OK = dockerAvailable("Schema evolution is NOT verified.");
 
 const MODELS_V1 = `/// @timescale.hypertable(column: "time", chunkInterval: "1 day")
 model SensorReading {

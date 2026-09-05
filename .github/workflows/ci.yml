@@ -74,7 +74,12 @@ jobs:
       - run: npm ci
       - run: npm run build
       # ubuntu-latest runners ship Docker, so Testcontainers can run the reset-safety proof.
+      # REQUIRE_DOCKER makes an unreachable daemon fail the job instead of skipping the suite:
+      # a skip here would mean the reset-safety proof quietly did not run, and the job still
+      # went green. (GitHub sets CI=true, which the harness also honours; this is explicit.)
       - run: npm run test:integration
+        env:
+          REQUIRE_DOCKER: "1"
 
   # Every PR must track a GitHub issue (issue-first workflow). Machine PRs
   # (dependabot, release-please) are exempt. The exemptions key on facts an

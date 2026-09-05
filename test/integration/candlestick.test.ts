@@ -1,25 +1,13 @@
 // Toolkit candlestick_agg in timeBucket, end-to-end on real TimescaleDB (the `-ha` image carries
 // timescaledb_toolkit). One op returns an OHLC + vwap JS object per bucket (jsonb_build_object over
 // candlestick_agg(time, price, volume)). Three trades make the values predictable.
-import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { startHarness, type Harness, type TestPrismaClient } from "./harness.js";
+import { startHarness, type Harness, type TestPrismaClient, dockerAvailable } from "./harness.js";
 import { timescaledb } from "../../src/client/index.js";
 
-const DOCKER_OK = (() => {
-  try {
-    execFileSync("docker", ["info"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-})();
-
-if (!DOCKER_OK) {
-  console.warn("\n[integration] SKIPPED candlestick.test.ts: Docker is not available. Not verified.\n");
-}
+const DOCKER_OK = dockerAvailable("timeBucket's candlestick / OHLC hyperfunctions are NOT verified.");
 
 const MODELS = `/// @timescale.hypertable(column: "time", chunkInterval: "1 day")
 model Trade {
