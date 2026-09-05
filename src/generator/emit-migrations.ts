@@ -32,7 +32,7 @@ import { createContinuousAggregateSql } from "../core/continuousAggregate.js";
 import { createRetentionPolicySql } from "../core/retention.js";
 import { createCompressionPolicySql } from "../core/compression.js";
 import { createChunkSkippingSql } from "../core/chunkSkipping.js";
-import { existenceGuard, qualifiedIdent, quoteLiteral, relationLiteral } from "../core/sql.js";
+import { qualifiedIdent, quoteLiteral, relationLiteral, timescaleDoBlock } from "../core/sql.js";
 
 export const EXTENSION_MIGRATION = "00000000000000_timescaledb_extension";
 /** Prefix shared by every objects migration; the version suffix keeps them ordered and unique. */
@@ -59,7 +59,8 @@ export interface GeneratorState {
 }
 
 export interface EmitResult {
-  /** New files to write (empty when the state is unchanged). Never rewrites an existing migration. */
+  /** New files to write. Empty when the state is unchanged and the extension migration is
+   * already on disk. Never rewrites an existing migration. */
   files: FileMap;
   /** Updated state-file content to persist, or undefined when nothing changed. */
   nextState?: GeneratorState;
@@ -244,7 +245,7 @@ function renderRemovals(previous: ObjectsState, current: ObjectsState): string[]
     if (cur.refresh && stableStringify(prev.refresh) === stableStringify(cur.refresh)) continue;
     const rel = relationLiteral(cur.name, cur.schema);
     parts.push(
-      `-- ${cur.refresh ? "Changed" : "Removed"} refresh policy: ${key}\nDO $$ BEGIN\n  ${existenceGuard(rel)}\n  PERFORM remove_continuous_aggregate_policy(${rel}, if_not_exists => TRUE);\nEND $$;`,
+      `-- ${cur.refresh ? "Changed" : "Removed"} refresh policy: ${key}\n${timescaleDoBlock(`  PERFORM remove_continuous_aggregate_policy(${rel}, if_not_exists => TRUE);`, rel)}`,
     );
   }
 
@@ -253,12 +254,11 @@ function renderRemovals(previous: ObjectsState, current: ObjectsState): string[]
     const key = qualify(prev.schema, prev.table);
     const cur = currentByKey.get(key);
     const rel = relationLiteral(prev.table, prev.schema);
-    const guard = existenceGuard(rel);
     if (!cur) {
       // The whole hypertable annotation is gone. If the table was dropped too, there is
       // nothing to do (guards skip). If the table remains, conversion cannot be undone.
       parts.push(
-        `-- Removed hypertable annotation: ${key}. TimescaleDB cannot convert a hypertable back\n-- to a plain table; if ${key} still exists it stays a hypertable. Its policies are removed.\nDO $$ BEGIN\n  ${guard}\n  PERFORM remove_retention_policy(${rel}, if_exists => TRUE);\n  CALL remove_columnstore_policy(${rel}, if_exists => TRUE);\nEND $$;`,
+        `-- Removed hypertable annotation: ${key}. TimescaleDB cannot convert a hypertable back\n-- to a plain table; if ${key} still exists it stays a hypertable. Its policies are removed.\n${timescaleDoBlock(`  PERFORM remove_retention_policy(${rel}, if_exists => TRUE);\n  CALL remove_columnstore_policy(${rel}, if_exists => TRUE);`, rel)}`,
       );
       continue;
     }
@@ -267,14 +267,14 @@ function renderRemovals(previous: ObjectsState, current: ObjectsState): string[]
     // a NOTICE), so the guarded re-add in renderCreates only works on a clean slate.
     if (prev.retention && (!cur.retention || stableStringify(prev.retention) !== stableStringify(cur.retention))) {
       parts.push(
-        `-- ${cur.retention ? "Changed" : "Removed"} retention policy: ${key}\nDO $$ BEGIN\n  ${guard}\n  PERFORM remove_retention_policy(${rel}, if_exists => TRUE);\nEND $$;`,
+        `-- ${cur.retention ? "Changed" : "Removed"} retention policy: ${key}\n${timescaleDoBlock(`  PERFORM remove_retention_policy(${rel}, if_exists => TRUE);`, rel)}`,
       );
     }
     if (prev.compression && (!cur.compression || stableStringify(prev.compression) !== stableStringify(cur.compression))) {
       // remove_columnstore_policy is a PROCEDURE (CALL); leaves the columnstore enabled —
       // disabling fails once any chunk is compressed (same rationale as the builder's down).
       parts.push(
-        `-- ${cur.compression ? "Changed" : "Removed"} compression policy: ${key}\nDO $$ BEGIN\n  ${guard}\n  CALL remove_columnstore_policy(${rel}, if_exists => TRUE);\nEND $$;`,
+        `-- ${cur.compression ? "Changed" : "Removed"} compression policy: ${key}\n${timescaleDoBlock(`  CALL remove_columnstore_policy(${rel}, if_exists => TRUE);`, rel)}`,
       );
     }
     const curSkip = new Set(cur.chunkSkipping ?? []);
@@ -284,7 +284,7 @@ function renderRemovals(previous: ObjectsState, current: ObjectsState): string[]
         .map((col) => `  PERFORM disable_chunk_skipping(${rel}, ${quoteLiteral(col)}, if_not_exists => TRUE);`)
         .join("\n");
       parts.push(
-        `-- Removed chunk skipping: ${key} (${droppedSkip.join(", ")})\nDO $$ BEGIN\n  ${guard}\n  SET LOCAL timescaledb.enable_chunk_skipping = on;\n${disables}\nEND $$;`,
+        `-- Removed chunk skipping: ${key} (${droppedSkip.join(", ")})\n${timescaleDoBlock(`  SET LOCAL timescaledb.enable_chunk_skipping = on;\n${disables}`, rel)}`,
       );
     }
   }
@@ -362,11 +362,17 @@ export function maxObjectsSequence(folderNames: readonly string[]): number {
  * `maxExistingSequence` is the highest `..._v000N` folder already on disk (0 when none): the
  * next sequence never collides with it, so a lost or corrupt state file can never overwrite an
  * applied versioned migration — recovery emits the FULL state as the next version instead.
+ *
+ * `extensionMigrationExists` says whether `00000000000000_timescaledb_extension` is already on
+ * disk. It is emitted only when absent: it is applied history, and rewriting it would change
+ * the checksum Prisma recorded for it. A missing one is re-emitted even when nothing else
+ * changed, so deleting the folder heals on the next generate.
  */
 export function emitMigrations(
   schema: TimescaleSchema,
   previous?: GeneratorState,
   maxExistingSequence = 0,
+  extensionMigrationExists = false,
 ): EmitResult {
   const state = canonicalState(schema);
   const empty = state.hypertables.length === 0 && state.continuousAggregates.length === 0;
@@ -375,24 +381,33 @@ export function emitMigrations(
   // registry-only fields the canonical form strips, and that must not read as a change.
   const prevState = previous ? canonicalObjects(previous.state) : undefined;
 
-  const noHistory = !previous && maxExistingSequence === 0;
-  if (noHistory && empty) return { files: {} };
-  if (prevState && stableStringify(prevState) === stableStringify(state)) return { files: {} };
-  // State file lost but versioned migrations exist, and the schema is empty: without the
-  // previous state there is nothing to diff removals against; emit nothing rather than a
-  // migration of pure guesses. (The normal empty case with intact state emits removals.)
-  if (!previous && empty) return { files: {} };
-
-  const sequence = Math.max(previous?.sequence ?? 0, maxExistingSequence) + 1;
+  // The extension migration is fixed-name, and once it exists on disk it is applied history:
+  // rewriting it would change its checksum and make `migrate dev` reject it as "modified after
+  // it was applied". Emit it only when it is absent, so a package upgrade that improves the
+  // extension SQL reaches new projects without breaking existing ones.
+  //
+  // This is decided BEFORE the unchanged-state returns below. A project whose objects have not
+  // changed still needs the extension migration if the folder is missing (deleted by hand, lost
+  // in a merge, or half-removed during a recovery), and without it every objects migration fails
+  // on a fresh database. An empty schema declares no timescale objects at all, so it gets none.
   const files: FileMap = {};
-
-  // The extension migration is fixed-name and content-stable; (re-)emitting it is a
-  // byte-identical write, safe on every run.
-  files[`${EXTENSION_MIGRATION}/migration.sql`] = `${GENERATED_BANNER}
+  if (!extensionMigrationExists && !empty) {
+    files[`${EXTENSION_MIGRATION}/migration.sql`] = `${GENERATED_BANNER}
 -- TimescaleDB extension setup. Standalone & leading so it runs before any table or
 -- hypertable DDL (CLAUDE.md constraint 1).
 ${createExtensionSql().up}
 `;
+  }
+
+  const noHistory = !previous && maxExistingSequence === 0;
+  if (noHistory && empty) return { files };
+  if (prevState && stableStringify(prevState) === stableStringify(state)) return { files };
+  // State file lost but versioned migrations exist, and the schema is empty: without the
+  // previous state there is nothing to diff removals against; emit nothing rather than a
+  // migration of pure guesses. (The normal empty case with intact state emits removals.)
+  if (!previous && empty) return { files };
+
+  const sequence = Math.max(previous?.sequence ?? 0, maxExistingSequence) + 1;
 
   const creates = renderCreates(state);
   const removals = prevState ? renderRemovals(prevState, state) : [];

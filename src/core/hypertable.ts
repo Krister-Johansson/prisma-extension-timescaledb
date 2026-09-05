@@ -1,7 +1,7 @@
 // Hypertable conversion SQL builder (SPEC §2.2 / CLAUDE.md constraints 2, 3, 6).
 import type { HypertableConfig, MigrationSql } from "./types.js";
 import { assertInterval } from "./interval.js";
-import { assertSafeIdent, existenceGuard, quoteLiteral, relationLiteral } from "./sql.js";
+import { assertSafeIdent, quoteLiteral, relationLiteral, timescaleDoBlock } from "./sql.js";
 
 const DEFAULT_CHUNK_INTERVAL = "7 days";
 
@@ -13,6 +13,8 @@ const DEFAULT_CHUNK_INTERVAL = "7 days";
  * - `by_range(...)` is the modern dimension builder; the interval comes from `chunkInterval`
  *   (default `"7 days"`).
  * - `if_not_exists => TRUE, migrate_data => TRUE` make replay safe (constraints 3, 6).
+ * - `create_default_indexes => FALSE` leaves the Prisma schema as the only source of truth for
+ *   the table's indexes (see the comment on the call below).
  *
  * Down: dropping the table (Prisma's own down) removes the hypertable, so there is no
  * separate "un-hypertable" step (SPEC §2.2).
@@ -27,11 +29,26 @@ export function createHypertableSql(config: HypertableConfig): MigrationSql {
   assertInterval(chunkInterval);
 
   const rel = relationLiteral(table, schema);
+  // Default indexes are off on purpose. Left on, `create_hypertable` adds its own index on the
+  // time column (`<table>_<column>_idx`) whenever no index already starts with that column.
+  // Prisma does not know about it, so the next `prisma migrate dev` (`--create-only` included)
+  // writes a migration that drops it:
+  //
+  //   -- DropIndex
+  //   DROP INDEX "measurements_time_idx";
+  //
+  // That migration carries a real timestamp, so it sorts BEFORE the objects migration that does
+  // the conversion. On the next `migrate reset` the drop runs first, against an index nothing has
+  // created yet, and the replay dies with `index "measurements_time_idx" does not exist`: the
+  // reset-safety guarantee broken by an index the user never asked for. With default indexes off,
+  // the Prisma schema is the only thing that creates indexes on the table and there is nothing for
+  // Prisma to read as drift. Declare `@@index([time])` on the model to keep an index on it.
   const convert = `create_hypertable(
   ${rel},
   by_range(${quoteLiteral(column)}, INTERVAL ${quoteLiteral(chunkInterval)}),
-  if_not_exists => TRUE,
-  migrate_data  => TRUE
+  if_not_exists          => TRUE,
+  migrate_data           => TRUE,
+  create_default_indexes => FALSE
 )`;
 
   // Optional hash space dimension: a second partitioning dimension on `column`, added AFTER the
@@ -48,19 +65,25 @@ export function createHypertableSql(config: HypertableConfig): MigrationSql {
     dimension = `add_dimension(${rel}, by_hash(${quoteLiteral(spacePartition.column)}, ${spacePartition.partitions}), if_not_exists => TRUE)`;
   }
 
-  const up = `SELECT ${convert};` + (dimension ? `\nSELECT ${dimension};` : "");
+  // Every statement runs inside a DO block that first puts TimescaleDB's schema on the search
+  // path: `create_hypertable` / `by_range` / `set_partitioning_interval` are emitted unqualified
+  // and Prisma runs migrations with `search_path` set to the datasource schema alone, so on a
+  // project outside `public` they would otherwise be unresolvable (issue #129).
+  //
+  // set_partitioning_interval re-asserts the chunk interval every apply: create_hypertable's
+  // if_not_exists never updates a LIVE hypertable's interval, so without it a changed
+  // chunkInterval would silently keep the old chunk size (a no-op when already equal).
+  const body =
+    `  PERFORM ${indentBody(convert)};` +
+    (dimension ? `\n  PERFORM ${dimension};` : "") +
+    `\n  PERFORM set_partitioning_interval(${rel}, INTERVAL ${quoteLiteral(chunkInterval)});`;
+
+  const up = timescaleDoBlock(body);
 
   // Guarded form: skip when the table no longer exists (a later Prisma migration dropped it),
   // so an old migration snapshot replays cleanly on `migrate reset` — verified empirically
   // (PERFORM create_hypertable inside DO works; the guard skips on a missing relation).
-  // set_partitioning_interval re-asserts the chunk interval every apply: create_hypertable's
-  // if_not_exists never updates a LIVE hypertable's interval, so without it a changed
-  // chunkInterval would silently keep the old chunk size (a no-op when already equal).
-  const guardedUp = `DO $$ BEGIN
-  ${existenceGuard(rel)}
-  PERFORM ${indentBody(convert)};${dimension ? `\n  PERFORM ${dimension};` : ""}
-  PERFORM set_partitioning_interval(${rel}, INTERVAL ${quoteLiteral(chunkInterval)});
-END $$;`;
+  const guardedUp = timescaleDoBlock(body, rel);
 
   const down = `-- No separate un-hypertable step: dropping "${table}" (Prisma's own down) removes the hypertable.`;
 

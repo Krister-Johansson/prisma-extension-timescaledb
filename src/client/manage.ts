@@ -1,6 +1,7 @@
 // The $timescale management namespace (SPEC §4.3).
 import { assertSafeIdent, qualifiedIdent, quoteLiteral, relationLiteral } from "../core/sql.js";
 import { assertInterval, type Interval } from "../core/interval.js";
+import { NO_PREFIX, type FnPrefix } from "./searchPath.js";
 import { columnstoreReloptions, parseOrderByTerm } from "../core/compression.js";
 import type { CompressionOrderBy, RefreshPolicy } from "../core/types.js";
 
@@ -109,6 +110,12 @@ export interface ManageOptions {
   maxRefreshAttempts?: number;
   /** Delay between retries (ms -> Promise). Injectable for deterministic tests. */
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * Resolve the schema prefix for TimescaleDB's function names. The extension supplies a
+   * memoized probe (see searchPath.ts); the default qualifies nothing, which is the SQL this
+   * package emitted before and what a connection whose search path reaches the extension needs.
+   */
+  resolvePrefix?: () => Promise<FnPrefix>;
 }
 
 /** A background job / policy row from `timescaledb_information.jobs`. */
@@ -384,6 +391,7 @@ export function makeManage<HModels extends string = string, CModels extends stri
   const requestedAttempts = options.maxRefreshAttempts ?? 8;
   const maxAttempts = Number.isFinite(requestedAttempts) ? Math.max(1, Math.floor(requestedAttempts)) : 8;
   const sleep = options.sleep ?? defaultSleep;
+  const prefix = options.resolvePrefix ?? ((): Promise<FnPrefix> => Promise.resolve(NO_PREFIX));
   const hypertableByModel = options.hypertableByModel ?? new Map<string, HypertableRef>();
 
   /** Resolve a Prisma model name to its hypertable DB relation (identity when unregistered). */
@@ -413,6 +421,7 @@ export function makeManage<HModels extends string = string, CModels extends stri
     model: string,
     column: string,
     fn: "enable_chunk_skipping" | "disable_chunk_skipping",
+    p: FnPrefix,
   ): string => {
     const ref = resolveHypertable(model);
     const dbColumn = (ref.columns ?? {})[column] ?? column;
@@ -438,7 +447,7 @@ export function makeManage<HModels extends string = string, CModels extends stri
       }
     }
     const rel = relationLiteral(ref.table, ref.schema);
-    return `DO $$ BEGIN SET LOCAL timescaledb.enable_chunk_skipping = on; PERFORM ${fn}(${rel}, ${quoteLiteral(dbColumn)}, if_not_exists => TRUE); END $$`;
+    return `DO $$ BEGIN SET LOCAL timescaledb.enable_chunk_skipping = on; PERFORM ${p.ts}${fn}(${rel}, ${quoteLiteral(dbColumn)}, if_not_exists => TRUE); END $$`;
   };
 
   /** Validate a job id and render it as a SQL integer literal (it is a number, so inlining is injection-safe). */
@@ -501,7 +510,8 @@ export function makeManage<HModels extends string = string, CModels extends stri
       // Route through relationLiteral (like every other $timescale call site) so the
       // single-quote escaping lives in one place (sql.ts) rather than a hand-built literal.
       const rel = relationLiteral(ref.name, ref.schema);
-      const sql = `CALL refresh_continuous_aggregate(${rel}, ${bound(range?.start)}, ${bound(range?.end)})`;
+      const p = await prefix();
+      const sql = `CALL ${p.ts}refresh_continuous_aggregate(${rel}, ${bound(range?.start)}, ${bound(range?.end)})`;
       // Retry only on a concurrent policy refresh (55P03), with bounded exponential backoff.
       // Any other error — or exhausting the attempt budget — propagates unchanged.
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -521,17 +531,19 @@ export function makeManage<HModels extends string = string, CModels extends stri
       assertInterval(opts.endOffset);
       assertInterval(opts.scheduleInterval);
       const rel = relationLiteral(ref.name, ref.schema);
+      const p = await prefix();
       // Offsets are strict-grammar Intervals quoted as literals; if_not_exists keeps a re-add a no-op.
       await client.$executeRawUnsafe(
-        `SELECT add_continuous_aggregate_policy(${rel}, start_offset => INTERVAL ${quoteLiteral(opts.startOffset)}, end_offset => INTERVAL ${quoteLiteral(opts.endOffset)}, schedule_interval => INTERVAL ${quoteLiteral(opts.scheduleInterval)}, if_not_exists => TRUE)`,
+        `SELECT ${p.ts}add_continuous_aggregate_policy(${rel}, start_offset => INTERVAL ${quoteLiteral(opts.startOffset)}, end_offset => INTERVAL ${quoteLiteral(opts.endOffset)}, schedule_interval => INTERVAL ${quoteLiteral(opts.scheduleInterval)}, if_not_exists => TRUE)`,
       );
     },
 
     async removeContinuousAggregatePolicy(name) {
       const ref = resolveCagg(name);
+      const p = await prefix();
       // remove_continuous_aggregate_policy's idempotent flag is (confusingly) named if_not_exists.
       await client.$executeRawUnsafe(
-        `SELECT remove_continuous_aggregate_policy(${relationLiteral(ref.name, ref.schema)}, if_not_exists => TRUE)`,
+        `SELECT ${p.ts}remove_continuous_aggregate_policy(${relationLiteral(ref.name, ref.schema)}, if_not_exists => TRUE)`,
       );
     },
 
@@ -541,14 +553,16 @@ export function makeManage<HModels extends string = string, CModels extends stri
       const rel = relationLiteral(ref.table, ref.schema);
       // drop_after is a strict-grammar Interval (assertInterval) quoted as a literal — no cast
       // on the relation (constraint 2); if_not_exists keeps a re-add a no-op.
-      const sql = `SELECT add_retention_policy(${rel}, drop_after => INTERVAL ${quoteLiteral(opts.dropAfter)}, if_not_exists => TRUE)`;
+      const p = await prefix();
+      const sql = `SELECT ${p.ts}add_retention_policy(${rel}, drop_after => INTERVAL ${quoteLiteral(opts.dropAfter)}, if_not_exists => TRUE)`;
       await client.$executeRawUnsafe(sql);
     },
 
     async removeRetentionPolicy(model) {
       const ref = resolveHypertable(model);
       const rel = relationLiteral(ref.table, ref.schema);
-      await client.$executeRawUnsafe(`SELECT remove_retention_policy(${rel}, if_exists => TRUE)`);
+      const p = await prefix();
+      await client.$executeRawUnsafe(`SELECT ${p.ts}remove_retention_policy(${rel}, if_exists => TRUE)`);
     },
 
     async addCompressionPolicy(model, opts) {
@@ -562,20 +576,22 @@ export function makeManage<HModels extends string = string, CModels extends stri
       const reloptions = columnstoreReloptions(segmentBy, orderBy);
       const rel = relationLiteral(ref.table, ref.schema);
       const alterTarget = qualifiedIdent(ref.table, ref.schema);
+      const p = await prefix();
       // One DO block, one connection, one transaction: the ALTER must run before the CALL
       // (add_columnstore_policy errors unless the columnstore is enabled), and running them as
       // two autocommitted statements left the columnstore reconfigured with no policy when the
       // CALL failed. A failing CALL now rolls the ALTER back too — verified empirically against
       // timescale/timescaledb 2.27.2.
       await client.$executeRawUnsafe(
-        `DO $$ BEGIN ALTER TABLE ${alterTarget} SET (${reloptions.join(", ")}); CALL add_columnstore_policy(${rel}, after => INTERVAL ${quoteLiteral(opts.after)}, if_not_exists => TRUE); END $$`,
+        `DO $$ BEGIN ALTER TABLE ${alterTarget} SET (${reloptions.join(", ")}); CALL ${p.ts}add_columnstore_policy(${rel}, after => INTERVAL ${quoteLiteral(opts.after)}, if_not_exists => TRUE); END $$`,
       );
     },
 
     async removeCompressionPolicy(model) {
       const ref = resolveHypertable(model);
       const rel = relationLiteral(ref.table, ref.schema);
-      await client.$executeRawUnsafe(`CALL remove_columnstore_policy(${rel}, if_exists => TRUE)`);
+      const p = await prefix();
+      await client.$executeRawUnsafe(`CALL ${p.ts}remove_columnstore_policy(${rel}, if_exists => TRUE)`);
     },
 
     async dropChunks(model, opts) {
@@ -589,26 +605,29 @@ export function makeManage<HModels extends string = string, CModels extends stri
       if (args.length === 0) {
         throw new Error("dropChunks: specify olderThan and/or newerThan.");
       }
+      const p = await prefix();
       const rows = await client.$queryRawUnsafe<{ chunk: string }[]>(
-        `SELECT drop_chunks(${rel}, ${args.join(", ")}) AS chunk`,
+        `SELECT ${p.ts}drop_chunks(${rel}, ${args.join(", ")}) AS chunk`,
       );
       return rows.map((r) => r.chunk);
     },
 
     async hypertableSize(model) {
       const ref = resolveHypertable(model);
+      const p = await prefix();
       const rows = await client.$queryRawUnsafe<{ bytes: bigint }[]>(
-        `SELECT hypertable_size(${relationLiteral(ref.table, ref.schema)}) AS bytes`,
+        `SELECT ${p.ts}hypertable_size(${relationLiteral(ref.table, ref.schema)}) AS bytes`,
       );
       return rows[0]?.bytes ?? 0n;
     },
 
     async hypertableDetailedSize(model) {
       const ref = resolveHypertable(model);
+      const p = await prefix();
       const rows = await client.$queryRawUnsafe<
         { table_bytes: bigint; index_bytes: bigint; toast_bytes: bigint; total_bytes: bigint }[]
       >(
-        `SELECT table_bytes, index_bytes, toast_bytes, total_bytes FROM hypertable_detailed_size(${relationLiteral(ref.table, ref.schema)})`,
+        `SELECT table_bytes, index_bytes, toast_bytes, total_bytes FROM ${p.ts}hypertable_detailed_size(${relationLiteral(ref.table, ref.schema)})`,
       );
       const r = rows[0];
       return {
@@ -621,14 +640,16 @@ export function makeManage<HModels extends string = string, CModels extends stri
 
     async approximateRowCount(model) {
       const ref = resolveHypertable(model);
+      const p = await prefix();
       const rows = await client.$queryRawUnsafe<{ count: bigint }[]>(
-        `SELECT approximate_row_count(${relationLiteral(ref.table, ref.schema)}) AS count`,
+        `SELECT ${p.ts}approximate_row_count(${relationLiteral(ref.table, ref.schema)}) AS count`,
       );
       return rows[0]?.count ?? 0n;
     },
 
     async compressionStats(model) {
       const ref = resolveHypertable(model);
+      const p = await prefix();
       const rows = await client.$queryRawUnsafe<
         {
           total_chunks: bigint;
@@ -637,7 +658,7 @@ export function makeManage<HModels extends string = string, CModels extends stri
           after_compression_total_bytes: bigint | null;
         }[]
       >(
-        `SELECT total_chunks, number_compressed_chunks, before_compression_total_bytes, after_compression_total_bytes FROM hypertable_columnstore_stats(${relationLiteral(ref.table, ref.schema)})`,
+        `SELECT total_chunks, number_compressed_chunks, before_compression_total_bytes, after_compression_total_bytes FROM ${p.ts}hypertable_columnstore_stats(${relationLiteral(ref.table, ref.schema)})`,
       );
       const r = rows[0];
       return {
@@ -649,11 +670,11 @@ export function makeManage<HModels extends string = string, CModels extends stri
     },
 
     async enableChunkSkipping(model, column) {
-      await client.$executeRawUnsafe(chunkSkippingSql(model, column, "enable_chunk_skipping"));
+      await client.$executeRawUnsafe(chunkSkippingSql(model, column, "enable_chunk_skipping", await prefix()));
     },
 
     async disableChunkSkipping(model, column) {
-      await client.$executeRawUnsafe(chunkSkippingSql(model, column, "disable_chunk_skipping"));
+      await client.$executeRawUnsafe(chunkSkippingSql(model, column, "disable_chunk_skipping", await prefix()));
     },
 
     async setChunkInterval(model, interval) {
@@ -663,7 +684,8 @@ export function makeManage<HModels extends string = string, CModels extends stri
       // The polymorphic `anyelement` interval resolves from the typed `INTERVAL '...'` literal (a
       // bind param would be type-ambiguous); no dimension_name => the time dimension. No cast on the
       // relation (constraint 2).
-      await client.$executeRawUnsafe(`SELECT set_partitioning_interval(${rel}, INTERVAL ${quoteLiteral(interval)})`);
+      const p = await prefix();
+      await client.$executeRawUnsafe(`SELECT ${p.ts}set_partitioning_interval(${rel}, INTERVAL ${quoteLiteral(interval)})`);
     },
 
     async listJobs(model) {
@@ -824,16 +846,19 @@ export function makeManage<HModels extends string = string, CModels extends stri
         throw new Error("alterJob: specify at least one option to change.");
       }
       // if_exists => TRUE makes altering an already-removed job a no-op instead of an error.
-      await client.$executeRawUnsafe(`SELECT alter_job(${id}, ${args.join(", ")}, if_exists => TRUE)`, ...params);
+      const p = await prefix();
+      await client.$executeRawUnsafe(`SELECT ${p.ts}alter_job(${id}, ${args.join(", ")}, if_exists => TRUE)`, ...params);
     },
 
     async deleteJob(jobId) {
-      await client.$executeRawUnsafe(`SELECT delete_job(${jobIdLiteral(jobId)})`);
+      const p = await prefix();
+      await client.$executeRawUnsafe(`SELECT ${p.ts}delete_job(${jobIdLiteral(jobId)})`);
     },
 
     async runJob(jobId) {
       // run_job is a PROCEDURE — CALL it; it runs the job synchronously on this connection.
-      await client.$executeRawUnsafe(`CALL run_job(${jobIdLiteral(jobId)})`);
+      const p = await prefix();
+      await client.$executeRawUnsafe(`CALL ${p.ts}run_job(${jobIdLiteral(jobId)})`);
     },
 
     async showChunks(model, options = {}) {
@@ -843,18 +868,21 @@ export function makeManage<HModels extends string = string, CModels extends stri
       const args = [rel, intervalArg("older_than", options.olderThan), intervalArg("newer_than", options.newerThan)].filter(
         (a): a is string => a !== undefined,
       );
+      const p = await prefix();
       const rows = await client.$queryRawUnsafe<{ chunk: string }[]>(
-        `SELECT c::text AS chunk FROM show_chunks(${args.join(", ")}) c ORDER BY c`,
+        `SELECT c::text AS chunk FROM ${p.ts}show_chunks(${args.join(", ")}) c ORDER BY c`,
       );
       return rows.map((r) => r.chunk);
     },
 
     async compressChunk(chunk) {
-      await client.$executeRawUnsafe(`SELECT compress_chunk(${chunkLiteral(chunk)}, if_not_compressed => TRUE)`);
+      const p = await prefix();
+      await client.$executeRawUnsafe(`SELECT ${p.ts}compress_chunk(${chunkLiteral(chunk)}, if_not_compressed => TRUE)`);
     },
 
     async decompressChunk(chunk) {
-      await client.$executeRawUnsafe(`SELECT decompress_chunk(${chunkLiteral(chunk)}, if_compressed => TRUE)`);
+      const p = await prefix();
+      await client.$executeRawUnsafe(`SELECT ${p.ts}decompress_chunk(${chunkLiteral(chunk)}, if_compressed => TRUE)`);
     },
   };
 }

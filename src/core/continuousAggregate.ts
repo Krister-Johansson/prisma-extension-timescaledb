@@ -1,7 +1,7 @@
 // Continuous aggregate SQL builder (SPEC §2.3 / CLAUDE.md constraints 3, 4).
 import type { AggregateSpec, CaggConfig, MigrationSql } from "./types.js";
 import { assertInterval } from "./interval.js";
-import { assertSafeIdent, existenceGuard, qualifiedIdent, quoteIdent, quoteLiteral, relationLiteral } from "./sql.js";
+import { assertSafeIdent, qualifiedIdent, quoteIdent, quoteLiteral, relationLiteral, timescaleDoBlock } from "./sql.js";
 
 /** The supported continuous-aggregate functions. Shared with the generator's annotation
  * validation (src/generator/dmmf.ts) so the two lists cannot drift. */
@@ -96,15 +96,21 @@ WITH NO DATA`;
 )`;
   }
 
-  const up = `${create};` + (policy ? `\n\nSELECT ${policy};` : "");
+  // Both statements share one DO block that first puts TimescaleDB's schema on the search path.
+  // The view body calls `time_bucket` and the policy `add_continuous_aggregate_policy`, both
+  // emitted unqualified, and Prisma runs migrations with `search_path` set to the datasource
+  // schema alone (issue #129). The extension schema is APPENDED, so an unqualified view name
+  // still lands in the caller's own schema. CREATE MATERIALIZED VIEW inside a DO block verified
+  // empirically on 2.27.2.
+  const body =
+    `  ${create.replace(/\n/g, "\n  ")};` + (policy ? `\n  PERFORM ${policy.replace(/\n/g, "\n  ")};` : "");
+
+  const up = timescaleDoBlock(body);
 
   // Guarded form for emitted migrations: skip when the SOURCE relation no longer exists (a
   // later Prisma migration dropped the hypertable, or an earlier guarded block skipped the
-  // parent cagg). CREATE MATERIALIZED VIEW inside a DO block verified empirically on 2.27.2.
-  const guardedUp = `DO $$ BEGIN
-  ${existenceGuard(relationLiteral(source, sourceSchema))}
-  ${create.replace(/\n/g, "\n  ")};${policy ? `\n  PERFORM ${policy.replace(/\n/g, "\n  ")};` : ""}
-END $$;`;
+  // parent cagg).
+  const guardedUp = timescaleDoBlock(body, relationLiteral(source, sourceSchema));
 
   // Constraint 4: a cagg appears in the views catalog but DROP VIEW errors on it.
   const down = `DROP MATERIALIZED VIEW IF EXISTS ${qualifiedIdent(name, schema)};`;

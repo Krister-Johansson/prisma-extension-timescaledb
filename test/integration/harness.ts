@@ -16,7 +16,7 @@ const GENERATOR_PROVIDER = join(REPO_ROOT, "dist", "generator", "index.js");
 // Pinned to an immutable version tag for reproducible CI (not a rolling tag). The `-ha` image
 // carries the same TimescaleDB 2.27.2 PLUS the `timescaledb_toolkit` extension (hyperfunctions),
 // which the slim `timescaledb` image lacks — needed for the percentile / hyperfunction tests.
-const IMAGE = "timescale/timescaledb-ha:pg17.10-ts2.27.2";
+export const IMAGE = "timescale/timescaledb-ha:pg17.10-ts2.27.2";
 
 // Prisma 7 blocks destructive commands from AI agents without explicit consent; the user
 // granted it for this build (their message: "yes"). Required so reset runs unattended.
@@ -59,6 +59,13 @@ export interface HarnessOptions {
   previewFeatures?: string[];
   /** Datasource schemas (enables multiSchema); when set, adds `schemas = [...]`. */
   schemas?: string[];
+  /**
+   * The `?schema=` on the connection string, which is the search_path Prisma runs migrations
+   * under. Defaults to "public". Set it to a non-public schema to reproduce a project that keeps
+   * its tables (and `_prisma_migrations`) out of `public`, where TimescaleDB's own functions are
+   * no longer on the search path (issue #129).
+   */
+  urlSchema?: string;
 }
 
 export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> {
@@ -72,8 +79,9 @@ export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> 
   const host = container.getHost();
   const port = container.getMappedPort(5432);
   const baseUrl = `postgresql://postgres:postgres@${host}:${port}`;
-  const databaseUrl = `${baseUrl}/app?schema=public`;
-  const shadowUrl = `${baseUrl}/shadow?schema=public`;
+  const urlSchema = opts.urlSchema ?? "public";
+  const databaseUrl = `${baseUrl}/app?schema=${urlSchema}`;
+  const shadowUrl = `${baseUrl}/shadow?schema=${urlSchema}`;
 
   // Wait until Postgres actually accepts connections (the image restarts once during init).
   await waitForReady(`${baseUrl}/app`);

@@ -12,6 +12,7 @@ import {
   type TimeBucketRuntimeArgs,
 } from "./timeBucket.js";
 import { makeManage, type RawClient, type TimescaleManage } from "./manage.js";
+import { createPrefixResolver } from "./searchPath.js";
 
 /** Manual configuration accepted by `timescaledb()` (also satisfied by the generated registry). */
 export interface TimescaleConfig {
@@ -107,26 +108,6 @@ export function timescaledb<const C extends TimescaleConfig = TimescaleConfig>(c
     caggViewByModel.set(c.model ?? c.name, { name: c.name, ...(c.schema !== undefined ? { schema: c.schema } : {}) });
   }
 
-  /**
-   * The `model.timeBucket(...)` method: resolve the model to its hypertable config, build the
-   * parameterized query (incl. where / relation filters), and run it via `$queryRawUnsafe`.
-   */
-  const timeBucket = async function (this: unknown, args: TimeBucketRuntimeArgs) {
-    const ctx = Prisma.getExtensionContext(this);
-    const model = ctx.$name;
-    if (typeof model !== "string") {
-      throw new Error("timeBucket: could not resolve the model name from the extension context.");
-    }
-    const ht = hypertableByModel.get(model);
-    if (!ht) {
-      throw new Error(
-        `timeBucket: "${model}" is not a registered hypertable. Pass it via timescaledb({ hypertables: [...] }) or run the generator.`,
-      );
-    }
-    assertInterval(args.bucket);
-    const { sql, params } = buildTimeBucketQuery(ht.table, ht.column, args, ht.columns, ht.schema, relationsByModel, model);
-    return (ctx.$parent as UnsafeRawClient).$queryRawUnsafe(sql, ...params);
-  } as unknown as TimeBucketMethod;
 
   // One namespace per executing client, keyed weakly so transaction clients can be collected.
   const manageCache = new WeakMap<
@@ -134,8 +115,38 @@ export function timescaledb<const C extends TimescaleConfig = TimescaleConfig>(c
     TimescaleManage<NamesOrString<HypertableModelNames<C>>, NamesOrString<CaggModelNames<C>>>
   >();
 
-  return Prisma.defineExtension((client) =>
-    client.$extends({
+  return Prisma.defineExtension((client) => {
+    // Per application, not per timescaledb(config) call: one extension can be applied to several
+    // base clients, and two clients can have different search paths. Transaction clients derived
+    // from this one share the answer rather than probing again.
+    const resolvePrefix = createPrefixResolver();
+
+    /**
+     * The `model.timeBucket(...)` method: resolve the model to its hypertable config, build the
+     * parameterized query (incl. where / relation filters), and run it via `$queryRawUnsafe`.
+     */
+    const timeBucket = async function (this: unknown, args: TimeBucketRuntimeArgs) {
+      const ctx = Prisma.getExtensionContext(this);
+      const model = ctx.$name;
+      if (typeof model !== "string") {
+        throw new Error("timeBucket: could not resolve the model name from the extension context.");
+      }
+      const ht = hypertableByModel.get(model);
+      if (!ht) {
+        throw new Error(
+          `timeBucket: "${model}" is not a registered hypertable. Pass it via timescaledb({ hypertables: [...] }) or run the generator.`,
+        );
+      }
+      assertInterval(args.bucket);
+      const client = ctx.$parent as UnsafeRawClient;
+      const prefix = await resolvePrefix(client);
+      const { sql, params } = buildTimeBucketQuery(
+        ht.table, ht.column, args, ht.columns, ht.schema, relationsByModel, model, prefix,
+      );
+      return client.$queryRawUnsafe(sql, ...params);
+    } as unknown as TimeBucketMethod;
+
+    return client.$extends({
       name: "prisma-extension-timescaledb",
       model: {
         $allModels: { timeBucket },
@@ -157,15 +168,15 @@ export function timescaledb<const C extends TimescaleConfig = TimescaleConfig>(c
             manage = makeManage<NamesOrString<HypertableModelNames<C>>, NamesOrString<CaggModelNames<C>>>(
               ctx as unknown as RawClient,
               caggViewByModel,
-              { hypertableByModel },
+              { hypertableByModel, resolvePrefix: () => resolvePrefix(ctx as unknown as RawClient) },
             );
             manageCache.set(ctx, manage);
           }
           return manage;
         },
       },
-    }),
-  );
+    });
+  });
 }
 
 export type { TimeBucketArgs, TimeBucketRow, AggregateInput } from "./timeBucket.js";

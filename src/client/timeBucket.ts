@@ -6,6 +6,7 @@ import type { Interval } from "../core/interval.js";
 import { assertInterval } from "../core/interval.js";
 import type { RelationConfig } from "../core/types.js";
 import { assertSafeIdent, qualifiedIdent, quoteIdent, quoteLiteral } from "../core/sql.js";
+import { NO_PREFIX, type FnPrefix } from "./searchPath.js";
 import { whereToSql, type RuntimeRelation } from "./where.js";
 
 // --- type machinery --------------------------------------------------------
@@ -255,7 +256,7 @@ const TZ_RE = /^[A-Za-z][A-Za-z0-9_+/-]*$/;
  *    column's type; `offset` is an INTERVAL literal. TimescaleDB has no `timestamp + origin + offset`
  *    overload, so origin+offset together require a timezone — and gapfill can't combine with these yet.
  */
-function bucketExpression(time: string, args: TimeBucketRuntimeArgs): string {
+function bucketExpression(time: string, args: TimeBucketRuntimeArgs, p: FnPrefix): string {
   const gapfill = args.gapfill === true;
   const { timezone, origin, offset } = args;
   const hasModifier = timezone !== undefined || origin !== undefined || offset !== undefined;
@@ -264,9 +265,9 @@ function bucketExpression(time: string, args: TimeBucketRuntimeArgs): string {
     if (hasModifier) {
       throw new Error("timeBucket: gapfill cannot be combined with timezone / origin / offset yet.");
     }
-    return `time_bucket_gapfill($1, ${time})`;
+    return `${p.ts}time_bucket_gapfill($1, ${time})`;
   }
-  if (!hasModifier) return `time_bucket($1, ${time})`;
+  if (!hasModifier) return `${p.ts}time_bucket($1, ${time})`;
 
   if (origin !== undefined && offset !== undefined && timezone === undefined) {
     throw new Error("timeBucket: origin and offset together require a timezone (no matching TimescaleDB overload).");
@@ -291,7 +292,7 @@ function bucketExpression(time: string, args: TimeBucketRuntimeArgs): string {
     assertInterval(offset);
     extra.push(`"offset" => INTERVAL ${quoteLiteral(offset)}`);
   }
-  return `time_bucket($1, ${time}, ${extra.join(", ")})`;
+  return `${p.ts}time_bucket($1, ${time}, ${extra.join(", ")})`;
 }
 
 /**
@@ -310,6 +311,7 @@ function aggregateExpr(
   gapfill: boolean,
   resultName: string,
   distinct = false,
+  p: FnPrefix = NO_PREFIX,
 ): string {
   const arg = distinct ? `DISTINCT ${src}` : src; // count(DISTINCT col)
   if (fill === undefined) return `${fn}(${arg})${castFor(fn, outputAs)}`;
@@ -319,8 +321,8 @@ function aggregateExpr(
   if (outputAs !== undefined) {
     throw new Error(`timeBucket: aggregate "${resultName}" cannot combine fill with as — a filled value is a JS number.`);
   }
-  if (fill === "locf") return `locf(${fn}(${arg})${castFor(fn, undefined)})`;
-  if (fill === "interpolate") return `interpolate(${fn}(${arg})::double precision)`;
+  if (fill === "locf") return `${p.ts}locf(${fn}(${arg})${castFor(fn, undefined)})`;
+  if (fill === "interpolate") return `${p.ts}interpolate(${fn}(${arg})::double precision)`;
   throw new Error(`timeBucket: invalid fill ${JSON.stringify(fill)} on "${resultName}" (expected "locf" or "interpolate").`);
 }
 
@@ -376,7 +378,13 @@ export function buildTimeBucketQuery(
   schema?: string,
   relationsByModel: ReadonlyMap<string, readonly RelationConfig[]> = new Map(),
   model?: string,
+  // Schema prefixes for TimescaleDB's own functions. Empty by default, which is both the SQL
+  // this package has always emitted and what a connection whose search path reaches the
+  // extension needs; the runtime fills it in when the probe says otherwise (see searchPath.ts).
+  prefix: FnPrefix = NO_PREFIX,
 ): { sql: string; params: unknown[] } {
+  // `p` is taken by the percentile argument further down, hence the shorter alias.
+  const pre = prefix;
   assertSafeIdent(table, "model table");
   assertSafeIdent(timeColumn, "time column");
   if (schema !== undefined) assertSafeIdent(schema, "model schema");
@@ -400,7 +408,7 @@ export function buildTimeBucketQuery(
   // too: grouping by the "bucket" alias would bind to an INPUT column of that name if the table has
   // one (Postgres resolves GROUP BY names input-first), breaking every query on such a model.
   const gapfill = args.gapfill === true;
-  const bucketExpr = bucketExpression(time, args);
+  const bucketExpr = bucketExpression(time, args, pre);
   const select: string[] = [`${bucketExpr} AS "bucket"`];
 
   // Every output column name must be unique — "bucket" is claimed by the bucket expression, and a
@@ -465,7 +473,7 @@ export function buildTimeBucketQuery(
       }
       if (min >= max) throw new Error(`timeBucket: histogram "${resultName}" requires min < max.`);
       // min/max/buckets are validated numbers — safe to inline directly.
-      select.push(`histogram(${quoteIdent(col(columnRaw))}, ${min}, ${max}, ${buckets}) AS ${alias}`);
+      select.push(`${pre.ts}histogram(${quoteIdent(col(columnRaw))}, ${min}, ${max}, ${buckets}) AS ${alias}`);
       continue;
     }
 
@@ -500,7 +508,7 @@ export function buildTimeBucketQuery(
       if (outputAs !== undefined) throw new Error(`timeBucket: "${fn}" on "${resultName}" does not support as.`);
       if (fill !== undefined) throw new Error(`timeBucket: "${fn}" on "${resultName}" does not support fill.`);
       const orderBy = by !== undefined ? quoteIdent(col(by)) : time;
-      select.push(`${fn}(${src}, ${orderBy}) AS ${alias}`);
+      select.push(`${pre.ts}${fn}(${src}, ${orderBy}) AS ${alias}`);
       continue;
     }
     if (by !== undefined) throw new Error(`timeBucket: "by" is only valid on first / last (on "${resultName}").`);
@@ -513,20 +521,20 @@ export function buildTimeBucketQuery(
         throw new Error(`timeBucket: percentile "${resultName}" requires p as a number in [0, 1].`);
       }
       // p is a validated number — safe to inline directly.
-      select.push(`approx_percentile(${p}, percentile_agg(${src})) AS ${alias}`);
+      select.push(`${pre.tk}approx_percentile(${p}, ${pre.tk}percentile_agg(${src})) AS ${alias}`);
       continue;
     }
     if (fn === "rate" || fn === "delta") {
       if (outputAs !== undefined || fill !== undefined) throw new Error(`timeBucket: "${fn}" on "${resultName}" does not support as / fill.`);
       // counter_agg is reset-aware; rate is per-second, delta is the total change over the bucket.
-      select.push(`${fn}(counter_agg(${time}, ${src})) AS ${alias}`);
+      select.push(`${pre.tk}${fn}(${pre.tk}counter_agg(${time}, ${src})) AS ${alias}`);
       continue;
     }
     if (fn === "timeWeightedAverage") {
       if (outputAs !== undefined || fill !== undefined) throw new Error(`timeBucket: "timeWeightedAverage" on "${resultName}" does not support as / fill.`);
       const weight = method === undefined || method === "locf" ? "LOCF" : method === "linear" ? "Linear" : undefined;
       if (weight === undefined) throw new Error(`timeBucket: timeWeightedAverage "${resultName}" method must be "locf" or "linear".`);
-      select.push(`average(time_weight(${quoteLiteral(weight)}, ${time}, ${src})) AS ${alias}`);
+      select.push(`${pre.tk}average(${pre.tk}time_weight(${quoteLiteral(weight)}, ${time}, ${src})) AS ${alias}`);
       continue;
     }
     if (fn === "candlestick") {
@@ -535,9 +543,9 @@ export function buildTimeBucketQuery(
       if (typeof volume !== "string") throw new Error(`timeBucket: candlestick "${resultName}" requires a volume column.`);
       // candlestick_agg is repeated per accessor but Postgres computes it once (common subexpression);
       // jsonb_build_object returns OHLC + vwap as one JS object column. `src` is the price column.
-      const cs = `candlestick_agg(${time}, ${src}, ${quoteIdent(col(volume))})`;
+      const cs = `${pre.tk}candlestick_agg(${time}, ${src}, ${quoteIdent(col(volume))})`;
       select.push(
-        `jsonb_build_object('open', open(${cs}), 'high', high(${cs}), 'low', low(${cs}), 'close', close(${cs}), 'vwap', vwap(${cs})) AS ${alias}`,
+        `jsonb_build_object('open', ${pre.tk}open(${cs}), 'high', ${pre.tk}high(${cs}), 'low', ${pre.tk}low(${cs}), 'close', ${pre.tk}close(${cs}), 'vwap', ${pre.tk}vwap(${cs})) AS ${alias}`,
       );
       continue;
     }
@@ -547,9 +555,9 @@ export function buildTimeBucketQuery(
       // stats_agg(value) is repeated per accessor but Postgres computes it once (common
       // subexpression); jsonb_build_object returns the 1-D summary as one JS object. stddev /
       // variance are SAMPLE (Toolkit default), matching the package's sample stddev / variance ops.
-      const sa = `stats_agg(${src})`;
+      const sa = `${pre.tk}stats_agg(${src})`;
       select.push(
-        `jsonb_build_object('average', average(${sa}), 'sum', sum(${sa}), 'numVals', num_vals(${sa}), 'stddev', stddev(${sa}), 'variance', variance(${sa}), 'skewness', skewness(${sa}), 'kurtosis', kurtosis(${sa})) AS ${alias}`,
+        `jsonb_build_object('average', ${pre.tk}average(${sa}), 'sum', ${pre.tk}sum(${sa}), 'numVals', ${pre.tk}num_vals(${sa}), 'stddev', ${pre.tk}stddev(${sa}), 'variance', ${pre.tk}variance(${sa}), 'skewness', ${pre.tk}skewness(${sa}), 'kurtosis', ${pre.tk}kurtosis(${sa})) AS ${alias}`,
       );
       continue;
     }
@@ -565,7 +573,7 @@ export function buildTimeBucketQuery(
     }
     // Map to the SQL function name (stddevPop -> stddev_pop, …); aggregateExpr applies `fill`
     // (gapfill-only locf/interpolate), the `as` cast, and DISTINCT for count.
-    select.push(`${aggregateExpr(SQL_FN[fn] ?? fn, src, outputAs, fill, gapfill, resultName, distinct === true)} AS ${alias}`);
+    select.push(`${aggregateExpr(SQL_FN[fn] ?? fn, src, outputAs, fill, gapfill, resultName, distinct === true, pre)} AS ${alias}`);
   }
 
   // Relation-filter lookup (some/none/every/is/isNot -> EXISTS): the entry model drives the

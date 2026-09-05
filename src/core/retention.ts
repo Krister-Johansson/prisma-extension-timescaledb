@@ -2,7 +2,7 @@
 import type { MigrationSql } from "./types.js";
 import type { Interval } from "./interval.js";
 import { assertInterval } from "./interval.js";
-import { assertSafeIdent, existenceGuard, quoteLiteral, relationLiteral } from "./sql.js";
+import { assertSafeIdent, quoteLiteral, relationLiteral, timescaleDoBlock } from "./sql.js";
 
 /** Retention-policy builder input. All names are DB names (post-@@map / @@schema). */
 export interface RetentionPolicyConfig {
@@ -35,13 +35,13 @@ export function createRetentionPolicySql(config: RetentionPolicyConfig): Migrati
 
   const rel = relationLiteral(table, schema);
   const call = `add_retention_policy(${rel}, drop_after => INTERVAL ${quoteLiteral(dropAfter)}, if_not_exists => TRUE)`;
-  const up = `SELECT ${call};`;
+  // Wrapped in a DO block that first puts TimescaleDB's schema on the search path:
+  // `add_retention_policy` is emitted unqualified and Prisma runs migrations with `search_path`
+  // set to the datasource schema alone (issue #129).
+  const up = timescaleDoBlock(`  PERFORM ${call};`);
   // Guarded form for emitted migrations: a later-dropped table makes replay skip, not fail.
-  const guardedUp = `DO $$ BEGIN
-  ${existenceGuard(rel)}
-  PERFORM ${call};
-END $$;`;
-  const down = `SELECT remove_retention_policy(${rel}, if_exists => TRUE);`;
+  const guardedUp = timescaleDoBlock(`  PERFORM ${call};`, rel);
+  const down = timescaleDoBlock(`  PERFORM remove_retention_policy(${rel}, if_exists => TRUE);`);
 
   return { up, down, guardedUp };
 }

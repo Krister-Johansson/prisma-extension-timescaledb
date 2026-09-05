@@ -102,6 +102,7 @@ model SensorReading {
 
   @@id([deviceId, time])
   @@index([deviceId, time])
+  @@index([time(sort: Desc)])
 }
 
 /// @timescale.continuousAggregate(source: "SensorReading", bucket: "1 hour", timeColumn: "time", refresh: { startOffset: "1 month", endOffset: "1 hour", scheduleInterval: "1 hour" })
@@ -127,6 +128,17 @@ one, and the next `migrate deploy` (or `migrate dev`) applies it. Regenerating
 an unchanged schema writes nothing. The generator keeps its state in
 `migrations/.prisma-extension-timescaledb.json`; commit that file with your
 migrations.
+
+Indexes on a hypertable come from your Prisma schema and nowhere else. The
+generated conversion passes `create_default_indexes => FALSE`, because the
+index TimescaleDB would otherwise add on the time column is invisible to
+Prisma: `migrate dev` writes a `DROP INDEX` migration for it, and that
+migration then breaks the next `migrate reset`. Declare the index yourself to
+keep one, using the descending order time-series queries usually want:
+
+```prisma
+@@index([time(sort: Desc)])
+```
 
 ```ts
 import { PrismaClient } from "./client/client.js";
@@ -155,6 +167,102 @@ continues with the full setup, query, and management docs.
 A runnable NestJS app with hypertables, continuous aggregates, and
 `timeBucket` queries wired up end to end:
 [prisma-extension-timescaledb-nestjs-example](https://github.com/Krister-Johansson/prisma-extension-timescaledb-nestjs-example).
+
+## Search path
+
+TimescaleDB installs into `public`, and both the generated migrations and the runtime helpers
+call its functions by name. If the connection's `search_path` does not reach `public`, those
+names do not resolve:
+
+```
+ERROR: function by_range(unknown, interval) does not exist
+```
+
+Two settings put you there. A datasource schema other than `public`
+(`?schema=data_collection`, which is also where Prisma keeps `_prisma_migrations`) narrows the
+path Prisma runs migrations under. A role default (`ALTER ROLE app SET search_path TO
+data_collection`), common in a database shared by several services, narrows it for every
+connection.
+
+You do not need to configure anything for either. The generated migrations read the extension's
+own schema out of `pg_extension` and put it on the search path for the statement, and the runtime
+probes once per client and qualifies the function names it sends. Prisma's own queries were never
+affected, because the engine schema-qualifies the relations it generates.
+
+Adding `public` to the URL is not a workaround: `?schema=data_collection,public` moves where
+Prisma looks for its migrations table, and `migrate deploy` then fails with
+`Invariant violation: migration persistence is not initialized`.
+
+## Upgrading
+
+An upgrade never rewrites a migration you have already applied. Fixes reach a
+project through the next versioned objects migration, which `prisma generate`
+appends when the annotated schema changes. Two situations need a manual step.
+
+### A first deploy that failed on `_v0001`
+
+Earlier versions emitted unqualified TimescaleDB function calls. Prisma runs
+migrations with `search_path` set to the datasource schema alone, so a project
+whose tables live outside `public` could not resolve them:
+
+```
+Migration name: 99999999999999_timescaledb_objects_v0001
+ERROR: function by_range(unknown, interval) does not exist
+```
+
+Nothing in that migration applied, so you can replace it. Delete the generated
+files, tell Prisma the failed migration rolled back, and regenerate:
+
+```bash
+rm -rf migrations/00000000000000_timescaledb_extension
+rm -rf migrations/99999999999999_timescaledb_objects_v*
+rm migrations/.prisma-extension-timescaledb.json
+npx prisma migrate resolve --rolled-back 99999999999999_timescaledb_objects_v0001
+npx prisma generate
+npx prisma migrate deploy
+```
+
+### A `DROP INDEX` migration in your history
+
+Earlier versions let `create_hypertable` add its own index on the time column.
+Prisma does not know that index, so `migrate dev` wrote a migration to drop it:
+
+```sql
+-- DropIndex
+DROP INDEX "SensorReading_time_idx";
+```
+
+That migration carries a real timestamp, so it sorts before the objects
+migration that created the index. Every fresh database now fails on it, which
+covers CI, a new developer's machine, `migrate reset`, and provisioning a new
+production database:
+
+```
+Applying migration `20260601120000_drift`
+ERROR: index "SensorReading_time_idx" does not exist
+```
+
+Databases you already deployed to keep working, because the drop ran there
+while the index still existed.
+
+To repair the history, edit that migration to drop conditionally:
+
+```sql
+-- DropIndex
+DROP INDEX IF EXISTS "SensorReading_time_idx";
+```
+
+Then declare the index on the model, matching the descending order TimescaleDB
+used, so Prisma stops treating it as drift:
+
+```prisma
+@@index([time(sort: Desc)])
+```
+
+Prisma asks for a reset at this point, because you edited a migration it had
+already applied. `prisma migrate reset` followed by `prisma migrate deploy`
+reproduces the hypertable and the index, and `migrate dev` writes an empty
+migration from then on.
 
 ## Shadow database
 
