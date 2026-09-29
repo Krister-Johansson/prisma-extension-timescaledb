@@ -77,9 +77,11 @@ describe.skipIf(!DOCKER_OK)("$timescale chunk + size helpers (real TimescaleDB)"
   });
 
   it("compressionStats reads catalog stats once columnstore is enabled", async () => {
-    await prisma.$timescale().addCompressionPolicy("SensorReading", { after: "7 days" });
+    // `after` is beyond every row's age, so the policy's background job never compresses a chunk
+    // behind the assertion below (#156).
+    await prisma.$timescale().addCompressionPolicy("SensorReading", { after: "10000 days" });
     const stats = await prisma.$timescale().compressionStats("SensorReading");
     expect(typeof stats.totalChunks).toBe("bigint");
-    expect(stats.compressedChunks).toBe(0n); // policy hasn't run yet — nothing compressed
+    expect(stats.compressedChunks).toBe(0n); // no chunk is old enough for the policy
   });
 });
