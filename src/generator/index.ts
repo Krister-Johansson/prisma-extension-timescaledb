@@ -12,6 +12,7 @@ import { dirname, isAbsolute, join } from "node:path";
 // both ESM and CJS output.
 import generatorHelper from "@prisma/generator-helper";
 import { extractTimescaleSchema } from "./dmmf.js";
+import { assertSafeIdent } from "../core/sql.js";
 
 const { generatorHandler } = generatorHelper;
 import {
@@ -63,6 +64,13 @@ generatorHandler({
           : join(schemaDir, migrationsConfig)
         : join(schemaDir, "migrations");
 
+    // The schema an unqualified relation lives in. The generator never sees the connection URL
+    // (Prisma 7 keeps it in prisma.config.ts), so a project whose URL sets `?schema=` names it
+    // here; everything else is `public`.
+    const defaultSchemaConfig = options.generator.config["defaultSchema"];
+    const defaultSchema = typeof defaultSchemaConfig === "string" ? defaultSchemaConfig : "public";
+    assertSafeIdent(defaultSchema, "generator defaultSchema");
+
     // Previous emitted state, so a changed schema appends the NEXT versioned objects migration
     // and an unchanged one is a byte-stable no-op. On a missing/corrupt state file, the highest
     // existing ..._v000N folder pins the next sequence, so recovery re-asserts the full state
@@ -80,6 +88,7 @@ generatorHandler({
         maxObjectsSequence(existing),
         existing.includes(EXTENSION_MIGRATION),
         latestExists,
+        defaultSchema,
       );
     } catch (e) {
       if (e instanceof MissingMigrationError) {

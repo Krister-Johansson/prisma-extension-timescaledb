@@ -198,12 +198,20 @@ function rootHypertable(state: ObjectsState, c: CaggConfig): HypertableConfig | 
  * without moving anything in the database. Diffed as-is, the old keys read as removed and the
  * new ones as added: every cagg dropped and recreated empty, every policy removed and re-added.
  * This rewrites the previous state's schema fields to the current ones wherever a relation of
- * the same bare name exists on exactly one side qualified, so the diff sees the same object.
- * A relation that really moved between two named schemas is left alone.
+ * the same bare name is qualified on exactly one side with the DEFAULT schema, so the diff sees
+ * the same object. An unqualified name means "the connection's default schema", so `X` and
+ * `metrics.X` are two relations, and a real move is left alone. The generator cannot read the
+ * connection URL, so the default is `public` unless the generator config says otherwise.
  */
-function alignSchemaFlips(previous: ObjectsState, current: ObjectsState): { previous: ObjectsState; notes: string[] } {
+function alignSchemaFlips(
+  previous: ObjectsState,
+  current: ObjectsState,
+  defaultSchema: string,
+): { previous: ObjectsState; notes: string[] } {
   const notes: string[] = [];
-  const flipped = (a: string | undefined, b: string | undefined): boolean => (a === undefined) !== (b === undefined);
+  // Exactly one side qualified, and that side names the default schema.
+  const flipped = (a: string | undefined, b: string | undefined): boolean =>
+    (a === undefined && b === defaultSchema) || (b === undefined && a === defaultSchema);
 
   const prevHyperKeys = new Set(previous.hypertables.map((h) => qualify(h.schema, h.table)));
   const curHyperKeys = new Set(current.hypertables.map((h) => qualify(h.schema, h.table)));
@@ -237,7 +245,9 @@ function alignSchemaFlips(previous: ObjectsState, current: ObjectsState): { prev
     };
   });
 
-  return { previous: { hypertables, continuousAggregates }, notes };
+  // Re-canonicalise: keys changed, so the sort order may have too, and an unchanged state
+  // must compare equal byte for byte.
+  return { previous: canonicalObjects({ hypertables, continuousAggregates }), notes };
 }
 
 /**
@@ -370,14 +380,23 @@ function renderRemovals(previous: ObjectsState, current: ObjectsState, warnings:
     if (!dropSet.has(key)) continue;
     let reason = !currentCaggByKey.has(key) ? "Removed" : "Changed (drop + recreate; materialized data refills on refresh)";
     // The refill only reaches rows the source still holds. Under a retention policy every
-    // bucket older than the window is gone for good, which deserves more than a comment.
+    // bucket older than the window is gone for good, which deserves more than a comment. The
+    // policy may be going away in this same version, and the rows it dropped are still gone,
+    // so the previous state's root counts too.
     const cur = currentCaggByKey.get(key);
-    const root = cur ? rootHypertable(current, cur) : undefined;
-    if (cur && root?.retention) {
+    const prev = prevCaggByKey.get(key);
+    const prevRoot = prev && rootHypertable(previous, prev);
+    const root = cur ? (rootHypertable(current, cur) ?? prevRoot) : undefined;
+    const retention = root?.retention ?? prevRoot?.retention;
+    if (cur && prev && root && retention) {
       const rootKey = qualify(root.schema, root.table);
-      reason = `Changed (drop + recreate). WARNING: source ${rootKey} drops rows after ${root.retention.dropAfter}; buckets older than that are lost`;
+      const why =
+        caggDefinition(prev) !== caggDefinition(cur)
+          ? "because its definition changed"
+          : "because a continuous aggregate it is built on changed";
+      reason = `Changed (drop + recreate). WARNING: source ${rootKey} drops rows after ${retention.dropAfter}; buckets older than that are lost`;
       warnings.push(
-        `continuous aggregate ${key} is dropped and recreated because its definition changed, and its source ${rootKey} drops rows after ${root.retention.dropAfter}: buckets older than that cannot be rebuilt and are lost.`,
+        `continuous aggregate ${key} is dropped and recreated ${why}, and its source ${rootKey} drops rows after ${retention.dropAfter}: buckets older than that cannot be rebuilt and are lost.`,
       );
     }
     // Constraint 4: DROP MATERIALIZED VIEW, never DROP VIEW.
@@ -551,6 +570,10 @@ export function maxObjectsSequence(folderNames: readonly string[]): number {
  * the checksum Prisma recorded for it. A missing one is re-emitted even when nothing else
  * changed, so deleting the folder heals on the next generate.
  *
+ * `defaultSchema` is the schema an unqualified relation lives in (the connection's `?schema=`,
+ * `public` when unset). A multiSchema flip is recognised only against that schema: `X` and
+ * `metrics.X` are two different relations.
+ *
  * `latestObjectsMigrationExists` says whether the folder for `previous.sequence` is still on
  * disk (ignored without a previous state). When it is gone, the recorded state has no
  * migration behind it, so the next version rebuilds it: the diff runs from the state the lost
@@ -566,6 +589,7 @@ export function emitMigrations(
   maxExistingSequence = 0,
   extensionMigrationExists = false,
   latestObjectsMigrationExists = true,
+  defaultSchema = "public",
 ): EmitResult {
   const state = canonicalState(schema);
   const empty = state.hypertables.length === 0 && state.continuousAggregates.length === 0;
@@ -588,7 +612,7 @@ export function emitMigrations(
     : previous && canonicalObjects(previous.state);
   // A multiSchema flip re-qualifies every key without moving anything; diff against the
   // previous state re-qualified the same way, so the same object never reads as dropped.
-  const aligned = rawPrevState ? alignSchemaFlips(rawPrevState, state) : undefined;
+  const aligned = rawPrevState ? alignSchemaFlips(rawPrevState, state, defaultSchema) : undefined;
   const prevState = aligned?.previous;
   const flipNotes = aligned?.notes ?? [];
   // The base the emitted migration diffs against, recorded so it can be rebuilt if lost. It is

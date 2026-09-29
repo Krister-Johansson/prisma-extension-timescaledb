@@ -137,7 +137,12 @@ an unchanged schema writes nothing. The generator keeps its state in
 migrations. Changed policy values, a changed chunk interval or partition
 count, a dropped `segmentBy` or `orderBy`, and a flipped `materializedOnly`
 all land in place. Turning `multiSchema` on or off only re-qualifies the names
-and emits nothing. Three changes cannot be applied to a live hypertable and
+and emits nothing, as long as the schema you qualify with is the one your
+connection already uses. The generator cannot read the connection URL, so it
+assumes `public`; if your URL sets `?schema=`, name that schema with
+`defaultSchema = "..."` in the generator block. Qualifying with any other
+schema is a move, and the generator treats it as a removal plus a new object.
+Three changes cannot be applied to a live hypertable and
 stop `prisma generate` with an error: the time column, the partition column,
 and removing a space partition. For those, declare the new layout on a new
 model, copy the data across, and drop the old one. If you delete the newest generated objects migration before
