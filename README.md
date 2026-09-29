@@ -64,7 +64,9 @@ npm install -D prisma @prisma/client
 npm install @prisma/adapter-pg            # or your preferred driver adapter
 ```
 
-Requires Prisma 7 and a TimescaleDB-capable PostgreSQL, for both the database
+Requires Prisma 7, Node 20.19, 22.12 or 24 and newer (the range Prisma 7
+itself supports), TypeScript 5.4 or newer if you use TypeScript, and a
+TimescaleDB-capable PostgreSQL, for both the database
 and the Prisma shadow database. Locally, the
 [`timescale/timescaledb`](https://hub.docker.com/r/timescale/timescaledb)
 image works. Compression needs TimescaleDB 2.18 or newer; the Toolkit
@@ -87,7 +89,7 @@ generator client {
 
 generator timescaledb {
   provider = "prisma-extension-timescaledb"   // emits reset-safe migrations + a typed registry
-  output   = "./timescale"
+  output   = "./timescale"                     // keep it inside the source tree you compile
 }
 
 datasource db {
@@ -182,6 +184,29 @@ const rows = await prisma.sensorReading.timeBucket({
   aggregate: { avgTemp: { avg: "temperature" } },
 });
 // rows: Array<{ bucket: Date; deviceId: number; avgTemp: number }>
+```
+
+The registry is emitted as one `index.ts` file, so its `output` directory has
+to be part of the TypeScript program that compiles your app (inside `rootDir`
+and matched by `include`). Prisma resolves `output` relative to the schema
+file, so with `prisma/schema.prisma` and `rootDir: "src"` write
+`output = "../src/timescale"`. Under `moduleResolution: NodeNext` the `.js`
+import above resolves to that `.ts` file. There is no `.js` on disk, so
+running the registry without a compile step, for example with Node's type
+stripping or with the directory excluded from `tsconfig.json`, fails with a
+not-found error.
+
+Prisma spawns the provider as a shell command, which `npx prisma generate` and
+npm scripts resolve through `node_modules/.bin`. A globally installed `prisma`
+does not, and fails with "command not found"; point the provider at the file
+instead. The path is resolved from the directory you run `prisma generate` in,
+so run it from the project root:
+
+```prisma
+generator timescaledb {
+  provider = "node node_modules/prisma-extension-timescaledb/dist/generator/index.js"
+  output   = "./timescale"
+}
 ```
 
 The [wiki](https://github.com/Krister-Johansson/prisma-extension-timescaledb/wiki)

@@ -28,6 +28,7 @@ import {
   type GeneratorState,
 } from "./emit-migrations.js";
 import { emitTypes } from "./emit-types.js";
+import { assertSupportedPrismaVersion, installedPrismaVersion } from "./prismaVersion.js";
 
 const DEFAULT_OUTPUT = "node_modules/.prisma-extension-timescaledb";
 
@@ -49,6 +50,8 @@ generatorHandler({
   },
 
   async onGenerate(options) {
+    const versionWarning = assertSupportedPrismaVersion(installedPrismaVersion(import.meta.url));
+    if (versionWarning) console.warn(versionWarning);
     const schema = extractTimescaleSchema(options.dmmf);
 
     const typesDir = options.generator.output?.value ?? DEFAULT_OUTPUT;

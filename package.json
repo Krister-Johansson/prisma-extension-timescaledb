@@ -18,6 +18,13 @@
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "typesVersions": {
+    "*": {
+      "core": [
+        "./dist/core/index.d.ts"
+      ]
+    }
+  },
   "bin": {
     "prisma-extension-timescaledb": "./dist/generator/index.js"
   },
@@ -45,13 +52,13 @@
     "./package.json": "./package.json"
   },
   "scripts": {
-    "build": "tsup",
+    "build": "node -e \"fs.rmSync('dist', { recursive: true, force: true })\" && tsup",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
     "coverage": "vitest run --coverage",
     "test:types": "tsc -p tsconfig.types.json",
     "test:integration": "vitest run --config vitest.integration.config.ts",
-    "attw": "attw --pack . --profile node16",
+    "attw": "attw --pack .",
     "prepublishOnly": "npm run build && npm run test && npm run test:types && npm run attw"
   },
   "keywords": [
@@ -66,10 +73,16 @@
   ],
   "peerDependencies": {
     "@prisma/client": ">=7.0.0",
-    "prisma": ">=7.0.0"
+    "prisma": ">=7.0.0",
+    "typescript": ">=5.4"
+  },
+  "peerDependenciesMeta": {
+    "typescript": {
+      "optional": true
+    }
   },
   "dependencies": {
-    "@prisma/generator-helper": ">=7.0.0"
+    "@prisma/generator-helper": ">=7.0.0 <8"
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.2",
@@ -88,7 +101,7 @@
     "vitest": "^5.0.2"
   },
   "engines": {
-    "node": ">=18.18"
+    "node": "^20.19 || ^22.12 || >=24"
   },
   "overrides": {
     "deepmerge-ts": "^8.0.0",

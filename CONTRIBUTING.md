@@ -16,7 +16,8 @@ a change needs to meet.
 
 ## Development setup
 
-Prerequisites: Node 18.18 or newer and Docker. The integration suite spins up
+Prerequisites: Node 20.19, 22.12 or 24 and newer (what Prisma 7 supports) and
+Docker. The integration suite spins up
 a real TimescaleDB via [Testcontainers](https://testcontainers.com/); without
 Docker those tests are skipped. CI runs the integration suite on Node 24, so
 use a recent Node if the Testcontainers Docker client misbehaves on an older
