@@ -31,6 +31,8 @@ jobs:
         uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           languages: javascript-typescript
+          # The extended suite adds lower-precision security queries on top of the default set.
+          queries: security-extended
       # No build step: CodeQL analyzes JS/TS sources directly.
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2

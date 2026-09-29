@@ -37,23 +37,35 @@ license is treated as a critical finding and replaced.
 
 ## Secrets and credentials
 
-The project is designed to hold as few secrets as possible:
+The project holds as few secrets as possible:
 
 - Publishing needs no stored credential. npm releases use OIDC trusted
   publishing from GitHub Actions, so there is no npm token to store, leak, or
-  rotate.
-- The only standing secret is the Codecov upload token, kept as a GitHub
-  Actions repository secret. It can only upload coverage reports; it grants no
-  access to code, accounts, or publishing.
+  rotate. The npm token that predated trusted publishing was revoked and its
+  repository secret deleted on 2026-09-29.
+- Three standing secrets exist, all GitHub Actions repository secrets:
+  - `CODECOV_TOKEN` uploads coverage reports to Codecov. It grants no access
+    to code, accounts, or publishing. Rotate it from the Codecov dashboard.
+  - `RELEASE_PLEASE_TOKEN` is a fine-grained personal access token scoped to
+    this repository only, with read and write on contents and pull requests.
+    release-please uses it to maintain the release pull request and to create
+    tags and releases, so that the release event reaches the SBOM workflow
+    (an event raised with the workflow's own token would not). The release
+    workflow fails when the secret is missing or empty rather than falling
+    back to the workflow token. Fine-grained tokens expire; renew it from the
+    GitHub token settings before the expiry date and replace the secret.
+  - `SCORECARD_TOKEN` is a fine-grained personal access token with read
+    access to repository administration, which the Scorecard action needs to
+    read branch protection. It falls back to the workflow token, which loses
+    only that one check.
 - Secrets are never hard-coded or committed. GitHub secret scanning runs on
   the repository, and local artifacts are gitignored.
 - Access to repository secrets requires admin access to the repository, which
   is governed by the escalated-permissions policy in
   [GOVERNANCE.md](../GOVERNANCE.md).
-- Rotation: the Codecov token is rotated from the Codecov dashboard whenever
-  exposure is suspected and whenever repository access changes. A secret that
-  gains broader scope than described here must be documented in this section
-  first.
+- Rotation: every secret is rotated whenever exposure is suspected and
+  whenever repository access changes. A secret that gains broader scope than
+  described here must be documented in this section first.
 
 ## Exploitability assessments (VEX)
 
