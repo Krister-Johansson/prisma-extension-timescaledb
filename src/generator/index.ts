@@ -87,7 +87,8 @@ generatorHandler({
       }
       throw e;
     }
-    const { files, nextState } = result;
+    const { files, nextState, warnings } = result;
+    for (const warning of warnings ?? []) console.warn(`prisma-extension-timescaledb: ${warning}`);
     // Warned only once something is actually written, so the message never precedes an abort.
     if (!latestExists && nextState) {
       console.warn(

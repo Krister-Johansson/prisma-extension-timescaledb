@@ -134,7 +134,13 @@ change, `prisma generate` appends a new versioned migration
 one, and the next `migrate deploy` (or `migrate dev`) applies it. Regenerating
 an unchanged schema writes nothing. The generator keeps its state in
 `migrations/.prisma-extension-timescaledb.json`; commit that file with your
-migrations. If you delete the newest generated objects migration before
+migrations. Changed policy values, a changed chunk interval or partition
+count, a dropped `segmentBy` or `orderBy`, and a flipped `materializedOnly`
+all land in place. Turning `multiSchema` on or off only re-qualifies the names
+and emits nothing. Three changes cannot be applied to a live hypertable and
+stop `prisma generate` with an error: the time column, the partition column,
+and removing a space partition. For those, declare the new layout on a new
+model, copy the data across, and drop the old one. If you delete the newest generated objects migration before
 deploying it, the next `prisma generate` rebuilds it under the next version
 number from the previous state recorded in that file. If the deleted migration
 had already been applied to a database, the rebuilt one is still safe to apply

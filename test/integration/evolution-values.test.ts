@@ -65,6 +65,23 @@ view SensorHourly {
 // policy and re-adds it without dropping the materialized view.
 const V3 = V2.replace('scheduleInterval: "30 minutes"', 'scheduleInterval: "2 hours"');
 
+// Issue #161: three values that used to change nothing. The partition count on the same column,
+// a segmentBy that disappears (orderBy stays), and materializedOnly on a cagg that must not be
+// dropped for it.
+const V4 = V3.replace("partitions: 4", "partitions: 8")
+  .replace('segmentBy: "seq", ', "")
+  .replace('scheduleInterval: "2 hours" }', 'scheduleInterval: "2 hours" }, materializedOnly: false');
+
+// Issue #161: turning multiSchema on re-qualifies every relation as public.X. Nothing moves in
+// the database, so nothing may be dropped or re-added.
+const V5 = V4.replace("\n  @@id([deviceId, time])", '\n  @@id([deviceId, time])\n  @@schema("public")').replace(
+  "\n  @@unique([deviceId, bucket])",
+  '\n  @@unique([deviceId, bucket])\n  @@schema("public")',
+);
+
+// Issue #161: a space dimension cannot be removed from a live hypertable.
+const V6 = V5.replace(', partitionColumn: "deviceId", partitions: 8', "");
+
 const INIT_SQL = `-- CreateTable
 CREATE TABLE "SensorReading" (
     "time" TIMESTAMP(3) NOT NULL,
@@ -83,6 +100,8 @@ interface Snapshot {
   dropAfter: string | null;
   compressAfter: string | null;
   segmentBy: string | null;
+  orderBy: string | null;
+  materializedOnly: boolean | null;
   chunkSkipping: string | null;
   caggBucket: string | null;
   refreshSchedule: string | null;
@@ -103,6 +122,10 @@ async function snapshot(h: Harness): Promise<Snapshot> {
         WHERE proc_name = 'policy_compression' AND hypertable_name = 'SensorReading') AS "compressAfter",
       (SELECT segmentby FROM timescaledb_information.hypertable_columnstore_settings
         WHERE hypertable::text = '"SensorReading"') AS "segmentBy",
+      (SELECT orderby FROM timescaledb_information.hypertable_columnstore_settings
+        WHERE hypertable::text = '"SensorReading"') AS "orderBy",
+      (SELECT materialized_only FROM timescaledb_information.continuous_aggregates
+        WHERE view_name = 'SensorHourly') AS "materializedOnly",
       (SELECT string_agg(s.column_name, ',' ORDER BY s.column_name)
          FROM _timescaledb_catalog.chunk_column_stats s
          JOIN _timescaledb_catalog.hypertable h ON h.id = s.hypertable_id
@@ -132,6 +155,8 @@ const AFTER_V1: Snapshot = {
   dropAfter: "30 days",
   compressAfter: "7 days",
   segmentBy: "deviceId",
+  orderBy: '"time" DESC',
+  materializedOnly: true,
   chunkSkipping: "seq",
   caggBucket: "01:00:00",
   refreshSchedule: "01:00:00",
@@ -145,6 +170,8 @@ const AFTER_V2: Snapshot = {
   dropAfter: "7 days",
   compressAfter: "2 days",
   segmentBy: "seq",
+  orderBy: '"time" DESC',
+  materializedOnly: true,
   chunkSkipping: "batch",
   caggBucket: "06:00:00",
   refreshSchedule: "00:30:00",
@@ -153,6 +180,7 @@ const AFTER_V2: Snapshot = {
 };
 
 const AFTER_V3: Snapshot = { ...AFTER_V2, refreshSchedule: "02:00:00" };
+const AFTER_V4: Snapshot = { ...AFTER_V3, partitions: 8, segmentBy: null, materializedOnly: false };
 
 describe.skipIf(!DOCKER_OK)("changed annotation values reach the database", () => {
   let h: Harness;
@@ -199,24 +227,90 @@ describe.skipIf(!DOCKER_OK)("changed annotation values reach the database", () =
     expect(after?.oid).toBe(before?.oid); // same relation, never dropped and recreated
   }, 120_000);
 
+  // Before the fix every one of these ran clean and changed nothing: add_dimension skipped the
+  // existing column, the re-added policy only SET the options still declared, and the cagg was
+  // dropped and recreated empty for a flag an ALTER can set.
+  it("v4 changes the partition count, drops segmentBy and flips materializedOnly, all in place", async () => {
+    const [before] = await h.query<{ oid: number }>(`SELECT '"SensorHourly"'::regclass::oid AS oid`);
+    setModels(V4);
+    h.prisma(["generate"]);
+    h.prisma(["migrate", "deploy"]);
+    expect(await snapshot(h)).toEqual(AFTER_V4);
+    const [after] = await h.query<{ oid: number }>(`SELECT '"SensorHourly"'::regclass::oid AS oid`);
+    expect(after?.oid).toBe(before?.oid); // the flag was altered on the live view
+  }, 120_000);
+
+  /** Turn multiSchema on in the generator and datasource blocks the harness wrote. */
+  const enableMultiSchema = (): void => {
+    const path = join(h.projectDir, "schema.prisma");
+    const current = readFileSync(path, "utf8");
+    expect(current).toContain('previewFeatures = ["views"]');
+    writeFileSync(
+      path,
+      current
+        .replace('previewFeatures = ["views"]', 'previewFeatures = ["views","multiSchema"]')
+        .replace('provider = "postgresql"\n}', 'provider = "postgresql"\n  schemas  = ["public"]\n}'),
+      "utf8",
+    );
+  };
+
+  it("v5 turns multiSchema on without dropping or re-adding anything", async () => {
+    const dir = join(h.projectDir, "migrations");
+    const before = readdirSync(dir).sort();
+    const [oidBefore] = await h.query<{ oid: number }>(`SELECT '"SensorHourly"'::regclass::oid AS oid`);
+    enableMultiSchema();
+    setModels(V5);
+    h.prisma(["generate"]);
+    // No migration: the relations did not move. The state file now carries the qualified keys.
+    expect(readdirSync(dir).sort()).toEqual(before);
+    const state = JSON.parse(readFileSync(join(dir, ".prisma-extension-timescaledb.json"), "utf8")) as {
+      state: { hypertables: { schema?: string }[] };
+    };
+    expect(state.state.hypertables[0]?.schema).toBe("public");
+    h.prisma(["generate"]); // and the next run is a plain no-op
+    expect(readdirSync(dir).sort()).toEqual(before);
+    h.prisma(["migrate", "deploy"]);
+    expect(await snapshot(h)).toEqual(AFTER_V4);
+    const [oidAfter] = await h.query<{ oid: number }>(`SELECT '"SensorHourly"'::regclass::oid AS oid`);
+    expect(oidAfter?.oid).toBe(oidBefore?.oid);
+  }, 120_000);
+
+  // add_dimension's if_not_exists cannot take a dimension away, and the old migration would
+  // have run clean while the state file recorded the removal as done.
+  it("removing the space dimension is refused at generate time, before anything is written", () => {
+    const dir = join(h.projectDir, "migrations");
+    const before = readdirSync(dir).sort();
+    const stateBefore = readFileSync(join(dir, ".prisma-extension-timescaledb.json"), "utf8");
+    setModels(V6);
+    try {
+      expect(() => h.prisma(["generate"])).toThrow(/space dimension on "deviceId" was removed/);
+      expect(readdirSync(dir).sort()).toEqual(before);
+      expect(readFileSync(join(dir, ".prisma-extension-timescaledb.json"), "utf8")).toBe(stateBefore);
+    } finally {
+      setModels(V5);
+    }
+  }, 120_000);
+
   it("regenerating the settled schema appends no further version", () => {
     const dir = join(h.projectDir, "migrations");
     const before = readdirSync(dir).sort();
     h.prisma(["generate"]);
     expect(readdirSync(dir).sort()).toEqual(before);
-    // Three annotated states so far, so exactly three objects migrations.
+    // Four annotated states that changed the database, so exactly four objects migrations
+    // (the multiSchema flip in v5 emitted none).
     expect(before.filter((n) => n.includes("timescaledb_objects"))).toEqual([
       "99999999999999_timescaledb_objects_v0001",
       "99999999999999_timescaledb_objects_v0002",
       "99999999999999_timescaledb_objects_v0003",
+      "99999999999999_timescaledb_objects_v0004",
     ]);
   }, 120_000);
 
-  // The point of the append-only chain: replaying v0001, v0002 and v0003 from an empty database
-  // converges on the same final state, removals and all.
-  it("a full reset replays the whole chain and converges on v3", async () => {
+  // The point of the append-only chain: replaying v0001 to v0004 from an empty database
+  // converges on the same final state, removals, resets and alters included.
+  it("a full reset replays the whole chain and converges on v4", async () => {
     h.prisma(["migrate", "reset", "--force"]);
     h.prisma(["migrate", "deploy"]);
-    expect(await snapshot(h)).toEqual(AFTER_V3);
+    expect(await snapshot(h)).toEqual(AFTER_V4);
   }, 180_000);
 });

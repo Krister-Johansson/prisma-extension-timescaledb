@@ -73,9 +73,16 @@ export function createHypertableSql(config: HypertableConfig): MigrationSql {
   // set_partitioning_interval re-asserts the chunk interval every apply: create_hypertable's
   // if_not_exists never updates a LIVE hypertable's interval, so without it a changed
   // chunkInterval would silently keep the old chunk size (a no-op when already equal).
+  //
+  // set_number_partitions does the same for the hash dimension's partition count: add_dimension's
+  // if_not_exists skips a column that is already a dimension, so a changed `partitions` would
+  // otherwise keep the old count silently (issue #161). A no-op when already equal.
   const body =
     `  PERFORM ${indentBody(convert)};` +
     (dimension ? `\n  PERFORM ${dimension};` : "") +
+    (spacePartition
+      ? `\n  PERFORM set_number_partitions(${rel}, ${spacePartition.partitions}, ${quoteLiteral(spacePartition.column)});`
+      : "") +
     `\n  PERFORM set_partitioning_interval(${rel}, INTERVAL ${quoteLiteral(chunkInterval)});`;
 
   const up = timescaleDoBlock(body);
