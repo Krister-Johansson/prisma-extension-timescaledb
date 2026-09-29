@@ -21,10 +21,17 @@ name: release-please
 on:
   push:
     branches: [main]
-  # Manual re-publish of the current version on main — e.g. when an auto-publish
-  # failed AFTER the GitHub release was created. Safe: npm publish fails
-  # harmlessly if the version is already on the registry.
+  # Manual re-publish of an existing release tag, e.g. when an auto-publish
+  # failed AFTER the GitHub release was created. The tag is required and is
+  # what gets checked out, so a re-publish never ships commits that landed on
+  # main after the release. npm publish fails harmlessly if the version is
+  # already on the registry.
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to publish to npm (e.g. prisma-extension-timescaledb-v1.0.3). The checkout uses this tag, never main HEAD."
+        required: true
+        type: string
 
 # Least-privilege at the top level; each job elevates only what it needs.
 permissions:
@@ -40,16 +47,33 @@ jobs:
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
+    # release-please runs on push only. A dispatch is a re-publish of an existing tag and must
+    # not touch the release PR or create a release.
+    if: ${{ github.event_name == 'push' }}
     steps:
+      # A missing or expired PAT used to fall back to GITHUB_TOKEN, which kept the run green
+      # while changing its behaviour: a release PR opened with GITHUB_TOKEN gets no CI, and a
+      # release created with it fires no `release: published` event, so sbom.yml never signs
+      # it. Fail here instead, so the expiry is a red run and not a silently unsigned release.
+      - name: Require RELEASE_PLEASE_TOKEN
+        env:
+          TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::RELEASE_PLEASE_TOKEN is missing or empty. Renew the fine-grained PAT (contents + pull-requests, this repository only) and store it as a repository secret."
+            exit 1
+          fi
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         id: release
         with:
-          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
           # Manifest mode: release-please-config.json + .release-please-manifest.json.
 
   publish:
     needs: release-please
-    if: ${{ needs.release-please.outputs.release_created || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') }}
+    # `always()` lets this job run when release-please was skipped (a dispatch); the second
+    # clause then decides. `inputs.tag` is required on dispatch, so it is never empty there.
+    if: ${{ always() && (needs.release-please.outputs.release_created == 'true' || (github.event_name == 'workflow_dispatch' && inputs.tag != '')) }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -57,7 +81,21 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # Always the tagged commit: on push the tag release-please just created, on dispatch
+          # the tag given as input. Checking out main HEAD here would publish whatever landed
+          # after the release PR merged, and the provenance would point at a commit the tag
+          # does not.
+          ref: ${{ inputs.tag || needs.release-please.outputs.tag_name }}
           persist-credentials: false
+      - name: Assert package.json matches the tag
+        env:
+          TAG: ${{ inputs.tag || needs.release-please.outputs.tag_name }}
+        run: |
+          WANT="prisma-extension-timescaledb-v$(node -p "require('./package.json').version")"
+          if [ "$WANT" != "$TAG" ]; then
+            echo "::error::package.json is $WANT but the tag is $TAG"
+            exit 1
+          fi
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24"
