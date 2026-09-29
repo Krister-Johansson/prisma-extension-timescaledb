@@ -84,8 +84,10 @@ This repo uses [Conventional Commits](https://www.conventionalcommits.org/);
    `npm run build && npm run typecheck && npm run coverage && npm run test:types && npm run attw`
    (and `npm run test:integration` if Docker is available).
 3. Open the PR with a clear description that references its issue
-   (`Closes #<number>`). CI (build, unit and type tests, and the
-   real-TimescaleDB integration suite) must be green before merge.
+   (`Closes #<number>`). Six checks are required before a merge: build and
+   tests on Node 20 and 22, the real-TimescaleDB integration suite, the
+   linked-issue check, the dependency audit and CodeQL. Every review thread
+   must be resolved too.
 
 ## License
 

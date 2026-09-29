@@ -36,13 +36,25 @@ strongly enough can fork.
 ## Change process
 
 All changes, including the maintainer's own, go through pull requests against a
-protected `main` branch with required CI: build and tests on Node 20 and 22, an
-integration suite against a real TimescaleDB, and a linked-issue check. An
-automated review also runs on every pull request, and the maintainer waits for
-it before merging, though it is not a required status check. Releases are automated with release-please and published to
-npm from CI via trusted publishing; no human holds or uses an npm token. The
-process is described in [CONTRIBUTING.md](./CONTRIBUTING.md) and enforced by
-branch protection.
+protected `main` branch. The `main-protection` ruleset requires six status
+checks: build and tests on Node 20 and 22, the integration suite against a
+real TimescaleDB, the linked-issue check, the dependency audit and CodeQL. A
+Node 24 job runs in the same matrix without being required. The ruleset also
+requires every review thread to be resolved before a merge and blocks force
+pushes and branch deletion. An automated review (CodeRabbit) runs on every
+pull request, and the maintainer waits for it before merging, though it is not
+a required status check. Releases are automated with release-please and
+published to npm from CI via trusted publishing; no human holds or uses an npm
+token. The process is described in [CONTRIBUTING.md](./CONTRIBUTING.md) and
+enforced by the ruleset.
+
+Three ruleset choices follow from the single-maintainer model. There is no
+required reviewer count, because there is nobody to review the maintainer's
+pull requests; the automated review and the required checks stand in for it.
+Commit signing is not required, because release provenance comes from the
+CI-side signing of releases and SBOMs rather than from commit signatures. The
+ruleset has no bypass actors, so the maintainer's own changes go through the
+same checks as everyone else's.
 
 ## Continuity
 
@@ -52,10 +64,12 @@ Practical safeguards if the maintainer is unavailable:
   publishing from GitHub Actions, so there is no token to lose or leak.
 - Repository access is protected by GitHub's account security requirements for
   contributors, and standard account recovery applies.
-- The build, test, and release workflows live in this repository, partly as
-  thin callers of pinned reusable workflows in
+- The build, test, and release workflows live in this repository in full,
+  with every action pinned to a commit. The one remaining external
+  configuration is `.coderabbit.yaml`, which pulls the automated-review
+  settings from
   [Krister-Johansson/shared-configs](https://github.com/Krister-Johansson/shared-configs);
-  vendoring them fully into this repository is planned. Publishing also
+  losing it would only change how the review bot behaves. Publishing also
   depends on the Trusted Publisher registration for this repository on
   npmjs.com. The MIT license lets any user fork and continue the project if
   it goes quiet, re-registering publishing for their fork.

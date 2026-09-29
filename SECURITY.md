@@ -63,7 +63,7 @@ cosign verify-blob \
   prisma-extension-timescaledb-<version>.cdx.json
 ```
 
-From 0.9.0 onward, expect the tag form only.
+Every release from 1.0.0 onward carries the tag form; there was no 0.9.0.
 
 ## Reporting a vulnerability
 
