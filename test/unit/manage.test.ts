@@ -326,6 +326,16 @@ describe("makeManage continuous-aggregate policies", () => {
     );
   });
 
+  // Issue #162 review: the runtime path checked each offset alone, so an inverted window
+  // reached TimescaleDB and failed there.
+  it("addContinuousAggregatePolicy rejects an inverted window before running anything", async () => {
+    const { client, calls } = fakeClient();
+    await expect(
+      makeManage(client).addContinuousAggregatePolicy("SensorHourly", { ...policy, startOffset: "1 hour", endOffset: "1 day" }),
+    ).rejects.toThrow(/addContinuousAggregatePolicy\("SensorHourly"\): refresh startOffset "1 hour" must be further in the past than endOffset "1 day"/);
+    expect(calls).toHaveLength(0);
+  });
+
   it("resolves the cagg model to its @@map / @@schema view name", async () => {
     const { client, calls } = fakeClient();
     const viewByModel = new Map([["SensorHourly", { name: "sensor_hourly", schema: "metrics" }]]);

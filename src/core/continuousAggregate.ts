@@ -13,24 +13,30 @@ export const AGG_FNS: ReadonlySet<AggregateSpec["fn"]> = new Set(["avg", "sum", 
  * a month interval with a day or time component.
  */
 export function bucketProblem(bucket: Interval): string | undefined {
-  return isWholeMonths(bucket) ? undefined : `bucket ${JSON.stringify(bucket)} is not a whole number of months; time_bucket rejects it.`;
+  return isWholeMonths(bucket)
+    ? undefined
+    : `bucket ${JSON.stringify(bucket)} is a fractional number of months, which Postgres turns into months plus days; time_bucket rejects it.`;
 }
 
 /**
  * Why a refresh policy's window would be rejected by add_continuous_aggregate_policy, as a
  * sentence, or undefined when it is fine. start_offset must lie further back than end_offset,
  * and the window between them must hold at least two buckets ("policy refresh window too
- * small"). Calendar units have no fixed width, so a month-based value skips the arithmetic.
+ * small"). Calendar units have no fixed width, so a month-based value skips the arithmetic, and
+ * so does the bucket check when the bucket is unknown (the runtime policy method).
  */
-export function refreshWindowProblem(bucket: Interval, refresh: Pick<RefreshPolicy, "startOffset" | "endOffset">): string | undefined {
+export function refreshWindowProblem(
+  bucket: Interval | undefined,
+  refresh: Pick<RefreshPolicy, "startOffset" | "endOffset">,
+): string | undefined {
   const start = intervalToMicroseconds(refresh.startOffset);
   const end = intervalToMicroseconds(refresh.endOffset);
   if (start === undefined || end === undefined) return undefined;
   if (start <= end) {
     return `refresh startOffset ${JSON.stringify(refresh.startOffset)} must be further in the past than endOffset ${JSON.stringify(refresh.endOffset)}.`;
   }
-  const width = intervalToMicroseconds(bucket);
-  if (width !== undefined && start - end < 2 * width) {
+  const width = bucket === undefined ? undefined : intervalToMicroseconds(bucket);
+  if (width !== undefined && start - end < 2n * width) {
     return `the refresh window between startOffset ${JSON.stringify(refresh.startOffset)} and endOffset ${JSON.stringify(refresh.endOffset)} must span at least two buckets of ${JSON.stringify(bucket)}; TimescaleDB rejects a smaller window.`;
   }
   return undefined;

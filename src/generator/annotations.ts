@@ -125,7 +125,9 @@ function readBalanced(s: string, open: number, openCh: string, closeCh: string):
 }
 
 function parseArgs(body: string): AnnotationArgs {
-  const args: AnnotationArgs = {};
+  // No prototype: on a plain object `__proto__: {...}` would set the prototype instead of a
+  // key, and the values would then read through it while the duplicate check saw nothing.
+  const args: AnnotationArgs = Object.create(null) as AnnotationArgs;
   for (const entry of splitTopLevel(body)) {
     if (entry.trim() === "") continue;
     const m = ENTRY_RE.exec(entry);

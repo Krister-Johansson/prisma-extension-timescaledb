@@ -43,45 +43,54 @@ export type Interval = `${number} ${Unit}`;
 // (mirrors the `${number} ${Unit}` template type).
 const INTERVAL_RE = new RegExp(`^\\d+(?:\\.\\d+)? (?:${UNITS.join("|")})$`);
 
-/** Microseconds per fixed-width unit. Months and up are calendar units with no fixed width;
- * Postgres stores them as a separate month count, so they are absent here on purpose. */
-const MICROS: Partial<Record<Unit, number>> = {
-  microsecond: 1,
-  microseconds: 1,
-  millisecond: 1_000,
-  milliseconds: 1_000,
-  second: 1_000_000,
-  seconds: 1_000_000,
-  minute: 60_000_000,
-  minutes: 60_000_000,
-  hour: 3_600_000_000,
-  hours: 3_600_000_000,
-  day: 86_400_000_000,
-  days: 86_400_000_000,
-  week: 604_800_000_000,
-  weeks: 604_800_000_000,
+/** Microseconds per sub-day unit. Postgres keeps these in the interval's int64 time field. */
+const MICROS: Partial<Record<Unit, bigint>> = {
+  microsecond: 1n,
+  microseconds: 1n,
+  millisecond: 1_000n,
+  milliseconds: 1_000n,
+  second: 1_000_000n,
+  seconds: 1_000_000n,
+  minute: 60_000_000n,
+  minutes: 60_000_000n,
+  hour: 3_600_000_000n,
+  hours: 3_600_000_000n,
 };
 
-/** Months per calendar unit. */
-const MONTHS: Partial<Record<Unit, number>> = {
-  month: 1,
-  months: 1,
-  year: 12,
-  years: 12,
-  decade: 120,
-  decades: 120,
-  century: 1200,
-  centuries: 1200,
+/** Days per day-based unit. Postgres keeps whole days in a separate int32 field. */
+const DAYS: Partial<Record<Unit, bigint>> = { day: 1n, days: 1n, week: 7n, weeks: 7n };
+
+/** Months per calendar unit, the interval's int32 month field. */
+const MONTHS: Partial<Record<Unit, bigint>> = {
+  month: 1n,
+  months: 1n,
+  year: 12n,
+  years: 12n,
+  decade: 120n,
+  decades: 120n,
+  century: 1200n,
+  centuries: 1200n,
 };
 
-// Postgres stores an interval as int64 microseconds plus int32 months. Anything past either
-// limit passes the shape check and fails at migrate with "interval field value out of range".
-const MAX_MICROS = 9_223_372_036_854_775_807;
-const MAX_MONTHS = 2_147_483_647;
+const MICROS_PER_DAY = 86_400_000_000n;
 
-function parts(value: string): { amount: number; unit: Unit } {
+// The three fields of a Postgres interval. Anything past a limit passes the shape check and
+// fails at migrate deploy with "interval field value out of range" (probed on PG 17).
+const MAX_MICROS = 9_223_372_036_854_775_807n;
+const MAX_DAYS = 2_147_483_647n;
+const MAX_MONTHS = 2_147_483_647n;
+
+/** The amount as an exact rational `whole / scale`, so decimal amounts compare without float
+ * error ("1.1 hours" is exactly 3 960 000 000 microseconds, not 3 960 000 000.0000005). */
+function parts(value: string): { unit: Unit; whole: bigint; scale: bigint } {
   const [amount, unit] = value.split(" ") as [string, Unit];
-  return { amount: Number.parseFloat(amount), unit };
+  const [int, frac = ""] = amount.split(".") as [string, string?];
+  return { unit, whole: BigInt(int + frac), scale: 10n ** BigInt(frac.length) };
+}
+
+/** Round `numerator / denominator` to the nearest integer, halves up. */
+function divRound(numerator: bigint, denominator: bigint): bigint {
+  return (2n * numerator + denominator) / (2n * denominator);
 }
 
 /** Return true if `value` is a well-formed interval literal with a positive amount that fits
@@ -90,32 +99,38 @@ export function isInterval(value: string): value is Interval {
   // Shape must match AND the amount must be positive: "0 days" / "0.0 seconds" are well-formed but
   // meaningless as a chunk size / policy threshold / bucket width (TimescaleDB rejects them anyway).
   if (!INTERVAL_RE.test(value)) return false;
-  const { amount, unit } = parts(value);
-  if (!(amount > 0)) return false;
+  const { unit, whole, scale } = parts(value);
+  if (whole === 0n) return false;
   const micros = MICROS[unit];
-  if (micros !== undefined) return amount * micros <= MAX_MICROS;
-  return amount * (MONTHS[unit] ?? 0) <= MAX_MONTHS;
+  if (micros !== undefined) return whole * micros <= MAX_MICROS * scale;
+  const days = DAYS[unit];
+  if (days !== undefined) return whole * days <= MAX_DAYS * scale;
+  return whole * (MONTHS[unit] ?? 0n) <= MAX_MONTHS * scale;
 }
 
 /**
- * The width of a fixed-width interval in microseconds, or undefined for a calendar unit
- * (month and up), whose width depends on the date it is applied to.
+ * The width of a fixed-width interval in microseconds, rounded the way Postgres stores it, or
+ * undefined for a calendar unit (month and up), whose width depends on the date it is applied
+ * to. A bigint, so two-bucket window checks are exact for decimal amounts.
  */
-export function intervalToMicroseconds(value: Interval): number | undefined {
-  const { amount, unit } = parts(value);
+export function intervalToMicroseconds(value: Interval): bigint | undefined {
+  const { unit, whole, scale } = parts(value);
   const micros = MICROS[unit];
-  return micros === undefined ? undefined : amount * micros;
+  if (micros !== undefined) return divRound(whole * micros, scale);
+  const days = DAYS[unit];
+  if (days !== undefined) return divRound(whole * days * MICROS_PER_DAY, scale);
+  return undefined;
 }
 
 /**
- * True when a calendar interval is a whole number of months, or the interval is fixed-width.
- * Postgres turns a fractional month into days ("1.5 months" is 1 month 15 days), and
- * time_bucket rejects a month interval with a day or time component.
+ * True unless the interval is a fractional number of MONTHS. Postgres turns "1.5 months" into
+ * 1 month 15 days, which time_bucket rejects ("month intervals cannot have day or time
+ * component"), but rounds a fractional year, decade or century to whole months ("1.1 years"
+ * is 1 year 1 mon), which time_bucket takes. Fixed-width units are always fine.
  */
 export function isWholeMonths(value: Interval): boolean {
-  const { amount, unit } = parts(value);
-  const perUnit = MONTHS[unit];
-  return perUnit === undefined || Number.isInteger(amount * perUnit);
+  const { unit, whole, scale } = parts(value);
+  return !(unit === "month" || unit === "months") || whole % scale === 0n;
 }
 
 /** Assert `value` is a well-formed interval literal, narrowing its type. */

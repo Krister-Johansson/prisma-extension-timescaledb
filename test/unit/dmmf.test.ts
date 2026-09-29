@@ -1379,7 +1379,7 @@ view SensorHourly {${viewBody}
   it("rejects a fractional month bucket", async () => {
     await expect(
       extract(cagg(`/// @timescale.continuousAggregate(source: "SensorReading", bucket: "1.5 months", timeColumn: "time")`)),
-    ).rejects.toThrow(/view "SensorHourly": bucket "1.5 months" is not a whole number of months/);
+    ).rejects.toThrow(/view "SensorHourly": bucket "1.5 months" is a fractional number of months/);
     // 1.5 years is 18 whole months, which time_bucket takes.
     const ok = await extract(cagg(`/// @timescale.continuousAggregate(source: "SensorReading", bucket: "1.5 years", timeColumn: "time")`));
     expect(ok.continuousAggregates[0]?.bucket).toBe("1.5 years");

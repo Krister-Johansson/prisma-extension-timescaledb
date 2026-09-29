@@ -3,6 +3,7 @@ import { assertSafeIdent, qualifiedIdent, quoteLiteral, relationLiteral } from "
 import { assertInterval, type Interval } from "../core/interval.js";
 import { NO_PREFIX, type FnPrefix } from "./searchPath.js";
 import { columnstoreReloptions, parseOrderByTerm } from "../core/compression.js";
+import { refreshWindowProblem } from "../core/continuousAggregate.js";
 import type { CompressionOrderBy, RefreshPolicy } from "../core/types.js";
 
 /** Resolved DB identity of a continuous aggregate (name + optional @@schema). */
@@ -536,6 +537,9 @@ export function makeManage<HModels extends string = string, CModels extends stri
       assertInterval(opts.startOffset);
       assertInterval(opts.endOffset);
       assertInterval(opts.scheduleInterval);
+      // The bucket width is not known here, so only the offsets are checked against each other.
+      const windowIssue = refreshWindowProblem(undefined, opts);
+      if (windowIssue) throw new Error(`addContinuousAggregatePolicy("${name}"): ${windowIssue}`);
       const rel = relationLiteral(ref.name, ref.schema);
       const p = await prefix();
       // Offsets are strict-grammar Intervals quoted as literals; if_not_exists keeps a re-add a no-op.

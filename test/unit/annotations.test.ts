@@ -91,4 +91,15 @@ describe("parseAnnotations", () => {
       parseAnnotations('/// @timescale.continuousAggregate(refresh: { startOffset: "1 day", startOffset: "2 days" })'),
     ).toThrow(/Duplicate annotation argument "startOffset"/);
   });
+
+  // Review finding: on a plain object `__proto__` set the prototype instead of a key, so the
+  // values read through it while the duplicate check saw no own key.
+  it("treats __proto__ as an ordinary key that can be duplicated", () => {
+    const [ann] = parseAnnotations('/// @timescale.hypertable(__proto__: { column: "time" })');
+    expect(Object.keys(ann!.args)).toEqual(["__proto__"]);
+    expect(ann!.args["column"]).toBeUndefined();
+    expect(() => parseAnnotations('/// @timescale.hypertable(__proto__: "a", __proto__: "b")')).toThrow(
+      /Duplicate annotation argument "__proto__"/,
+    );
+  });
 });
