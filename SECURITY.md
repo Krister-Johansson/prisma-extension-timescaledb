@@ -63,7 +63,7 @@ cosign verify-blob \
   prisma-extension-timescaledb-<version>.cdx.json
 ```
 
-From 0.9.0 onward, expect the tag form only.
+Every release from 1.0.0 onward carries the tag form; there was no 0.9.0.
 
 ## Reporting a vulnerability
 
@@ -87,6 +87,7 @@ TimescaleDB through Prisma. The most relevant reports concern SQL injection in
 the generated SQL or the `timeBucket` query helpers, and unsafe handling of
 user-supplied identifiers or values.
 
-The published package ships only `dist/` and depends on Prisma at runtime.
+The published package ships the compiled `dist/` plus the manifest, README,
+LICENSE and CHANGELOG, and depends on Prisma at runtime.
 Report issues in Prisma itself to the
 [Prisma project](https://github.com/prisma/prisma/security).
