@@ -2,6 +2,11 @@
 // compressChunk / decompressChunk. The hypertable enables the columnstore (@timescale.compression)
 // so compress_chunk works; we insert two days' worth of data to get two chunks.
 //
+// The policy's `after` is one no chunk can satisfy: the annotation also creates a background
+// columnstore job, and with the 2026 rows below a short `after` let that job compress both chunks
+// during a slow setup, ahead of the assertions that expect them uncompressed (#156). This way
+// the on-demand calls are the only thing that changes compression state.
+//
 // Runtime-only feature (these $timescale methods emit no migration SQL), so — like the other runtime
 // $timescale tests — it uses migrate deploy without a migrate-reset assertion.
 import { join } from "node:path";
@@ -13,7 +18,7 @@ import { timescaledb } from "../../src/client/index.js";
 const DOCKER_OK = dockerAvailable("On-demand chunk operations are NOT verified.");
 
 const MODELS = `/// @timescale.hypertable(column: "time", chunkInterval: "1 day")
-/// @timescale.compression(after: "7 days", segmentBy: "deviceId")
+/// @timescale.compression(after: "10000 days", segmentBy: "deviceId")
 model SensorReading {
   time        DateTime
   deviceId    Int
