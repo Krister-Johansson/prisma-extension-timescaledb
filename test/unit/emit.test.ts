@@ -881,3 +881,248 @@ describe("emitMigrations state-file gaps (issue #160)", () => {
     expect(parseGeneratorState("5")).toBeUndefined();
   });
 });
+
+// Issue #161: schema changes that used to emit a migration which ran clean and changed nothing,
+// after which the state file recorded the new value as done.
+describe("emitMigrations converging diffs (issue #161)", () => {
+  const V2 = `${objectsMigrationName(2)}/migration.sql`;
+  type Schema = Awaited<ReturnType<typeof loadSchema>>;
+  type Hypertable = Schema["hypertables"][number];
+  type Cagg = Schema["continuousAggregates"][number];
+  const withHypertable = (schema: Schema, patch: (h: Hypertable) => Hypertable): Schema => ({
+    ...schema,
+    hypertables: schema.hypertables.map(patch),
+  });
+  const withCagg = (schema: Schema, patch: (c: Cagg) => Cagg): Schema => ({
+    ...schema,
+    continuousAggregates: schema.continuousAggregates.map(patch),
+  });
+
+  it("a changed partition count on the same column converges through set_number_partitions", async () => {
+    const schema = await loadSchema();
+    const four = withHypertable(schema, (h) => ({ ...h, spacePartition: { column: "deviceId", partitions: 4 } }));
+    const eight = withHypertable(schema, (h) => ({ ...h, spacePartition: { column: "deviceId", partitions: 8 } }));
+    const first = emitMigrations(four);
+    expect(first.files[`${objectsMigrationName(1)}/migration.sql`]).toContain(
+      `PERFORM set_number_partitions('"SensorReading"', 4, 'deviceId');`,
+    );
+    const second = emitMigrations(eight, first.nextState, 1, true);
+    expect(second.files[V2]).toContain(`PERFORM set_number_partitions('"SensorReading"', 8, 'deviceId');`);
+    expect(second.warnings).toBeUndefined();
+  });
+
+  // add_dimension's if_not_exists skips a column that is already a dimension, and on a new
+  // column it adds a THIRD dimension (probed on 2.27.2). Neither can be made to converge.
+  it("throws for a changed time column, a changed partition column, or a removed space dimension", async () => {
+    const schema = await loadSchema();
+    const partitioned = withHypertable(schema, (h) => ({ ...h, spacePartition: { column: "deviceId", partitions: 4 } }));
+    const first = emitMigrations(partitioned);
+
+    const timeColumn = withHypertable(partitioned, (h) => ({ ...h, column: "createdAt" }));
+    expect(() => emitMigrations(timeColumn, first.nextState, 1, true)).toThrow(
+      /Hypertable SensorReading: the time column changed from "time" to "createdAt"/,
+    );
+    const otherColumn = withHypertable(partitioned, (h) => ({ ...h, spacePartition: { column: "temperature", partitions: 4 } }));
+    expect(() => emitMigrations(otherColumn, first.nextState, 1, true)).toThrow(
+      /space partition column changed from "deviceId" to "temperature"/,
+    );
+    const removed = withHypertable(partitioned, ({ spacePartition: _sp, ...h }) => h);
+    expect(() => emitMigrations(removed, first.nextState, 1, true)).toThrow(/space dimension on "deviceId" was removed/);
+    expect(() => emitMigrations(removed, first.nextState, 1, true)).toThrow(/new model/);
+  });
+
+  it("a hypertable that is dropped from the schema is not held to the layout rules", async () => {
+    const schema = await loadSchema();
+    const partitioned = withHypertable(schema, (h) => ({ ...h, spacePartition: { column: "deviceId", partitions: 4 } }));
+    const first = emitMigrations(partitioned);
+    const gone = { ...schema, hypertables: [], continuousAggregates: [] };
+    expect(() => emitMigrations(gone, first.nextState, 1, true)).not.toThrow();
+  });
+
+  it("a removed segmentBy or orderBy is RESET before the policy is re-added", async () => {
+    const schema = await loadSchema();
+    const both = withHypertable(schema, (h) => ({
+      ...h,
+      compression: { after: "7 days" as const, segmentBy: ["deviceId"], orderBy: [{ column: "time", direction: "desc" as const }] },
+    }));
+    const first = emitMigrations(both);
+
+    const noSegment = withHypertable(schema, (h) => ({
+      ...h,
+      compression: { after: "7 days" as const, orderBy: [{ column: "time", direction: "desc" as const }] },
+    }));
+    const v2 = emitMigrations(noSegment, first.nextState, 1, true).files[V2]!;
+    expect(v2).toContain(`ALTER TABLE "SensorReading" RESET (timescaledb.segmentby);`);
+    expect(v2).not.toContain(`RESET (timescaledb.orderby)`);
+    // The reset runs in the removal block, ahead of the re-add that SETs the surviving option.
+    expect(v2.indexOf("RESET (timescaledb.segmentby)")).toBeLessThan(v2.indexOf("add_columnstore_policy"));
+
+    const noOrder = withHypertable(schema, (h) => ({ ...h, compression: { after: "7 days" as const, segmentBy: ["deviceId"] } }));
+    const v2b = emitMigrations(noOrder, first.nextState, 1, true).files[V2]!;
+    expect(v2b).toContain(`RESET (timescaledb.orderby)`);
+    expect(v2b).not.toContain(`RESET (timescaledb.segmentby)`);
+
+    // Compression removed entirely: both options go with it.
+    const none = withHypertable(schema, ({ compression: _c, ...h }) => h);
+    const v2c = emitMigrations(none, first.nextState, 1, true).files[V2]!;
+    expect(v2c).toContain(`RESET (timescaledb.segmentby)`);
+    expect(v2c).toContain(`RESET (timescaledb.orderby)`);
+
+    // Only the interval changed: nothing to reset.
+    const later = withHypertable(both, (h) => ({ ...h, compression: { ...h.compression!, after: "14 days" as const } }));
+    expect(emitMigrations(later, first.nextState, 1, true).files[V2]).not.toContain("RESET (");
+  });
+
+  it("toggling materializedOnly alters the live view instead of dropping it", async () => {
+    const schema = await loadSchema(); // materializedOnly omitted, which TimescaleDB reads as true
+    const first = emitMigrations(schema);
+    const realtime = withCagg(schema, (c) => ({ ...c, materializedOnly: false }));
+    const v2 = emitMigrations(realtime, first.nextState, 1, true).files[V2]!;
+    expect(v2).not.toContain("DROP MATERIALIZED VIEW");
+    expect(v2).toContain(`ALTER MATERIALIZED VIEW "SensorHourly" SET (timescaledb.materialized_only = false);`);
+    // Back again, and an explicit true from omitted is no change at all.
+    const second = emitMigrations(realtime, first.nextState, 1, true);
+    const back = emitMigrations(schema, second.nextState, 2, true).files[`${objectsMigrationName(3)}/migration.sql`]!;
+    expect(back).toContain(`SET (timescaledb.materialized_only = true);`);
+    const explicit = withCagg(schema, (c) => ({ ...c, materializedOnly: true }));
+    expect(emitMigrations(explicit, first.nextState, 1, true)).toEqual({ files: {} });
+  });
+
+  it("a cagg that is dropped and recreated while its source has retention carries a warning", async () => {
+    const schema = await loadSchema();
+    const retained = withHypertable(schema, (h) => ({ ...h, retention: { dropAfter: "30 days" as const } }));
+    const first = emitMigrations(retained);
+    const wider = withCagg(retained, (c) => ({ ...c, bucket: "2 hours" as typeof c.bucket }));
+    const { files, warnings } = emitMigrations(wider, first.nextState, 1, true);
+    expect(files[V2]).toContain(`WARNING: source SensorReading drops rows after 30 days; buckets older than that are lost`);
+    expect(warnings).toEqual([expect.stringMatching(/SensorHourly is dropped and recreated .* drops rows after 30 days/)]);
+    // Without retention there is nothing to warn about.
+    const plain = emitMigrations(withCagg(schema, (c) => ({ ...c, bucket: "2 hours" as typeof c.bucket })), emitMigrations(schema).nextState, 1, true);
+    expect(plain.warnings).toBeUndefined();
+    expect(plain.files[V2]).not.toContain("buckets older than that are lost");
+  });
+
+  it("enabling multiSchema re-qualifies every key without dropping anything", async () => {
+    const schema = await loadSchema();
+    const withPolicies = withHypertable(schema, (h) => ({ ...h, retention: { dropAfter: "30 days" as const } }));
+    const first = emitMigrations(withPolicies);
+    const qualified: Schema = {
+      ...withPolicies,
+      hypertables: withPolicies.hypertables.map((h) => ({ ...h, schema: "public" })),
+      continuousAggregates: withPolicies.continuousAggregates.map((c) => ({ ...c, schema: "public", sourceSchema: "public" })),
+    };
+    // Nothing but the qualification changed: no migration, the state file takes the new keys.
+    const flip = emitMigrations(qualified, first.nextState, 1, true);
+    expect(flip.files).toEqual({});
+    expect(flip.nextState?.sequence).toBe(1);
+    expect(flip.nextState?.state.hypertables[0]?.schema).toBe("public");
+    // The next run is a no-op again.
+    expect(emitMigrations(qualified, flip.nextState, 1, true)).toEqual({ files: {} });
+
+    // Qualification plus a real change in the same run: the migration notes the flip and
+    // carries only the real change.
+    const qualifiedWider = withCagg(qualified, (c) => ({ ...c, bucket: "2 hours" as typeof c.bucket }));
+    const v2 = emitMigrations(qualifiedWider, first.nextState, 1, true).files[V2]!;
+    expect(v2).toContain(`-- Schema qualification changed: hypertable SensorReading is now declared as public.SensorReading`);
+    expect(v2).toContain(`DROP MATERIALIZED VIEW IF EXISTS "public"."SensorHourly"`);
+    expect(v2).not.toContain("remove_retention_policy");
+    expect(v2).not.toContain("Removed hypertable annotation");
+
+    // And back: turning multiSchema off is the same flip in reverse.
+    const back = emitMigrations(withPolicies, flip.nextState, 1, true);
+    expect(back.files).toEqual({});
+    expect(back.nextState?.state.hypertables[0]?.schema).toBeUndefined();
+
+    // A relation that moved between two NAMED schemas is a real move, not a flip.
+    const moved: Schema = {
+      ...qualified,
+      hypertables: qualified.hypertables.map((h) => ({ ...h, schema: "metrics" })),
+      continuousAggregates: qualified.continuousAggregates.map((c) => ({ ...c, schema: "metrics", sourceSchema: "metrics" })),
+    };
+    const move = emitMigrations(moved, flip.nextState, 1, true).files[V2]!;
+    expect(move).toContain("Removed hypertable annotation: public.SensorReading");
+    expect(move).toContain(`DROP MATERIALIZED VIEW IF EXISTS "public"."SensorHourly"`);
+  });
+
+  // Review finding on #172: an unqualified name means the connection's default schema, so
+  // enabling multiSchema with @@schema("metrics") moves the relation. Aligning that would leave
+  // metrics.X a plain table with no migration written.
+  it("a flip to a schema other than the default is a real move", async () => {
+    const schema = await loadSchema();
+    const first = emitMigrations(schema);
+    const metrics: Schema = {
+      ...schema,
+      hypertables: schema.hypertables.map((h) => ({ ...h, schema: "metrics" })),
+      continuousAggregates: schema.continuousAggregates.map((c) => ({ ...c, schema: "metrics", sourceSchema: "metrics" })),
+    };
+    const v2 = emitMigrations(metrics, first.nextState, 1, true).files[V2]!;
+    expect(v2).toContain("Removed hypertable annotation: SensorReading");
+    expect(v2).toContain(`DROP MATERIALIZED VIEW IF EXISTS "SensorHourly"`);
+    expect(v2).toContain(`'"metrics"."SensorReading"'`);
+    expect(v2).not.toContain("Schema qualification changed");
+
+    // The same flip IS a no-op when the generator config names that schema as the default.
+    const aligned = emitMigrations(metrics, first.nextState, 1, true, true, "metrics");
+    expect(aligned.files).toEqual({});
+    expect(aligned.nextState?.state.hypertables[0]?.schema).toBe("metrics");
+  });
+
+  it("a flip that spreads relations over several schemas aligns only the default-schema ones", async () => {
+    const schema = await loadSchema();
+    const first = emitMigrations(schema);
+    // The hypertable stays where it is (public), the cagg moves to analytics.
+    const spread: Schema = {
+      ...schema,
+      hypertables: schema.hypertables.map((h) => ({ ...h, schema: "public" })),
+      continuousAggregates: schema.continuousAggregates.map((c) => ({ ...c, schema: "analytics", sourceSchema: "public" })),
+    };
+    const v2 = emitMigrations(spread, first.nextState, 1, true).files[V2]!;
+    expect(v2).toContain("Schema qualification changed: hypertable SensorReading is now declared as public.SensorReading");
+    expect(v2).not.toContain("Removed hypertable annotation");
+    expect(v2).toContain(`DROP MATERIALIZED VIEW IF EXISTS "SensorHourly"`); // the old, unqualified one
+    expect(v2).toContain(`CREATE MATERIALIZED VIEW IF NOT EXISTS "analytics"."SensorHourly"`);
+  });
+
+  it("a flip combined with a lost latest migration heals against the re-qualified base", async () => {
+    const schema = await loadSchema();
+    const first = emitMigrations(schema);
+    const qualified: Schema = {
+      ...schema,
+      hypertables: schema.hypertables.map((h) => ({ ...h, schema: "public" })),
+      continuousAggregates: schema.continuousAggregates.map((c) => ({ ...c, schema: "public", sourceSchema: "public" })),
+    };
+    const healed = emitMigrations(qualified, first.nextState, 0, true, false); // v0001 lost, keys flipped
+    const v2 = healed.files[V2]!;
+    expect(v2).not.toContain("DROP MATERIALIZED VIEW");
+    expect(v2).toContain(`CREATE MATERIALIZED VIEW IF NOT EXISTS "public"."SensorHourly"`);
+    expect(healed.nextState?.sequence).toBe(2);
+  });
+
+  it("the retention warning also covers a policy removed in the same version and a dependent cagg", async () => {
+    const schema = await loadSchema();
+    const retained = withHypertable(schema, (h) => ({ ...h, retention: { dropAfter: "30 days" as const } }));
+    const first = emitMigrations(retained);
+    // Retention gone AND the cagg changed: the rows it dropped are still gone.
+    const dropped = withCagg(withHypertable(schema, ({ retention: _r, ...h }) => h), (c) => ({ ...c, bucket: "2 hours" as typeof c.bucket }));
+    expect(emitMigrations(dropped, first.nextState, 1, true).warnings).toEqual([expect.stringMatching(/drops rows after 30 days/)]);
+
+    // A child built on the changed cagg is dropped with it, and says so.
+    const child: Cagg = {
+      ...retained.continuousAggregates[0]!,
+      name: "SensorDaily",
+      source: "SensorHourly",
+      bucket: "1 day" as Cagg["bucket"],
+      timeColumn: "bucket",
+      aggregates: [{ fn: "avg", column: "avgTemp", name: "avgTemp" }],
+      groupBy: [],
+    };
+    const withChild: Schema = { ...retained, continuousAggregates: [...retained.continuousAggregates, child] };
+    const base = emitMigrations(withChild);
+    const parentChanged = withCagg(withChild, (c) => (c.name === "SensorHourly" ? { ...c, bucket: "2 hours" as Cagg["bucket"] } : c));
+    const { warnings } = emitMigrations(parentChanged, base.nextState, 1, true);
+    expect(warnings).toEqual([
+      expect.stringMatching(/SensorDaily is dropped and recreated because a continuous aggregate it is built on changed/),
+      expect.stringMatching(/SensorHourly is dropped and recreated because its definition changed/),
+    ]);
+  });
+});
