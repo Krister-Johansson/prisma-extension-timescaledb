@@ -54,21 +54,35 @@ describe("makeManage.refreshContinuousAggregate", () => {
     expect(calls[0]!.params).toEqual([]);
   });
 
-  it("windowed refresh binds provided dates as params", async () => {
+  it("windowed refresh renders the bounds as untyped ISO literals, never as bind params (#159)", async () => {
+    // refresh_continuous_aggregate takes its window as "any"; Postgres cannot type a bound
+    // parameter for that, so the bounds go in as literals that coerce to the bucket's column type.
     const { client, calls } = fakeClient();
     const start = new Date("2026-06-15T00:00:00Z");
     const end = new Date("2026-06-16T00:00:00Z");
     await makeManage(client).refreshContinuousAggregate("SensorHourly", { start, end });
-    expect(calls[0]!.sql).toBe(`CALL refresh_continuous_aggregate('"SensorHourly"', $1, $2)`);
-    expect(calls[0]!.params).toEqual([start, end]);
+    expect(calls[0]!.sql).toBe(
+      `CALL refresh_continuous_aggregate('"SensorHourly"', '2026-06-15T00:00:00.000Z', '2026-06-16T00:00:00.000Z')`,
+    );
+    expect(calls[0]!.params).toEqual([]);
   });
 
-  it("mixes a literal NULL with a bound param when only one bound is given", async () => {
+  it("rejects an Invalid Date bound with a clear error", async () => {
+    const { client } = fakeClient();
+    await expect(
+      makeManage(client).refreshContinuousAggregate("SensorHourly", { start: new Date("not a date") }),
+    ).rejects.toThrow(/refreshContinuousAggregate: `start` must be a valid Date/);
+    await expect(
+      makeManage(client).refreshContinuousAggregate("SensorHourly", { end: "2026-06-15" as unknown as Date }),
+    ).rejects.toThrow(/refreshContinuousAggregate: `end` must be a valid Date/);
+  });
+
+  it("mixes a literal NULL with a literal bound when only one bound is given", async () => {
     const { client, calls } = fakeClient();
     const start = new Date("2026-06-15T00:00:00Z");
     await makeManage(client).refreshContinuousAggregate("SensorHourly", { start });
-    expect(calls[0]!.sql).toBe(`CALL refresh_continuous_aggregate('"SensorHourly"', $1, NULL)`);
-    expect(calls[0]!.params).toEqual([start]);
+    expect(calls[0]!.sql).toBe(`CALL refresh_continuous_aggregate('"SensorHourly"', '2026-06-15T00:00:00.000Z', NULL)`);
+    expect(calls[0]!.params).toEqual([]);
   });
 
   it("rejects an unsafe continuous-aggregate name", async () => {
