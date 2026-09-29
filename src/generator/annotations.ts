@@ -102,10 +102,16 @@ export function optionalObject(args: AnnotationArgs, key: string, context: strin
 function readBalanced(s: string, open: number, openCh: string, closeCh: string): { body: string; end: number } {
   let depth = 0;
   let inStr = false;
+  let escaped = false;
   for (let i = open; i < s.length; i++) {
     const c = s[i];
     if (inStr) {
-      if (c === '"' && s[i - 1] !== "\\") inStr = false;
+      // A backslash escapes exactly the next character, so `\\` followed by `"` is an escaped
+      // backslash and a real closing quote. Looking one character back instead (`s[i - 1]`)
+      // read that quote as escaped and never closed the string (#151).
+      if (escaped) escaped = false;
+      else if (c === "\\") escaped = true;
+      else if (c === '"') inStr = false;
       continue;
     }
     if (c === '"') inStr = true;
@@ -138,7 +144,8 @@ function parseValue(raw: string): AnnotationValue {
     if (v.slice(end).trim() !== "") {
       throw new Error(`Malformed annotation value (trailing characters after string): ${JSON.stringify(v)}.`);
     }
-    return body.replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+    // One pass: each backslash yields the character after it, so `\\\\` and `\\"` cannot interfere.
+    return body.replace(/\\(["\\])/g, "$1");
   }
   if (v.startsWith("{")) {
     const { body, end } = readBalanced(v, 0, "{", "}");
@@ -152,8 +159,11 @@ function parseValue(raw: string): AnnotationValue {
 
 /** Read a "double-quoted" string starting at index 0, returning its inner body + the index after the closing quote. */
 function readBalancedString(s: string): { body: string; end: number } {
+  let escaped = false;
   for (let i = 1; i < s.length; i++) {
-    if (s[i] === '"' && s[i - 1] !== "\\") return { body: s.slice(1, i), end: i + 1 };
+    if (escaped) escaped = false;
+    else if (s[i] === "\\") escaped = true;
+    else if (s[i] === '"') return { body: s.slice(1, i), end: i + 1 };
   }
   throw new Error(`Unterminated string in annotation: ${JSON.stringify(s)}`);
 }
@@ -163,12 +173,15 @@ function splitTopLevel(s: string): string[] {
   const parts: string[] = [];
   let depth = 0;
   let inStr = false;
+  let escaped = false;
   let cur = "";
   for (let i = 0; i < s.length; i++) {
     const c = s[i] ?? "";
     if (inStr) {
       cur += c;
-      if (c === '"' && s[i - 1] !== "\\") inStr = false;
+      if (escaped) escaped = false;
+      else if (c === "\\") escaped = true;
+      else if (c === '"') inStr = false;
       continue;
     }
     if (c === '"') {
