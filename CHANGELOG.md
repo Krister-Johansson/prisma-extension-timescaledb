@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.3](https://github.com/Krister-Johansson/prisma-extension-timescaledb/compare/prisma-extension-timescaledb-v1.0.2...prisma-extension-timescaledb-v1.0.3) (2026-09-29)
+
+
+### Bug Fixes
+
+* **generator:** close annotation strings that end in an escaped backslash ([#155](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/155)) ([5160afb](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/5160afb5426412f99de3e6b58cbaa38f787fe161)), closes [#151](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/151)
+
 ## [1.0.2](https://github.com/Krister-Johansson/prisma-extension-timescaledb/compare/prisma-extension-timescaledb-v1.0.1...prisma-extension-timescaledb-v1.0.2) (2026-09-05)
 
 
