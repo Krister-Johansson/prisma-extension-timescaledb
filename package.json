@@ -52,13 +52,13 @@
     "./package.json": "./package.json"
   },
   "scripts": {
-    "build": "tsup",
+    "build": "node -e \"fs.rmSync('dist', { recursive: true, force: true })\" && tsup",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
     "coverage": "vitest run --coverage",
     "test:types": "tsc -p tsconfig.types.json",
     "test:integration": "vitest run --config vitest.integration.config.ts",
-    "attw": "attw --pack . --profile node16",
+    "attw": "attw --pack .",
     "prepublishOnly": "npm run build && npm run test && npm run test:types && npm run attw"
   },
   "keywords": [

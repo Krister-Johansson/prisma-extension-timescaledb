@@ -13,6 +13,9 @@ import { defineConfig } from "tsup";
 // No source maps in the published build: they weighed more than the code and nothing in the
 // package resolves them (the maps that mattered for a debugger, the generator's, pointed at
 // sources the tarball does not carry).
+//
+// tsup runs the two configs in parallel, so neither cleans dist (the first's clean could race
+// the second's write); the build script empties dist before tsup starts.
 const shared = {
   target: "es2022",
   outDir: "dist",
@@ -30,13 +33,11 @@ export default defineConfig([
     },
     format: ["esm", "cjs"],
     dts: true,
-    clean: true,
   },
   {
     ...shared,
     entry: { "generator/index": "src/generator/index.ts" },
     format: ["esm"],
     dts: false,
-    clean: false, // the library build above already cleaned dist
   },
 ]);

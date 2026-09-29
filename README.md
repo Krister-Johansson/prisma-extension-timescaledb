@@ -188,15 +188,19 @@ const rows = await prisma.sensorReading.timeBucket({
 
 The registry is emitted as one `index.ts` file, so its `output` directory has
 to be part of the TypeScript program that compiles your app (inside `rootDir`
-and matched by `include`). Under `moduleResolution: NodeNext` the `.js` import
-above resolves to that `.ts` file. There is no `.js` on disk, so running the
-registry without a compile step, for example with Node's type stripping or
-with the directory excluded from `tsconfig.json`, fails with a not-found error.
+and matched by `include`). Prisma resolves `output` relative to the schema
+file, so with `prisma/schema.prisma` and `rootDir: "src"` write
+`output = "../src/timescale"`. Under `moduleResolution: NodeNext` the `.js`
+import above resolves to that `.ts` file. There is no `.js` on disk, so
+running the registry without a compile step, for example with Node's type
+stripping or with the directory excluded from `tsconfig.json`, fails with a
+not-found error.
 
 Prisma spawns the provider as a shell command, which `npx prisma generate` and
 npm scripts resolve through `node_modules/.bin`. A globally installed `prisma`
 does not, and fails with "command not found"; point the provider at the file
-instead:
+instead. The path is resolved from the directory you run `prisma generate` in,
+so run it from the project root:
 
 ```prisma
 generator timescaledb {
