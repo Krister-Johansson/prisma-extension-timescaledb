@@ -431,3 +431,69 @@ timeBucket({
 });
 
 export {};
+
+// --- issue #163: Decimal and BigInt columns are numeric aggregate targets ---
+// The structural shape of Prisma.Decimal, so this file needs no Prisma import.
+interface DecimalValue {
+  toFixed(): string;
+  toNumber(): number;
+}
+interface PricedRow {
+  time: Date;
+  deviceId: number;
+  price: DecimalValue;
+  volume: bigint;
+  label: string;
+}
+declare function pricedBucket<const A extends TimeBucketArgs<PricedRow, Where>>(args: A): Array<TimeBucketRow<PricedRow, A>>;
+
+const priced = pricedBucket({
+  bucket: "1 hour",
+  range: { start, end },
+  aggregate: {
+    total: { sum: "price" }, // Decimal source, default output is number (cast to double precision)
+    exact: { sum: "price", as: "string" }, // exact decimal text
+    vol: { sum: "volume", as: "bigint" }, // BigInt source stays exact
+    avgPrice: { avg: "price" },
+    stats: { stats: "price" },
+    top: { max: "price" },
+  },
+});
+type PricedResult = (typeof priced)[number];
+type _pricedTotal = Expect<Equal<PricedResult["total"], number>>;
+type _pricedExact = Expect<Equal<PricedResult["exact"], string>>;
+type _pricedVol = Expect<Equal<PricedResult["vol"], bigint>>;
+type _pricedAvg = Expect<Equal<PricedResult["avgPrice"], number>>;
+// min/max are not cast, so they keep the column's own type (a Decimal comes back as a Decimal).
+type _pricedTop = Expect<Equal<PricedResult["top"], DecimalValue>>;
+const pricedMinMax = pricedBucket({
+  bucket: "1 hour",
+  range: { start, end },
+  aggregate: { lowVol: { min: "volume" }, lowPrice: { min: "price", fill: "locf" }, t: { min: "deviceId" } },
+  gapfill: true,
+});
+type PricedMinMax = (typeof pricedMinMax)[number];
+type _lowVol = Expect<Equal<PricedMinMax["lowVol"], bigint | null>>;
+type _lowPrice = Expect<Equal<PricedMinMax["lowPrice"], DecimalValue | null>>;
+type _numberMin = Expect<Equal<PricedMinMax["t"], number | null>>;
+
+pricedBucket({
+  bucket: "1 hour",
+  range: { start, end },
+  // @ts-expect-error - a string column is still not a numeric aggregate target
+  aggregate: { x: { sum: "label" } },
+});
+
+// --- issue #163: the Interval type is a typo guard and stays as wide as `${number}` ---
+// An interval built from a number must keep compiling; the runtime validator is the authority.
+declare const hours: number;
+timeBucket({
+  bucket: `${hours} hours`,
+  range: { start, end },
+  aggregate: { n: { count: "label" } },
+});
+timeBucket({
+  bucket: "1.5 hours", // a decimal amount is fine
+  range: { start, end },
+  aggregate: { n: { count: "label" } },
+});

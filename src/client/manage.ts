@@ -4,6 +4,7 @@ import { assertInterval, type Interval } from "../core/interval.js";
 import { NO_PREFIX, type FnPrefix } from "./searchPath.js";
 import { columnstoreReloptions, parseOrderByTerm } from "../core/compression.js";
 import { refreshWindowProblem } from "../core/continuousAggregate.js";
+import { instantText } from "./where.js";
 import type { CompressionOrderBy, RefreshPolicy } from "../core/types.js";
 
 /** Resolved DB identity of a continuous aggregate (name + optional @@schema). */
@@ -845,7 +846,13 @@ export function makeManage<HModels extends string = string, CModels extends stri
       }
       if (options.scheduled !== undefined) args.push(`scheduled => ${options.scheduled ? "TRUE" : "FALSE"}`);
       if (options.nextStart !== undefined) {
-        params.push(options.nextStart);
+        // Bound as instant text with an explicit offset: the pg adapter formats a Date as a
+        // zone-less UTC wall clock, which alter_job's timestamptz parameter would read in the
+        // session time zone (issue #163). Invalid Date would throw a bare RangeError here.
+        if (!(options.nextStart instanceof Date) || Number.isNaN(options.nextStart.getTime())) {
+          throw new Error("alterJob: `nextStart` must be a valid Date.");
+        }
+        params.push(instantText(options.nextStart));
         args.push(`next_start => $${params.length}`);
       }
       if (options.config !== undefined) {

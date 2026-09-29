@@ -247,6 +247,23 @@ npx prisma generate
 npx prisma migrate deploy
 ```
 
+### Keep the database session in UTC
+
+`@prisma/adapter-pg` assumes the session time zone is UTC: it sends a `DateTime`
+as a zone-less UTC wall clock and rewrites the offset of every `timestamptz` it
+reads to `+00:00`. Under any other session zone Prisma stores every row it
+writes at a shifted instant and shifts it back on read, so its own round trip
+looks right while the stored instants are wrong. This package binds its own
+`Date` values, such as `range`, `where` filters and `nextStart`, with an
+explicit `+00` offset, so the windows it queries and the jobs it schedules are
+the instants you gave. Under a non-UTC session those windows therefore do not
+line up with rows Prisma wrote, and the `bucket` values Prisma hands back are
+shifted like everything else it reads. Check with `SHOW timezone` and pin it:
+
+```sql
+ALTER DATABASE mydb SET timezone TO 'UTC';
+```
+
 ### A `DROP INDEX` migration in your history
 
 Earlier versions let `create_hypertable` add its own index on the time column.

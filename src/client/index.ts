@@ -7,7 +7,7 @@ import { Prisma } from "@prisma/client/extension";
 import type { CaggConfig, HypertableConfig, RelationConfig } from "../core/types.js";
 import { assertInterval } from "../core/interval.js";
 import {
-  buildTimeBucketQuery,
+  buildTimeBucketQuery, jsonNumbers,
   type TimeBucketMethod,
   type TimeBucketRuntimeArgs,
 } from "./timeBucket.js";
@@ -140,10 +140,10 @@ export function timescaledb<const C extends TimescaleConfig = TimescaleConfig>(c
       assertInterval(args.bucket);
       const client = ctx.$parent as UnsafeRawClient;
       const prefix = await resolvePrefix(client);
-      const { sql, params } = buildTimeBucketQuery(
+      const { sql, params, jsonColumns } = buildTimeBucketQuery(
         ht.table, ht.column, args, ht.columns, ht.schema, relationsByModel, model, prefix,
       );
-      return client.$queryRawUnsafe(sql, ...params);
+      return jsonNumbers(await client.$queryRawUnsafe(sql, ...params), jsonColumns);
     } as unknown as TimeBucketMethod;
 
     return client.$extends({

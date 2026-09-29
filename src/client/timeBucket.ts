@@ -7,7 +7,7 @@ import { assertInterval } from "../core/interval.js";
 import type { RelationConfig } from "../core/types.js";
 import { assertSafeIdent, qualifiedIdent, quoteIdent, quoteLiteral } from "../core/sql.js";
 import { NO_PREFIX, type FnPrefix } from "./searchPath.js";
-import { whereToSql, type RuntimeRelation } from "./where.js";
+import { bindable, whereToSql, type RuntimeRelation } from "./where.js";
 
 // --- type machinery --------------------------------------------------------
 
@@ -19,8 +19,21 @@ export type WhereInput<T> = Prisma.Args<T, "findMany">["where"];
 
 type Prettify<T> = { [K in keyof T]: T[K] } & {};
 
-/** Scalar columns of `R` whose type is numeric (valid targets for avg/sum/min/max). */
-type NumericColumn<R> = { [K in keyof R]-?: NonNullable<R[K]> extends number ? K : never }[keyof R] & string;
+/** The structural shape of a `Prisma.Decimal` column value, so the type never imports Prisma's
+ * runtime. */
+interface DecimalColumnValue {
+  toFixed(): string;
+  toNumber(): number;
+}
+/** Scalar columns of `R` whose type is numeric: `Int`/`Float` (number), `BigInt` (bigint) and
+ * `Decimal`. All are valid SQL inputs to the numeric aggregates. `sum`/`avg` cast to double
+ * precision by default, so a Decimal source stays exact only with `as: "string"` and a BigInt
+ * source only with `as: "bigint"` (`::bigint` on a Decimal rounds). `min`/`max` are not cast and
+ * come back in the column's own type. */
+type NumericColumn<R> = {
+  [K in keyof R]-?: NonNullable<R[K]> extends number | bigint | DecimalColumnValue ? K : never;
+}[keyof R] &
+  string;
 /** Any scalar column name of `R` (valid target for count / groupBy). */
 type AnyColumn<R> = Extract<keyof R, string>;
 
@@ -103,6 +116,12 @@ export type AggOutput<R, Op> = Op extends { first: infer C extends keyof R }
         ? { open: number; high: number; low: number; close: number; vwap: number }
         : Op extends { stats: unknown }
           ? { average: number; sum: number; numVals: number; stddev: number; variance: number; skewness: number; kurtosis: number }
+        // min/max are never cast (castFor), so Postgres keeps the column type and Prisma's raw
+        // deserializer hands back a Decimal or bigint for those columns, filled or not.
+        : Op extends { min: infer C extends keyof R }
+          ? NonNullable<R[C]>
+        : Op extends { max: infer C extends keyof R }
+          ? NonNullable<R[C]>
         : Op extends { fill: Fill }
         ? number
         : Op extends { as: "bigint" }
@@ -382,7 +401,7 @@ export function buildTimeBucketQuery(
   // this package has always emitted and what a connection whose search path reaches the
   // extension needs; the runtime fills it in when the probe says otherwise (see searchPath.ts).
   prefix: FnPrefix = NO_PREFIX,
-): { sql: string; params: unknown[] } {
+): { sql: string; params: unknown[]; jsonColumns: string[] } {
   // `p` is taken by the percentile argument further down, hence the shorter alias.
   const pre = prefix;
   assertSafeIdent(table, "model table");
@@ -400,8 +419,12 @@ export function buildTimeBucketQuery(
     return dbName;
   };
 
-  const params: unknown[] = [args.bucket, args.range.start, args.range.end];
+  // The bounds bind as instant text, not Dates: see `instantText` for the session-time-zone trap.
+  const params: unknown[] = [args.bucket, bindable(args.range.start), bindable(args.range.end)];
   const time = quoteIdent(timeColumn);
+  // Result columns built with jsonb_build_object, whose float8 NaN and Infinity come back as JSON
+  // strings; the caller turns them into the numbers the row type promises (see jsonNumbers).
+  const jsonColumns: string[] = [];
 
   // The bucketing expression: plain time_bucket, gapfill (bounds inferred from the range WHERE), or
   // a 3-arg time_bucket with timezone / origin / offset (see bucketExpression). Kept for the GROUP BY
@@ -544,6 +567,7 @@ export function buildTimeBucketQuery(
       // candlestick_agg is repeated per accessor but Postgres computes it once (common subexpression);
       // jsonb_build_object returns OHLC + vwap as one JS object column. `src` is the price column.
       const cs = `${pre.tk}candlestick_agg(${time}, ${src}, ${quoteIdent(col(volume))})`;
+      jsonColumns.push(resultName);
       select.push(
         `jsonb_build_object('open', ${pre.tk}open(${cs}), 'high', ${pre.tk}high(${cs}), 'low', ${pre.tk}low(${cs}), 'close', ${pre.tk}close(${cs}), 'vwap', ${pre.tk}vwap(${cs})) AS ${alias}`,
       );
@@ -556,6 +580,7 @@ export function buildTimeBucketQuery(
       // subexpression); jsonb_build_object returns the 1-D summary as one JS object. stddev /
       // variance are SAMPLE (Toolkit default), matching the package's sample stddev / variance ops.
       const sa = `${pre.tk}stats_agg(${src})`;
+      jsonColumns.push(resultName);
       select.push(
         `jsonb_build_object('average', ${pre.tk}average(${sa}), 'sum', ${pre.tk}sum(${sa}), 'numVals', ${pre.tk}num_vals(${sa}), 'stddev', ${pre.tk}stddev(${sa}), 'variance', ${pre.tk}variance(${sa}), 'skewness', ${pre.tk}skewness(${sa}), 'kurtosis', ${pre.tk}kurtosis(${sa})) AS ${alias}`,
       );
@@ -592,7 +617,7 @@ export function buildTimeBucketQuery(
   const whereSql = whereToSql(args.where, {
     col: (name) => quoteIdent(col(name)),
     push: (value) => {
-      params.push(value);
+      params.push(bindable(value));
       return `$${params.length}`;
     },
     ...(entryRelations
@@ -643,5 +668,28 @@ export function buildTimeBucketQuery(
     }
     sql += ` LIMIT ${args.limit}`;
   }
-  return { sql, params };
+  return { sql, params, jsonColumns };
+}
+
+/**
+ * Restore the numbers inside jsonb_build_object result columns. Postgres serialises a float8
+ * NaN or Infinity to JSON as the strings "NaN", "Infinity" and "-Infinity" (JSON has no such
+ * numbers), so a one-sample bucket's skewness arrived as the string "NaN" in a field typed
+ * `number` (issue #163). Mutates and returns `rows` for the caller's convenience.
+ */
+export function jsonNumbers<T>(rows: T, jsonColumns: readonly string[]): T {
+  if (jsonColumns.length === 0 || !Array.isArray(rows)) return rows;
+  const special: Record<string, number> = { NaN: Number.NaN, Infinity: Number.POSITIVE_INFINITY, "-Infinity": Number.NEGATIVE_INFINITY };
+  for (const row of rows as Record<string, unknown>[]) {
+    for (const column of jsonColumns) {
+      const value = row[column];
+      if (typeof value !== "object" || value === null) continue;
+      const obj = value as Record<string, unknown>;
+      for (const key of Object.keys(obj)) {
+        const v = obj[key];
+        if (typeof v === "string" && Object.hasOwn(special, v)) obj[key] = special[v];
+      }
+    }
+  }
+  return rows;
 }

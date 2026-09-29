@@ -347,9 +347,68 @@ function likeClause(
   return `${col} ${operator} ${ctx.push(pattern)} ESCAPE '\\'`;
 }
 
-/** True for the JS values bindable as a single SQL scalar parameter (Date/string/number/boolean/bigint). */
+/**
+ * A `Prisma.Decimal` (decimal.js) without importing Prisma's runtime: the shape every decimal.js
+ * instance has and no filter object ever has. Prisma types a Decimal column's filter value as
+ * `Decimal | string | number`, so the object form must bind, not fall through to the operator
+ * map and fail with `unsupported where operator "constructor"`.
+ */
+export interface DecimalLike {
+  toFixed(): string;
+  toNumber(): number;
+}
+export function isDecimalLike(v: unknown): v is DecimalLike {
+  return (
+    typeof v === "object" &&
+    v !== null &&
+    !(v instanceof Date) &&
+    typeof (v as Partial<DecimalLike>).toFixed === "function" &&
+    typeof (v as Partial<DecimalLike>).toNumber === "function"
+  );
+}
+
+/** True for the JS values bindable as a single SQL scalar parameter: Date, string, number,
+ * boolean, bigint, a Decimal, or bytes (Prisma 7 hands `Bytes` columns out as Uint8Array). */
 function isScalar(v: unknown): boolean {
-  return v instanceof Date || typeof v === "string" || typeof v === "number" || typeof v === "boolean" || typeof v === "bigint";
+  return (
+    v instanceof Date ||
+    typeof v === "string" ||
+    typeof v === "number" ||
+    typeof v === "boolean" ||
+    typeof v === "bigint" ||
+    v instanceof Uint8Array ||
+    isDecimalLike(v)
+  );
+}
+
+/**
+ * A Date as the text Postgres reads as that exact instant: the pg adapter's own UTC wall-clock
+ * format (`2026-06-16 00:15:00.000`) with `+00` appended. The adapter sends the zone-less form,
+ * which Postgres reads in the SESSION time zone on a timestamptz column, so under
+ * `TimeZone = 'Europe/Stockholm'` every bound Date landed two hours off (issue #163). The
+ * explicit offset fixes that and keeps every other column type working: `time`, `timetz` and
+ * `date` input reject the ISO `T` form, and `toISOString()` writes years past 9999 as `+010000`,
+ * which Postgres also rejects. On a plain `timestamp` column the offset is ignored, which is
+ * the same UTC wall clock as before.
+ */
+export function instantText(date: Date): string {
+  const pad = (n: number, width = 2): string => String(n).padStart(width, "0");
+  return (
+    `${pad(date.getUTCFullYear(), 4)}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}` +
+    ` ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}.${pad(date.getUTCMilliseconds(), 3)}+00`
+  );
+}
+
+/** The form a scalar is bound in: a Date as `instantText`, a Decimal as its exact decimal text
+ * (toFixed, no exponent), everything else as it is. A string passes through the adapter
+ * untouched and goes to Postgres untyped, so the column decides how to read it. */
+export function bindable(v: unknown): unknown {
+  if (v instanceof Date) {
+    if (Number.isNaN(v.getTime())) throw new Error("timeBucket: an Invalid Date cannot be bound as a parameter.");
+    return instantText(v);
+  }
+  if (isDecimalLike(v)) return v.toFixed();
+  return v;
 }
 
 /** Assert a value is a non-null scalar (for operators that require one), or throw a clear error. */

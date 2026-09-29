@@ -36,6 +36,11 @@ type Unit = (typeof UNITS)[number];
 /**
  * A Postgres/TimescaleDB interval literal, branded at the type level to catch typos at
  * compile time, e.g. `"1 hour"`, `"7 days"`, `"30 minutes"`, `"2 years"`.
+ *
+ * The type is a typo guard, not the authority. `${number}` is wider than the runtime grammar:
+ * `"-1 hour"`, `"0 days"`, `".5 hours"` and `"1e3 hours"` compile and are rejected by
+ * `isInterval` / `assertInterval`. It stays this wide on purpose, so an interval built from a
+ * number (`\`${n} hours\``) keeps type-checking.
  */
 export type Interval = `${number} ${Unit}`;
 
