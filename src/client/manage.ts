@@ -499,24 +499,30 @@ export function makeManage<HModels extends string = string, CModels extends stri
   return {
     async refreshContinuousAggregate(name, range) {
       const ref = resolveCagg(name);
-      // Open bounds (full refresh) must be a literal NULL, not a bound param: Postgres
-      // can't infer the type of a NULL parameter for the function's "any" window args.
-      const params: unknown[] = [];
-      const bound = (value: Date | null | undefined): string => {
+      // The window arguments of refresh_continuous_aggregate are typed "any", and the pg driver
+      // sends every bind parameter untyped, so Postgres cannot resolve a bound Date (or a bound
+      // NULL) there: "could not determine data type of parameter $1" (#159). Both bounds go in
+      // as literals instead: NULL for an open bound, and an untyped ISO string for a Date, which
+      // Postgres coerces to the aggregate's bucket column type (timestamp or timestamptz), the
+      // same form `origin => '...'` uses in timeBucket.
+      const bound = (value: Date | null | undefined, label: "start" | "end"): string => {
         if (value == null) return "NULL";
-        params.push(value);
-        return `$${params.length}`;
+        // Reject Invalid Date too: it passes `instanceof Date` and throws a raw RangeError at toISOString().
+        if (!(value instanceof Date) || Number.isNaN(value.getTime())) {
+          throw new Error(`refreshContinuousAggregate: \`${label}\` must be a valid Date.`);
+        }
+        return quoteLiteral(value.toISOString());
       };
       // Route through relationLiteral (like every other $timescale call site) so the
       // single-quote escaping lives in one place (sql.ts) rather than a hand-built literal.
       const rel = relationLiteral(ref.name, ref.schema);
       const p = await prefix();
-      const sql = `CALL ${p.ts}refresh_continuous_aggregate(${rel}, ${bound(range?.start)}, ${bound(range?.end)})`;
+      const sql = `CALL ${p.ts}refresh_continuous_aggregate(${rel}, ${bound(range?.start, "start")}, ${bound(range?.end, "end")})`;
       // Retry only on a concurrent policy refresh (55P03), with bounded exponential backoff.
       // Any other error — or exhausting the attempt budget — propagates unchanged.
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         try {
-          await client.$executeRawUnsafe(sql, ...params);
+          await client.$executeRawUnsafe(sql);
           return;
         } catch (err) {
           if (attempt >= maxAttempts || !isConcurrentRefreshError(err)) throw err;

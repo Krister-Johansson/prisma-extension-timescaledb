@@ -54,4 +54,26 @@ describe.skipIf(!DOCKER_OK)("continuous-aggregate refresh policy (runtime)", () 
     await prisma.$timescale().addContinuousAggregatePolicy("SensorHourly", policy);
     expect(await refreshJobs(h)).toBe(1);
   });
+
+  it("refreshes only the given window, then everything on a full refresh (#159)", async () => {
+    // Two readings four days apart -> two hourly buckets. The window covers the first day only.
+    await h.query(
+      `INSERT INTO "SensorReading" ("time","deviceId","temperature") VALUES ('2026-01-01 10:30:00',1,20.0),('2026-01-05 10:30:00',1,30.0)`,
+    );
+    const materialized = async (): Promise<string[]> =>
+      (await h.query<{ bucket: string }>(`SELECT bucket::text AS bucket FROM "SensorHourly" ORDER BY bucket`)).map(
+        (r) => r.bucket,
+      );
+
+    // The bucket column is TIMESTAMP(3) here; the ISO literal with a Z suffix must still land on the
+    // same wall-clock hour, which is what a user's Date bounds mean.
+    await prisma.$timescale().refreshContinuousAggregate("SensorHourly", {
+      start: new Date("2026-01-01T00:00:00Z"),
+      end: new Date("2026-01-02T00:00:00Z"),
+    });
+    expect(await materialized()).toEqual(["2026-01-01 10:00:00"]);
+
+    await prisma.$timescale().refreshContinuousAggregate("SensorHourly");
+    expect(await materialized()).toEqual(["2026-01-01 10:00:00", "2026-01-05 10:00:00"]);
+  });
 });
