@@ -96,6 +96,22 @@ jobs:
             echo "::error::package.json is $WANT but the tag is $TAG"
             exit 1
           fi
+      # Publishing is only ever a companion to a published GitHub release: the one release-please
+      # just created on push, or an existing one named on dispatch. A tag without a published,
+      # non-draft release (hand-made, or a draft) stops here, so a dispatch cannot ship a version
+      # that never went through the release flow.
+      - name: Assert the tag belongs to a published GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || needs.release-please.outputs.tag_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          RELEASE_ID="$(gh api "repos/$REPOSITORY/releases/tags/$TAG" \
+            --jq 'select(.draft == false and .published_at != null) | .id' 2>/dev/null || true)"
+          if [ -z "$RELEASE_ID" ]; then
+            echo "::error::tag $TAG has no published GitHub release; publishing is only for released tags"
+            exit 1
+          fi
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24"
