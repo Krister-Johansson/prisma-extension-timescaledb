@@ -54,6 +54,25 @@ describe("parseAnnotations", () => {
     expect(() => parseAnnotations("@timescale.bucket(aligned to UTC)")).toThrow(/Malformed annotation argument/);
   });
 
+  it("unescapes \\\" and \\\\ inside string values", () => {
+    expect(parseAnnotations(String.raw`@timescale.x(a: "say \"hi\"", b: "back\\slash")`)).toEqual([
+      { name: "x", args: { a: 'say "hi"', b: "back\\slash" } },
+    ]);
+  });
+
+  it("closes a string whose last character is an escaped backslash (#151)", () => {
+    // `"a\\"` is the value a\ — the quote after an escaped backslash is a real closing quote.
+    expect(parseAnnotations(String.raw`@timescale.x(a: "a\\")`)).toEqual([{ name: "x", args: { a: "a\\" } }]);
+    expect(parseAnnotations(String.raw`@timescale.x(a: "a\\", b: "c")`)).toEqual([
+      { name: "x", args: { a: "a\\", b: "c" } },
+    ]);
+    expect(parseAnnotations(String.raw`@timescale.x(r: { a: "a\\" }, b: "c")`)).toEqual([
+      { name: "x", args: { r: { a: "a\\" }, b: "c" } },
+    ]);
+    // Escaped backslash followed by an escaped quote: the quote is still part of the value.
+    expect(parseAnnotations(String.raw`@timescale.x(a: "a\\\"b")`)).toEqual([{ name: "x", args: { a: 'a\\"b' } }]);
+  });
+
   it("rejects trailing characters after a string value", () => {
     expect(() => parseAnnotations(`@timescale.hypertable(column: "time"oops)`)).toThrow(/trailing characters after string/);
   });

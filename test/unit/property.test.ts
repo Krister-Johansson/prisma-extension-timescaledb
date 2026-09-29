@@ -328,9 +328,10 @@ describe("property-based invariants", () => {
     const annotationNameArb = fc
       .tuple(charFrom(LETTERS), stringFrom(LETTERS + DIGITS, { maxLength: 10 }))
       .map(([head, tail]) => head + tail);
-    // Quoted string values: printable text without the quote and backslash escapes, since
-    // the escape grammar is not the invariant under test here.
-    const quotedValueArb = stringFrom(LETTERS + DIGITS + " ,:(){}.-_/'", { maxLength: 12 });
+    // Quoted string values, including the two escapable characters: a value is written as
+    // `"..."` with `\\` and `"` escaped by a backslash, and must come back byte for byte (#151).
+    const quotedValueArb = stringFrom(LETTERS + DIGITS + " ,:(){}.-_/'\\\"", { maxLength: 12 });
+    const escape = (v: string) => v.replace(/[\\"]/g, (c) => `\\${c}`);
     const bareValueArb = fc.oneof(fc.constantFrom("true", "false"), stringFrom(LETTERS + DIGITS, { minLength: 1 }));
     const flatArgsArb = fc.dictionary(safeIdentArb, fc.oneof(quotedValueArb, bareValueArb), {
       maxKeys: 4,
@@ -346,7 +347,7 @@ describe("property-based invariants", () => {
       return Object.entries(args)
         .map(([k, v]) => {
           if (typeof v === "string") {
-            return quotedKeys.has(k) || !/^[A-Za-z0-9]+$/.test(v) ? `${k}: "${v}"` : `${k}: ${v}`;
+            return quotedKeys.has(k) || !/^[A-Za-z0-9]+$/.test(v) ? `${k}: "${escape(v)}"` : `${k}: ${v}`;
           }
           return `${k}: { ${renderArgs(v, quotedKeys)} }`;
         })
@@ -411,7 +412,7 @@ describe("property-based invariants", () => {
       const ws = fc.array(fc.constantFrom(" ", "\n", "\t"), { maxLength: 3 }).map((cs) => cs.join(""));
       fc.assert(
         fc.property(annotationNameArb, safeIdentArb, quotedValueArb, ws, ws, ws, ws, (name, key, value, a, b, c, d) => {
-          const doc = `@timescale.${name}(${a}${key}${b}:${c}"${value}"${d})`;
+          const doc = `@timescale.${name}(${a}${key}${b}:${c}"${escape(value)}"${d})`;
           expect(parseAnnotations(doc)).toEqual([{ name, args: { [key]: value } }]);
         }),
       );
