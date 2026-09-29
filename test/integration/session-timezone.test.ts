@@ -50,7 +50,7 @@ describe.skipIf(!DOCKER_OK)("Date parameters under a non-UTC session time zone (
     await h.query(`ALTER DATABASE "${db}" SET timezone TO 'Europe/Stockholm'`);
     // Rows inserted with explicit instants, outside the adapter, so the data itself is exact.
     await h.query(`INSERT INTO "Reading" ("time", "deviceId", "value") VALUES
-      ('2026-06-15T23:30:00Z', 1, 1), ('2026-06-16T00:30:00Z', 1, 2), ('2026-06-16T12:00:00Z', 2, 3)`);
+      ('2026-06-15T23:30:00Z', 1, 1), ('2026-06-16T00:30:00Z', 1, 2), ('2026-06-16T05:00:00Z', 2, 4), ('2026-06-16T12:00:00Z', 2, 3)`);
 
     const { PrismaClient } = await import(pathToFileURL(join(h.projectDir, "client", "client.ts")).href);
     const { PrismaPg } = await import("@prisma/adapter-pg");
@@ -79,10 +79,12 @@ describe.skipIf(!DOCKER_OK)("Date parameters under a non-UTC session time zone (
       aggregate: { n: { count: "deviceId" } },
     });
     expect(rows).toHaveLength(1);
-    expect(Number(rows[0].n)).toBe(2);
+    expect(Number(rows[0].n)).toBe(3);
   });
 
   it("a Date in where means its instant too", async () => {
+    // Under the old binding 06:00Z reached Postgres as 06:00 Stockholm, i.e. 04:00Z, and the
+    // 05:00Z row leaked in.
     const rows = await prisma.reading.timeBucket({
       bucket: "1 day",
       range: { start: new Date("2026-06-15T00:00:00Z"), end: new Date("2026-06-17T00:00:00Z") },

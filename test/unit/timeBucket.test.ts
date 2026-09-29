@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { instantText } from "../../src/client/where.js";
 import { buildTimeBucketQuery, jsonNumbers, type TimeBucketRuntimeArgs } from "../../src/client/timeBucket.js";
 import type { RelationConfig } from "../../src/core/types.js";
 
@@ -18,7 +19,7 @@ describe("buildTimeBucketQuery", () => {
     expect(sql).toContain(`FROM "SensorReading"`);
     expect(sql).toContain(`GROUP BY time_bucket($1, "time"), "deviceId"`);
     expect(sql).not.toContain("::regclass");
-    expect(params).toEqual(["1 hour", range.start.toISOString(), range.end.toISOString()]);
+    expect(params).toEqual(["1 hour", "2026-06-15 00:00:00.000+00", "2026-06-16 00:00:00.000+00"]);
   });
 
   it("casts sum/avg to double precision (integer-column aggregates return JS numbers)", () => {
@@ -71,13 +72,13 @@ describe("buildTimeBucketQuery", () => {
   it("appends equality filters as bound params", () => {
     const { sql, params } = buildTimeBucketQuery("SensorReading", "time", { ...base, where: { deviceId: 1 } });
     expect(sql).toContain(`AND ("deviceId" = $4)`);
-    expect(params).toEqual(["1 hour", range.start.toISOString(), range.end.toISOString(), 1]);
+    expect(params).toEqual(["1 hour", "2026-06-15 00:00:00.000+00", "2026-06-16 00:00:00.000+00", 1]);
   });
 
   it("skips undefined where values instead of binding them as NULL", () => {
     const { sql, params } = buildTimeBucketQuery("SensorReading", "time", { ...base, where: { deviceId: undefined } });
     expect(sql).not.toContain("deviceId");
-    expect(params).toEqual(["1 hour", range.start.toISOString(), range.end.toISOString()]);
+    expect(params).toEqual(["1 hour", "2026-06-15 00:00:00.000+00", "2026-06-16 00:00:00.000+00"]);
   });
 
   it("supports comparison operators in where (parameterized)", () => {
@@ -86,7 +87,7 @@ describe("buildTimeBucketQuery", () => {
       where: { deviceId: { in: [1, 2] }, temperature: { gte: 20 } },
     });
     expect(sql).toContain(`AND ("deviceId" IN ($4, $5) AND "temperature" >= $6)`);
-    expect(params).toEqual(["1 hour", range.start.toISOString(), range.end.toISOString(), 1, 2, 20]);
+    expect(params).toEqual(["1 hour", "2026-06-15 00:00:00.000+00", "2026-06-16 00:00:00.000+00", 1, 2, 20]);
   });
 
   it("throws on an unsupported where operator", () => {
@@ -141,7 +142,7 @@ describe("buildTimeBucketQuery", () => {
     expect(sql).toContain(`avg("temperature")::double precision AS "avgTemp"`); // unmapped column = identity
     expect(sql).toContain(`AND ("device_id" = $4)`); // where key resolved to DB column
     expect(sql).toContain(`GROUP BY time_bucket($1, "ts"), "device_id"`); // group by the source expression
-    expect(params).toEqual(["1 hour", range.start.toISOString(), range.end.toISOString(), 1]);
+    expect(params).toEqual(["1 hour", "2026-06-15 00:00:00.000+00", "2026-06-16 00:00:00.000+00", 1]);
   });
 
   it("schema-qualifies the table under multiSchema (@@schema)", () => {
@@ -183,7 +184,7 @@ describe("buildTimeBucketQuery", () => {
     expect(sql).toContain(`time_bucket_gapfill($1, "time") AS "bucket"`);
     expect(sql).not.toMatch(/time_bucket\(\$1/); // not the plain (non-gapfill) form
     expect(sql).toContain(`WHERE "time" >= $2 AND "time" < $3`);
-    expect(params).toEqual(["1 hour", range.start.toISOString(), range.end.toISOString()]);
+    expect(params).toEqual(["1 hour", "2026-06-15 00:00:00.000+00", "2026-06-16 00:00:00.000+00"]);
   });
 
   it("fill locf / interpolate wrap the aggregate; an unfilled aggregate stays plain", () => {
@@ -599,17 +600,25 @@ describe("buildTimeBucketQuery: schema-qualified function names", () => {
 });
 
 // Issue #163: the pg adapter formats a bound Date as a zone-less UTC wall clock, which Postgres
-// reads in the session time zone on a timestamptz column. Every Date now binds as an ISO string
-// with an explicit Z, and Decimal filter values bind as exact decimal text.
+// reads in the session time zone on a timestamptz column. Every Date now binds as the same wall
+// clock with an explicit +00, and Decimal filter values bind as exact decimal text.
 describe("buildTimeBucketQuery parameter binding (issue #163)", () => {
   const range = { start: new Date("2026-06-15T00:00:00.000Z"), end: new Date("2026-06-16T00:00:00.000Z") };
   const base = { bucket: "1 hour" as const, range, aggregate: { n: { count: "deviceId" } } };
 
-  it("binds the range and every Date in where as ISO strings with a Z", () => {
-    const since = new Date("2026-06-15T12:00:00.000Z");
+  it("binds the range and every Date in where as UTC wall-clock text with an explicit offset", () => {
+    const since = new Date("2026-06-15T12:34:56.789Z");
     const { params } = buildTimeBucketQuery("SensorReading", "time", { ...base, where: { time: { gte: since }, deviceId: 1 } });
-    expect(params).toEqual(["1 hour", "2026-06-15T00:00:00.000Z", "2026-06-16T00:00:00.000Z", "2026-06-15T12:00:00.000Z", 1]);
+    expect(params).toEqual(["1 hour", "2026-06-15 00:00:00.000+00", "2026-06-16 00:00:00.000+00", "2026-06-15 12:34:56.789+00", 1]);
     expect(params.some((p) => p instanceof Date)).toBe(false);
+  });
+
+  // The ISO form was the first attempt: `time` and `timetz` columns reject the `T`, and
+  // toISOString writes years past 9999 as `+010000-...`, which Postgres rejects too.
+  it("uses the space-separated form so time columns and far-future dates still parse", () => {
+    expect(instantText(new Date("2026-06-16T00:15:00.000Z"))).toBe("2026-06-16 00:15:00.000+00");
+    expect(instantText(new Date(8.64e15))).toBe("275760-09-13 00:00:00.000+00"); // the max Date
+    expect(instantText(new Date("0099-01-01T00:00:00.000Z"))).toBe("0099-01-01 00:00:00.000+00");
   });
 
   it("rejects an Invalid Date in where before it reaches the adapter", () => {

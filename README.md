@@ -251,13 +251,14 @@ npx prisma migrate deploy
 
 `@prisma/adapter-pg` assumes the session time zone is UTC: it sends a `DateTime`
 as a zone-less UTC wall clock and rewrites the offset of every `timestamptz` it
-reads to `+00:00`. Under any other session zone Prisma stores and returns
-shifted instants, and nothing in this package can correct that on the way back.
-This package binds its own `Date` values, such as `range`, `where` filters and
-`nextStart`, as ISO strings with an explicit `Z`, so the windows it queries and
-the jobs it schedules are exact whatever the session zone, but the `bucket`
-values Prisma hands back still go through the adapter. Check with
-`SHOW timezone` and pin it if needed:
+reads to `+00:00`. Under any other session zone Prisma stores every row it
+writes at a shifted instant and shifts it back on read, so its own round trip
+looks right while the stored instants are wrong. This package binds its own
+`Date` values, such as `range`, `where` filters and `nextStart`, with an
+explicit `+00` offset, so the windows it queries and the jobs it schedules are
+the instants you gave. Under a non-UTC session those windows therefore do not
+line up with rows Prisma wrote, and the `bucket` values Prisma hands back are
+shifted like everything else it reads. Check with `SHOW timezone` and pin it:
 
 ```sql
 ALTER DATABASE mydb SET timezone TO 'UTC';

@@ -26,9 +26,10 @@ interface DecimalColumnValue {
   toNumber(): number;
 }
 /** Scalar columns of `R` whose type is numeric: `Int`/`Float` (number), `BigInt` (bigint) and
- * `Decimal`. All are valid SQL inputs to the numeric aggregates; the default output is still a
- * JS `number` (the SQL casts to double precision), so use `as: "string"` or `as: "bigint"` when a
- * Decimal or BigInt source must stay exact. */
+ * `Decimal`. All are valid SQL inputs to the numeric aggregates. `sum`/`avg` cast to double
+ * precision by default, so a Decimal source stays exact only with `as: "string"` and a BigInt
+ * source only with `as: "bigint"` (`::bigint` on a Decimal rounds). `min`/`max` are not cast and
+ * come back in the column's own type. */
 type NumericColumn<R> = {
   [K in keyof R]-?: NonNullable<R[K]> extends number | bigint | DecimalColumnValue ? K : never;
 }[keyof R] &
@@ -115,6 +116,12 @@ export type AggOutput<R, Op> = Op extends { first: infer C extends keyof R }
         ? { open: number; high: number; low: number; close: number; vwap: number }
         : Op extends { stats: unknown }
           ? { average: number; sum: number; numVals: number; stddev: number; variance: number; skewness: number; kurtosis: number }
+        // min/max are never cast (castFor), so Postgres keeps the column type and Prisma's raw
+        // deserializer hands back a Decimal or bigint for those columns, filled or not.
+        : Op extends { min: infer C extends keyof R }
+          ? NonNullable<R[C]>
+        : Op extends { max: infer C extends keyof R }
+          ? NonNullable<R[C]>
         : Op extends { fill: Fill }
         ? number
         : Op extends { as: "bigint" }
@@ -412,7 +419,7 @@ export function buildTimeBucketQuery(
     return dbName;
   };
 
-  // The bounds bind as ISO strings, not Dates: see `bindable` for the session-time-zone trap.
+  // The bounds bind as instant text, not Dates: see `instantText` for the session-time-zone trap.
   const params: unknown[] = [args.bucket, bindable(args.range.start), bindable(args.range.end)];
   const time = quoteIdent(timeColumn);
   // Result columns built with jsonb_build_object, whose float8 NaN and Infinity come back as JSON

@@ -382,17 +382,30 @@ function isScalar(v: unknown): boolean {
 }
 
 /**
- * The form a scalar is bound in. A Date goes as its ISO string with an explicit `Z`: the pg
- * adapter formats a Date as a zone-less UTC wall clock, which Postgres reads in the SESSION time
- * zone when the column is timestamptz, so under `TimeZone = 'Europe/Stockholm'` every bound
- * Date landed two hours off (issue #163). A string passes through the adapter untouched, and
- * Postgres parses the `Z`; on a plain `timestamp` column the zone is ignored, which is the same
- * UTC wall clock as before. A Decimal binds as its exact decimal text (toFixed, no exponent).
+ * A Date as the text Postgres reads as that exact instant: the pg adapter's own UTC wall-clock
+ * format (`2026-06-16 00:15:00.000`) with `+00` appended. The adapter sends the zone-less form,
+ * which Postgres reads in the SESSION time zone on a timestamptz column, so under
+ * `TimeZone = 'Europe/Stockholm'` every bound Date landed two hours off (issue #163). The
+ * explicit offset fixes that and keeps every other column type working: `time`, `timetz` and
+ * `date` input reject the ISO `T` form, and `toISOString()` writes years past 9999 as `+010000`,
+ * which Postgres also rejects. On a plain `timestamp` column the offset is ignored, which is
+ * the same UTC wall clock as before.
  */
+export function instantText(date: Date): string {
+  const pad = (n: number, width = 2): string => String(n).padStart(width, "0");
+  return (
+    `${pad(date.getUTCFullYear(), 4)}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}` +
+    ` ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}.${pad(date.getUTCMilliseconds(), 3)}+00`
+  );
+}
+
+/** The form a scalar is bound in: a Date as `instantText`, a Decimal as its exact decimal text
+ * (toFixed, no exponent), everything else as it is. A string passes through the adapter
+ * untouched and goes to Postgres untyped, so the column decides how to read it. */
 export function bindable(v: unknown): unknown {
   if (v instanceof Date) {
     if (Number.isNaN(v.getTime())) throw new Error("timeBucket: an Invalid Date cannot be bound as a parameter.");
-    return v.toISOString();
+    return instantText(v);
   }
   if (isDecimalLike(v)) return v.toFixed();
   return v;

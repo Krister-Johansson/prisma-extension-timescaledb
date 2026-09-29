@@ -464,6 +464,18 @@ type _pricedTotal = Expect<Equal<PricedResult["total"], number>>;
 type _pricedExact = Expect<Equal<PricedResult["exact"], string>>;
 type _pricedVol = Expect<Equal<PricedResult["vol"], bigint>>;
 type _pricedAvg = Expect<Equal<PricedResult["avgPrice"], number>>;
+// min/max are not cast, so they keep the column's own type (a Decimal comes back as a Decimal).
+type _pricedTop = Expect<Equal<PricedResult["top"], DecimalValue>>;
+const pricedMinMax = pricedBucket({
+  bucket: "1 hour",
+  range: { start, end },
+  aggregate: { lowVol: { min: "volume" }, lowPrice: { min: "price", fill: "locf" }, t: { min: "deviceId" } },
+  gapfill: true,
+});
+type PricedMinMax = (typeof pricedMinMax)[number];
+type _lowVol = Expect<Equal<PricedMinMax["lowVol"], bigint | null>>;
+type _lowPrice = Expect<Equal<PricedMinMax["lowPrice"], DecimalValue | null>>;
+type _numberMin = Expect<Equal<PricedMinMax["t"], number | null>>;
 
 pricedBucket({
   bucket: "1 hour",
@@ -472,16 +484,11 @@ pricedBucket({
   aggregate: { x: { sum: "label" } },
 });
 
-// --- issue #163: the Interval type rejects the shapes the runtime rejects that it can see ---
+// --- issue #163: the Interval type is a typo guard and stays as wide as `${number}` ---
+// An interval built from a number must keep compiling; the runtime validator is the authority.
+declare const hours: number;
 timeBucket({
-  // @ts-expect-error - a negative amount is not an Interval
-  bucket: "-1 hour",
-  range: { start, end },
-  aggregate: { n: { count: "label" } },
-});
-timeBucket({
-  // @ts-expect-error - an amount must start with a digit
-  bucket: ".5 hours",
+  bucket: `${hours} hours`,
   range: { start, end },
   aggregate: { n: { count: "label" } },
 });

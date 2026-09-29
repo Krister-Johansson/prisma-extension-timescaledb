@@ -338,11 +338,11 @@ describe("makeManage continuous-aggregate policies", () => {
 
   // Issue #163: alter_job's next_start is timestamptz, so a Date bound through the adapter
   // (a zone-less UTC wall clock) would be read in the session time zone.
-  it("alterJob binds nextStart as an ISO string and rejects an Invalid Date", async () => {
+  it("alterJob binds nextStart as instant text with an offset and rejects an Invalid Date", async () => {
     const { client, calls } = fakeClient();
     await makeManage(client).alterJob(1001, { nextStart: new Date("2026-06-15T12:00:00.000Z") });
     expect(calls[0]!.sql).toContain("next_start => $1");
-    expect(calls[0]!.params).toEqual(["2026-06-15T12:00:00.000Z"]);
+    expect(calls[0]!.params).toEqual(["2026-06-15 12:00:00.000+00"]);
     await expect(makeManage(client).alterJob(1001, { nextStart: new Date("nope") })).rejects.toThrow(/nextStart.*must be a valid Date/);
   });
 
@@ -593,7 +593,7 @@ describe("makeManage job control", () => {
     expect(calls[0]!.sql).toBe(
       "SELECT alter_job(1000, schedule_interval => INTERVAL '6 hours', max_retries => 3, next_start => $1, config => $2::jsonb, if_exists => TRUE)",
     );
-    expect(calls[0]!.params).toEqual([next.toISOString(), '{"drop_after":"60 days"}']);
+    expect(calls[0]!.params).toEqual(["2030-01-01 00:00:00.000+00", '{"drop_after":"60 days"}']);
   });
 
   it("alterJob rejects an empty option set, a bad job id, a bad interval, and a bad maxRetries", async () => {
