@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.4](https://github.com/Krister-Johansson/prisma-extension-timescaledb/compare/prisma-extension-timescaledb-v1.0.3...prisma-extension-timescaledb-v1.0.4) (2026-09-29)
+
+
+### Bug Fixes
+
+* **client:** render refresh window bounds as literals so a windowed refresh runs ([#167](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/167)) ([db24c6a](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/db24c6a24ae3c7162e4072a2c3d3e31d772af338)), closes [#159](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/159)
+
 ## [1.0.3](https://github.com/Krister-Johansson/prisma-extension-timescaledb/compare/prisma-extension-timescaledb-v1.0.2...prisma-extension-timescaledb-v1.0.3) (2026-09-29)
 
 
