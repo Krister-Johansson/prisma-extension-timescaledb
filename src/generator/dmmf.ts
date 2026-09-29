@@ -15,8 +15,9 @@ import type {
 } from "../core/types.js";
 import type { Interval } from "../core/interval.js";
 import { assertInterval } from "../core/interval.js";
-import { parseOrderByTerm } from "../core/compression.js";
-import { AGG_FNS } from "../core/continuousAggregate.js";
+import { compressionColumnsProblem, parseOrderByTerm } from "../core/compression.js";
+import { AGG_FNS, bucketProblem, refreshWindowProblem } from "../core/continuousAggregate.js";
+import { assertSafeIdent } from "../core/sql.js";
 import {
   findAnnotation,
   optionalBoolean,
@@ -137,11 +138,15 @@ export function extractTimescaleSchema(dmmf: DMMF.Document): TimescaleSchema {
 
     // Validate the full annotation surface FIRST — names and argument keys, at both levels —
     // so a typo fails generation instead of silently no-oping (H2 in the review).
+    const seenModelAnnotations = new Set<string>();
     for (const a of annotations) {
       const ctx = `model "${model.name}"`;
       const name = a.name;
       assertKnownAnnotationName(name, "model", ctx);
       assertKnownArgs(name, a.args, ANNOTATION_ARGS[name], `@timescale.${name} on ${ctx}`);
+      // findAnnotation returns the first match, so a second one used to be ignored silently.
+      if (seenModelAnnotations.has(name)) throw new Error(`${ctx}: @timescale.${name} is declared more than once.`);
+      seenModelAnnotations.add(name);
     }
     const isCagg = findAnnotation(annotations, "continuousAggregate") !== undefined;
     // Parsed once here (with location context) and handed to buildCagg below — re-parsing there
@@ -157,10 +162,13 @@ export function extractTimescaleSchema(dmmf: DMMF.Document): TimescaleSchema {
           `@timescale.${fieldAnns[0]!.name} on ${fctx}: field-level annotations are only valid on a @timescale.continuousAggregate view.`,
         );
       }
+      const seenFieldAnnotations = new Set<string>();
       for (const a of fieldAnns) {
         const name = a.name;
         assertKnownAnnotationName(name, "field", fctx);
         assertKnownArgs(name, a.args, ANNOTATION_ARGS[name], `@timescale.${name} on ${fctx}`);
+        if (seenFieldAnnotations.has(name)) throw new Error(`${fctx}: @timescale.${name} is declared more than once.`);
+        seenFieldAnnotations.add(name);
       }
     }
 
@@ -247,6 +255,18 @@ function buildHypertable(
   const spacePartition = buildSpacePartition(ann, model, ctx);
   const chunkSkipping = buildChunkSkipping(ann, model, ctx, dbCol(field), compression, spacePartition?.column);
   const relations = buildRelations(model, byName);
+
+  // Every name that reaches emitted SQL, checked here with the model named, instead of deep in
+  // a builder where the error names neither the model nor the annotation (`@@map("a-b")`).
+  assertSafeIdents(ctx, [
+    ["table name", table],
+    ["schema", model.schema ?? undefined],
+    ["column", dbCol(field)],
+    ["partitionColumn", spacePartition?.column],
+    ...(compression?.segmentBy ?? []).map((c): [string, string] => ["segmentBy column", c]),
+    ...(compression?.orderBy ?? []).map((o): [string, string] => ["orderBy column", o.column]),
+    ...(chunkSkipping ?? []).map((c): [string, string] => ["chunkSkipping column", c]),
+  ]);
 
   return {
     ...(model.name !== table ? { model: model.name } : {}),
@@ -420,6 +440,9 @@ function buildCompression(
     });
     if (orderBy.length > 0) config.orderBy = orderBy;
   }
+
+  const problem = compressionColumnsProblem(config.segmentBy, config.orderBy);
+  if (problem) throw new Error(`${ctx}: ${problem}`);
 
   return config;
 }
@@ -604,9 +627,28 @@ function buildCagg(
     throw new Error(`${ctx}: at least one @timescale.aggregate field is required.`);
   }
 
-  const refresh = buildRefresh(ann, ctx);
+  const bucketIssue = bucketProblem(bucket as Interval);
+  if (bucketIssue) throw new Error(`${ctx}: ${bucketIssue}`);
+  const refresh = buildRefresh(ann, ctx, bucket as Interval);
   const materializedOnly = optionalBoolean(ann.args, "materializedOnly", ctx);
   const viewName = dbTable(view);
+
+  assertSafeIdents(ctx, [
+    ["view name", viewName],
+    ["schema", view.schema ?? undefined],
+    ["source table name", dbTable(sourceModel)],
+    ["source schema", sourceModel.schema ?? undefined],
+    ["timeColumn", dbCol(timeField)],
+    ["bucket column", bucketColumn],
+    ...groupBy.flatMap((g): [string, string][] => [
+      ["groupBy source column", g.source],
+      ["groupBy output column", g.output],
+    ]),
+    ...aggregates.flatMap((a): [string, string][] => [
+      ["aggregate column", a.column],
+      ["aggregate output column", a.name],
+    ]),
+  ]);
 
   return {
     ...(view.name !== viewName ? { model: view.name } : {}),
@@ -625,7 +667,7 @@ function buildCagg(
 }
 
 /** Parse the optional `refresh: { startOffset, endOffset, scheduleInterval }` policy off a cagg annotation. */
-function buildRefresh(ann: ReturnType<typeof parseAnnotations>[number], ctx: string): RefreshPolicy | undefined {
+function buildRefresh(ann: ReturnType<typeof parseAnnotations>[number], ctx: string, bucket: Interval): RefreshPolicy | undefined {
   const obj = optionalObject(ann.args, "refresh", ctx);
   if (!obj) return undefined;
   const rctx = `${ctx} refresh`;
@@ -636,6 +678,8 @@ function buildRefresh(ann: ReturnType<typeof parseAnnotations>[number], ctx: str
   assertInterval(startOffset);
   assertInterval(endOffset);
   assertInterval(scheduleInterval);
+  const windowIssue = refreshWindowProblem(bucket, { startOffset, endOffset });
+  if (windowIssue) throw new Error(`${rctx}: ${windowIssue}`);
   return {
     startOffset: startOffset as Interval,
     endOffset: endOffset as Interval,
@@ -671,6 +715,19 @@ function assertInEveryUniqueKey(model: DMMF.Model, fieldName: string, what: stri
  * legitimate enum segmentBy/groupBy/aggregate configurations. */
 function findScalarField(model: DMMF.Model, name: string): DMMF.Field | undefined {
   return model.fields.find((f) => f.name === name && (f.kind === "scalar" || f.kind === "enum"));
+}
+
+/** Run assertSafeIdent over each (label, value) pair, prefixing the annotation context. Pairs
+ * with an undefined value (an optional schema or column) are skipped. */
+function assertSafeIdents(ctx: string, pairs: readonly [label: string, value: string | undefined][]): void {
+  for (const [label, value] of pairs) {
+    if (value === undefined) continue;
+    try {
+      assertSafeIdent(value, label);
+    } catch (e) {
+      throw new Error(`${ctx}: ${(e as Error).message}`);
+    }
+  }
 }
 
 /** DB table name: the @@map value, or the model name. */
