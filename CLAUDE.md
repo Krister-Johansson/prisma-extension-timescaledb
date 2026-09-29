@@ -73,7 +73,8 @@ zero errors. This must be covered by an integration test (`test/integration/`).
   devDependencies for testing. Bundle nothing from Prisma. (Prisma 7+ only: the documented
   setup uses a url-less `datasource` block with the URL supplied from `prisma.config.ts`;
   Prisma 6 rejects that at schema validation with P1012, checked by hand; no CI job or test
-  covers it, and the generator itself refuses any Prisma major other than 7.)
+  covers it, and the generator itself refuses any Prisma major other than 7 when it can find
+  the installed `prisma` package, warning otherwise.)
 - Dual ESM + CJS publish via `tsup`. Validate output with `@arethetypeswrong/cli`.
 - All DB-touching tests use **Testcontainers** with a TimescaleDB image. There is no way
   to test this against a mock; if Docker is unavailable, skip and say so loudly.
