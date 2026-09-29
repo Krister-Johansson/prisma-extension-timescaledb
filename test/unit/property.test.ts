@@ -444,10 +444,17 @@ describe("property-based invariants", () => {
 
     it("maxObjectsSequence is the maximum, regardless of order and of unrelated folders", () => {
       const noiseArb = fc.string().filter((s) => !s.startsWith(OBJECTS_MIGRATION_PREFIX));
-      fc.assert(
-        fc.property(fc.array(sequenceArb, { minLength: 1 }), fc.array(noiseArb), (seqs, noise) => {
+      // The order comes from fast-check too, so a failure replays from the reported seed and shrinks.
+      const shuffledNamesArb = fc
+        .tuple(fc.array(sequenceArb, { minLength: 1 }), fc.array(noiseArb))
+        .chain(([seqs, noise]) => {
           const names = [...seqs.map(objectsMigrationName), ...noise, "00000000000000_timescaledb_extension"];
-          const shuffled = [...names].sort(() => 0.5 - Math.random());
+          return fc
+            .shuffledSubarray(names, { minLength: names.length, maxLength: names.length })
+            .map((shuffled) => ({ seqs, shuffled }));
+        });
+      fc.assert(
+        fc.property(shuffledNamesArb, ({ seqs, shuffled }) => {
           expect(maxObjectsSequence(shuffled)).toBe(Math.max(...seqs));
         }),
       );
