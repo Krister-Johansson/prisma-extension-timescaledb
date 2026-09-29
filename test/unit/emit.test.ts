@@ -9,6 +9,8 @@ import {
   emitMigrations,
   objectsMigrationName,
   maxObjectsSequence,
+  MissingMigrationError,
+  NewerStateFileError,
   parseGeneratorState,
   EXTENSION_MIGRATION,
   OBJECTS_MIGRATION_PREFIX,
@@ -672,9 +674,10 @@ model SensorReading {
     expect(
       parseGeneratorState(JSON.stringify({ version: 1, sequence: 1, state: { hypertables: [] } })), // no caggs array
     ).toBeUndefined();
-    expect(
+    // A version above 1 is not "unknown shape": it is a newer release's file (see the #160 cases).
+    expect(() =>
       parseGeneratorState(JSON.stringify({ version: 2, sequence: 1, state: { hypertables: [], continuousAggregates: [] } })),
-    ).toBeUndefined(); // unknown version
+    ).toThrow(NewerStateFileError);
     expect(parseGeneratorState(JSON.stringify({ version: 1, sequence: 0, state: { hypertables: [], continuousAggregates: [] } }))).toBeUndefined();
   });
 
@@ -718,5 +721,163 @@ describe("emitMigrations — second-round review behaviors", () => {
     (legacy.state.hypertables[0] as { model?: string; columns?: Record<string, string> }).columns = { deviceId: "device_id" };
     (legacy.state.continuousAggregates[0] as { model?: string }).model = "SensorHourly";
     expect(emitMigrations(schema, legacy, 1, true).files).toEqual({});
+  });
+});
+
+// Issue #160: the state file and the migrations folder can disagree, and a state file can come
+// from a release newer than the one running. Neither may leave the project stuck.
+describe("emitMigrations state-file gaps (issue #160)", () => {
+  const V2 = `${objectsMigrationName(2)}/migration.sql`;
+
+  // The state file records `sequence` as the latest emitted objects migration. When that folder
+  // is gone (an undeployed migration a developer deleted to redo it, or a folder lost in a merge)
+  // the unchanged-state no-op used to win, and every later generate emitted nothing.
+  it("re-emits the full state as the next version when the latest objects migration is missing", async () => {
+    const schema = await loadSchema();
+    const first = emitMigrations(schema); // state file says v0001
+    const healed = emitMigrations(schema, first.nextState, 0, true, false); // ...but v0001 is not on disk
+    expect(Object.keys(healed.files)).toEqual([V2]);
+    expect(healed.files[V2]).toContain(`'"SensorReading"'`);
+    expect(healed.files[V2]).toContain(`"SensorHourly"`);
+    expect(healed.nextState?.sequence).toBe(2);
+    expect(healed.nextState?.state).toEqual(first.nextState?.state);
+  });
+
+  it("the healed version never reuses a number that is still on disk", async () => {
+    const schema = await loadSchema();
+    const first = emitMigrations(schema);
+    // State file at v0001 with its folder gone, while a stray v0003 (another branch) exists.
+    const healed = emitMigrations(schema, first.nextState, 3, true, false);
+    expect(Object.keys(healed.files)).toEqual([`${objectsMigrationName(4)}/migration.sql`]);
+    expect(healed.nextState?.sequence).toBe(4);
+  });
+
+  // The state file records the state the latest migration diffed against, so the lost
+  // migration can be rebuilt exactly. A first run has nothing before it: an empty base, never
+  // an absent field, since absence marks a file from an older release.
+  it("records the state the latest migration diffed against", async () => {
+    const schema = await loadSchema();
+    const first = emitMigrations(schema);
+    expect(first.nextState?.previous).toEqual({ hypertables: [], continuousAggregates: [] });
+    const withoutCagg: typeof schema = { ...schema, continuousAggregates: [] };
+    const second = emitMigrations(withoutCagg, first.nextState, 1, true);
+    expect(second.nextState?.previous).toEqual(first.nextState?.state);
+    expect(second.nextState?.state.continuousAggregates).toEqual([]);
+    // Regenerating an unchanged schema stays a no-op with the field present.
+    expect(emitMigrations(withoutCagg, second.nextState, 2, true)).toEqual({ files: {} });
+  });
+
+  // v1 creates cagg A; an undeployed v2 replaces its definition with B and is then deleted. The
+  // saved state says B, so a diff against it would emit no drop, and the guarded create would
+  // leave A in place on a replay. The rebuilt v3 must carry v2's drop.
+  it("a lost migration that replaced a cagg definition is rebuilt with its drop", async () => {
+    const schema = await loadSchema();
+    const first = emitMigrations(schema);
+    const replaced: typeof schema = {
+      ...schema,
+      continuousAggregates: schema.continuousAggregates.map((c) => ({ ...c, bucket: "2 hours" as typeof c.bucket })),
+    };
+    const second = emitMigrations(replaced, first.nextState, 1, true);
+    expect(second.files[V2]).toContain(`DROP MATERIALIZED VIEW IF EXISTS "SensorHourly"`);
+    const healed = emitMigrations(replaced, second.nextState, 1, true, false);
+    const v3 = `${objectsMigrationName(3)}/migration.sql`;
+    expect(Object.keys(healed.files)).toEqual([v3]);
+    expect(healed.files[v3]).toContain(`DROP MATERIALIZED VIEW IF EXISTS "SensorHourly"`);
+    expect(healed.files[v3]).toContain(`time_bucket('2 hours'`);
+    // The rebuilt version diffed against the same base, so the record carries forward.
+    expect(healed.nextState?.previous).toEqual(second.nextState?.previous);
+    expect(healed.nextState?.sequence).toBe(3);
+  });
+
+  it("a lost migration is rebuilt together with any schema change made since", async () => {
+    const schema = await loadSchema();
+    const first = emitMigrations(schema);
+    const replaced: typeof schema = {
+      ...schema,
+      continuousAggregates: schema.continuousAggregates.map((c) => ({ ...c, bucket: "2 hours" as typeof c.bucket })),
+    };
+    const second = emitMigrations(replaced, first.nextState, 1, true);
+    // v2 is lost, and the cagg has been removed from the schema since.
+    const withoutCagg: typeof schema = { ...schema, continuousAggregates: [] };
+    const healed = emitMigrations(withoutCagg, second.nextState, 1, true, false);
+    const v3 = healed.files[`${objectsMigrationName(3)}/migration.sql`]!;
+    expect(v3).toContain(`DROP MATERIALIZED VIEW IF EXISTS "SensorHourly"`);
+    expect(v3).not.toContain("CREATE MATERIALIZED VIEW");
+    expect(healed.nextState?.state.continuousAggregates).toEqual([]);
+  });
+
+  // Review finding on #170: a healed v0002 for a lost v0001 used to leave `previous` out, so
+  // deleting v0002 as well hit the older-release throw. The same held for a recovery from a
+  // lost state file. Both have an empty base and must heal again.
+  it("a rebuilt migration with nothing before it can itself be rebuilt", async () => {
+    const schema = await loadSchema();
+    const first = emitMigrations(schema);
+    const healedOnce = emitMigrations(schema, first.nextState, 0, true, false); // v0001 lost, v0002 written
+    expect(healedOnce.nextState?.previous).toEqual({ hypertables: [], continuousAggregates: [] });
+    const healedTwice = emitMigrations(schema, healedOnce.nextState, 0, true, false); // v0002 lost too
+    expect(Object.keys(healedTwice.files)).toEqual([`${objectsMigrationName(3)}/migration.sql`]);
+    expect(healedTwice.nextState?.sequence).toBe(3);
+
+    const recovered = emitMigrations(schema, undefined, 3); // lost state file, v0004 written
+    expect(recovered.nextState?.previous).toEqual({ hypertables: [], continuousAggregates: [] });
+    const healedAfterRecovery = emitMigrations(schema, recovered.nextState, 3, true, false); // v0004 lost
+    expect(Object.keys(healedAfterRecovery.files)).toEqual([`${objectsMigrationName(5)}/migration.sql`]);
+  });
+
+  // A state file written before the `previous` field existed cannot rebuild a lost migration
+  // beyond v0001. A healed version without its removals would leave old objects in place, so
+  // the generator stops and says how to recover.
+  it("throws for a lost migration beyond v0001 when the state file does not record the previous state", async () => {
+    const schema = await loadSchema();
+    const previous = { version: 1 as const, sequence: 2, state: emitMigrations(schema).nextState!.state };
+    expect(() => emitMigrations(schema, previous, 1, true, false)).toThrow(MissingMigrationError);
+    expect(() => emitMigrations(schema, previous, 1, true, false)).toThrow(/v0002 is missing/);
+    expect(() => emitMigrations(schema, previous, 1, true, false)).toThrow(/Restore the folder/);
+    // The same file with its folder present is business as usual.
+    expect(emitMigrations(schema, previous, 2, true, true)).toEqual({ files: {} });
+  });
+
+  // Nothing before it and nothing in it: an empty migration would only record a version that
+  // does nothing.
+  it("an empty state whose lost migration also had nothing before it emits nothing", () => {
+    const bare = { hypertables: [], continuousAggregates: [], relationsByModel: {} };
+    const empty = { hypertables: [], continuousAggregates: [] };
+    const previous = { version: 1 as const, sequence: 2, state: empty, previous: empty };
+    expect(emitMigrations(bare, previous, 1, true, false)).toEqual({ files: {} });
+  });
+
+  it("parseGeneratorState accepts a well-formed previous state and rejects a malformed one", async () => {
+    const schema = await loadSchema();
+    const good = emitMigrations(schema).nextState!;
+    const withPrevious = { ...good, previous: good.state };
+    expect(parseGeneratorState(JSON.stringify(withPrevious))).toEqual(withPrevious);
+    expect(parseGeneratorState(JSON.stringify({ ...good, previous: null }))).toBeUndefined();
+    expect(parseGeneratorState(JSON.stringify({ ...good, previous: { hypertables: [] } }))).toBeUndefined();
+    expect(
+      parseGeneratorState(JSON.stringify({ ...good, previous: { hypertables: [{ table: "T" }], continuousAggregates: [] } })),
+    ).toBeUndefined();
+  });
+
+  it("the latest-folder flag means nothing without a previous state", async () => {
+    const schema = await loadSchema();
+    const flagged = emitMigrations(schema, undefined, 0, false, false);
+    expect(flagged).toEqual(emitMigrations(schema));
+  });
+
+  // A file written by a newer release used to parse as "unreadable", which emitted a full
+  // re-assert migration and rewrote the file as version 1. It must stop the generator instead.
+  it("parseGeneratorState throws a named error for a state file from a newer release", () => {
+    const newer = JSON.stringify({ version: 2, sequence: 7, state: { hypertables: [], continuousAggregates: [] } });
+    expect(() => parseGeneratorState(newer)).toThrow(NewerStateFileError);
+    expect(() => parseGeneratorState(newer)).toThrow(/newer prisma-extension-timescaledb/);
+    expect(() => parseGeneratorState(newer)).toThrow(/version 2/);
+    // Even a newer file with a shape this release cannot read is a newer file, not a corrupt one.
+    expect(() => parseGeneratorState(JSON.stringify({ version: 3 }))).toThrow(NewerStateFileError);
+    // Anything that is not an integer above 1 stays "unreadable".
+    expect(parseGeneratorState(JSON.stringify({ version: "2", sequence: 1 }))).toBeUndefined();
+    expect(parseGeneratorState(JSON.stringify({ version: 1.5, sequence: 1 }))).toBeUndefined();
+    expect(parseGeneratorState(JSON.stringify({ version: 0, sequence: 1 }))).toBeUndefined();
+    expect(parseGeneratorState("null")).toBeUndefined();
+    expect(parseGeneratorState("5")).toBeUndefined();
   });
 });

@@ -3,7 +3,7 @@
 // (the pre-v1 fixed-name rewrite was silently skipped there), replay cleanly through
 // `migrate reset` after a table is dropped (guarded blocks), and drop removed caggs.
 import { execFileSync } from "node:child_process";
-import { readdirSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdirSync, readdirSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startHarness, type Harness, dockerAvailable } from "./harness.js";
@@ -38,6 +38,28 @@ view SensorHourly {
 
 // v3 removes the cagg and the EventLog model (its table gets dropped by a Prisma migration).
 const MODELS_V3 = MODELS_V1;
+
+// v4 adds a retention policy to the remaining hypertable.
+const MODELS_V4 = `/// @timescale.hypertable(column: "time", chunkInterval: "1 day")
+/// @timescale.retention(dropAfter: "30 days")
+model SensorReading {
+  time        DateTime
+  deviceId    Int
+  temperature Float
+  @@id([deviceId, time])
+}`;
+
+// v5 adds a cagg back; v6 replaces its definition (a wider bucket).
+const caggModels = (bucket: string): string => `${MODELS_V4}
+
+/// @timescale.continuousAggregate(source: "SensorReading", bucket: "${bucket}", timeColumn: "time")
+view SensorHourly {
+  bucket  DateTime /// @timescale.bucket
+  avgTemp Float    /// @timescale.aggregate(fn: "avg", column: "temperature")
+  @@unique([bucket])
+}`;
+const MODELS_V5 = caggModels("1 hour");
+const MODELS_V6 = caggModels("2 hours");
 
 describe.skipIf(!DOCKER_OK)("schema evolution (real TimescaleDB)", () => {
   let h: Harness;
@@ -122,5 +144,100 @@ describe.skipIf(!DOCKER_OK)("schema evolution (real TimescaleDB)", () => {
     h.prisma(["migrate", "reset", "--force"]);
     expect(await hypertables()).toEqual(["SensorReading"]);
     expect(await caggs()).toEqual([]);
+  });
+
+  const policies = async (): Promise<string[]> =>
+    (await h.query<{ proc_name: string }>(
+      "SELECT proc_name FROM timescaledb_information.jobs WHERE hypertable_name = 'SensorReading' ORDER BY 1",
+    )).map((r) => r.proc_name);
+
+  // Issue #160: the state file said v0004 had been emitted, so once its folder was gone every
+  // later generate compared the unchanged schema against the recorded state and wrote nothing.
+  it("deleting the latest objects migration before deploying it re-emits the state as the next version", async () => {
+    const migrations = join(h.projectDir, "migrations");
+    setModels(MODELS_V4);
+    h.prisma(["generate"]); // appends v0004: adds the retention policy
+    expect(readdirSync(migrations)).toContain("99999999999999_timescaledb_objects_v0004");
+
+    // The developer discards the undeployed migration to redo it.
+    rmSync(join(migrations, "99999999999999_timescaledb_objects_v0004"), { recursive: true });
+    h.prisma(["generate"]);
+    const folders = readdirSync(migrations).sort();
+    expect(folders).not.toContain("99999999999999_timescaledb_objects_v0004"); // a number is never reused
+    expect(folders).toContain("99999999999999_timescaledb_objects_v0005");
+    const v5 = readFileSync(join(migrations, "99999999999999_timescaledb_objects_v0005", "migration.sql"), "utf8");
+    expect(v5).toContain(`add_retention_policy('"SensorReading"'`);
+
+    h.prisma(["migrate", "deploy"]);
+    expect(await policies()).toEqual(["policy_retention"]);
+
+    // The healed history still replays from scratch.
+    h.prisma(["migrate", "reset", "--force"]);
+    expect(await hypertables()).toEqual(["SensorReading"]);
+    expect(await policies()).toEqual(["policy_retention"]);
+  });
+
+  // Issue #160, the replacement path: the saved state already says "2 hours", so a diff against
+  // it has no drop, and the guarded create would keep the "1 hour" view on a replay. The rebuilt
+  // migration must carry the drop the lost one had.
+  it("deleting a lost migration that replaced a cagg definition rebuilds it with the drop", async () => {
+    const migrations = join(h.projectDir, "migrations");
+    setModels(MODELS_V5);
+    h.prisma(["generate"]); // v0006: creates SensorHourly at 1 hour
+    h.prisma(["migrate", "deploy"]);
+    expect(await caggs()).toEqual(["SensorHourly"]);
+
+    setModels(MODELS_V6);
+    h.prisma(["generate"]); // v0007: drops and recreates SensorHourly at 2 hours
+    expect(readdirSync(migrations)).toContain("99999999999999_timescaledb_objects_v0007");
+    rmSync(join(migrations, "99999999999999_timescaledb_objects_v0007"), { recursive: true });
+    h.prisma(["generate"]); // v0008 rebuilds v0007 from the recorded previous state
+    const v8 = readFileSync(join(migrations, "99999999999999_timescaledb_objects_v0008", "migration.sql"), "utf8");
+    expect(v8).toContain(`DROP MATERIALIZED VIEW IF EXISTS "SensorHourly"`);
+    expect(v8).toContain(`time_bucket('2 hours'`);
+
+    const bucketWidth = async (): Promise<string[]> =>
+      (await h.query<{ view_definition: string }>(
+        "SELECT view_definition FROM timescaledb_information.continuous_aggregates WHERE view_name = 'SensorHourly'",
+      )).map((r) => r.view_definition);
+    h.prisma(["migrate", "deploy"]);
+    await expect(bucketWidth()).resolves.toEqual([expect.stringContaining("'02:00:00'")]);
+    h.prisma(["migrate", "reset", "--force"]);
+    await expect(bucketWidth()).resolves.toEqual([expect.stringContaining("'02:00:00'")]);
+  });
+
+  // Issue #160: a read error other than "no such file" must stop the run. Reading it as a first
+  // run put a full re-assert migration on disk and then failed on the state write.
+  it("an unreadable state file stops generate without writing a migration", () => {
+    const migrations = join(h.projectDir, "migrations");
+    const statePath = join(migrations, ".prisma-extension-timescaledb.json");
+    const original = readFileSync(statePath, "utf8");
+    const before = readdirSync(migrations).sort();
+    rmSync(statePath);
+    mkdirSync(statePath); // a directory where the file should be: EISDIR on read
+    try {
+      expect(() => h.prisma(["generate"])).toThrow(/EISDIR/);
+      expect(readdirSync(migrations).sort()).toEqual(before);
+    } finally {
+      rmSync(statePath, { recursive: true });
+      writeFileSync(statePath, original, "utf8");
+    }
+  });
+
+  // Issue #160: a version-2 file used to read as corrupt, which emitted a full re-assert
+  // migration and rewrote the file as version 1.
+  it("a state file from a newer release stops generate instead of being overwritten", () => {
+    const migrations = join(h.projectDir, "migrations");
+    const statePath = join(migrations, ".prisma-extension-timescaledb.json");
+    const original = readFileSync(statePath, "utf8");
+    const before = readdirSync(migrations).sort();
+    writeFileSync(statePath, JSON.stringify({ ...(JSON.parse(original) as object), version: 2 }), "utf8");
+    try {
+      expect(() => h.prisma(["generate"])).toThrow(/newer prisma-extension-timescaledb/);
+      expect((JSON.parse(readFileSync(statePath, "utf8")) as { version: number }).version).toBe(2);
+      expect(readdirSync(migrations).sort()).toEqual(before);
+    } finally {
+      writeFileSync(statePath, original, "utf8");
+    }
   });
 });

@@ -13,6 +13,7 @@ import {
 import { parseAnnotations, type AnnotationArgs } from "../../src/generator/annotations.js";
 import {
   maxObjectsSequence,
+  NewerStateFileError,
   OBJECTS_MIGRATION_PREFIX,
   objectsMigrationName,
   parseGeneratorState,
@@ -501,17 +502,28 @@ describe("property-based invariants", () => {
       );
     });
 
-    it("rejects any sequence below 1 or not an integer, and any version other than 1", () => {
+    it("rejects any sequence below 1 or not an integer, and any version that is not 1 or a newer integer", () => {
       fc.assert(
         fc.property(
           validStateArb,
           fc.oneof(fc.integer({ max: 0 }), fc.double({ noInteger: true, noNaN: true }), fc.string()),
-          fc.oneof(fc.integer().filter((v) => v !== 1), fc.string(), fc.constant(null)),
+          fc.oneof(fc.integer({ max: 0 }), fc.double({ noInteger: true, noNaN: true }), fc.string(), fc.constant(null)),
           (state, badSequence, badVersion) => {
             expect(parseGeneratorState(JSON.stringify({ ...state, sequence: badSequence }))).toBeUndefined();
             expect(parseGeneratorState(JSON.stringify({ ...state, version: badVersion }))).toBeUndefined();
           },
         ),
+      );
+    });
+
+    // Issue #160: an integer version above 1 is a newer release's file, never "unreadable",
+    // whatever the rest of the file looks like.
+    it("throws NewerStateFileError for every integer version above 1", () => {
+      fc.assert(
+        fc.property(validStateArb, fc.integer({ min: 2 }), fc.boolean(), (state, newer, wholeShape) => {
+          const file = wholeShape ? { ...state, version: newer } : { version: newer };
+          expect(() => parseGeneratorState(JSON.stringify(file))).toThrow(NewerStateFileError);
+        }),
       );
     });
 
