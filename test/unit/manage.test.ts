@@ -336,6 +336,16 @@ describe("makeManage continuous-aggregate policies", () => {
     expect(calls).toHaveLength(0);
   });
 
+  // Issue #163: alter_job's next_start is timestamptz, so a Date bound through the adapter
+  // (a zone-less UTC wall clock) would be read in the session time zone.
+  it("alterJob binds nextStart as an ISO string and rejects an Invalid Date", async () => {
+    const { client, calls } = fakeClient();
+    await makeManage(client).alterJob(1001, { nextStart: new Date("2026-06-15T12:00:00.000Z") });
+    expect(calls[0]!.sql).toContain("next_start => $1");
+    expect(calls[0]!.params).toEqual(["2026-06-15T12:00:00.000Z"]);
+    await expect(makeManage(client).alterJob(1001, { nextStart: new Date("nope") })).rejects.toThrow(/nextStart.*must be a valid Date/);
+  });
+
   it("resolves the cagg model to its @@map / @@schema view name", async () => {
     const { client, calls } = fakeClient();
     const viewByModel = new Map([["SensorHourly", { name: "sensor_hourly", schema: "metrics" }]]);
@@ -583,7 +593,7 @@ describe("makeManage job control", () => {
     expect(calls[0]!.sql).toBe(
       "SELECT alter_job(1000, schedule_interval => INTERVAL '6 hours', max_retries => 3, next_start => $1, config => $2::jsonb, if_exists => TRUE)",
     );
-    expect(calls[0]!.params).toEqual([next, '{"drop_after":"60 days"}']);
+    expect(calls[0]!.params).toEqual([next.toISOString(), '{"drop_after":"60 days"}']);
   });
 
   it("alterJob rejects an empty option set, a bad job id, a bad interval, and a bad maxRetries", async () => {

@@ -431,3 +431,62 @@ timeBucket({
 });
 
 export {};
+
+// --- issue #163: Decimal and BigInt columns are numeric aggregate targets ---
+// The structural shape of Prisma.Decimal, so this file needs no Prisma import.
+interface DecimalValue {
+  toFixed(): string;
+  toNumber(): number;
+}
+interface PricedRow {
+  time: Date;
+  deviceId: number;
+  price: DecimalValue;
+  volume: bigint;
+  label: string;
+}
+declare function pricedBucket<const A extends TimeBucketArgs<PricedRow, Where>>(args: A): Array<TimeBucketRow<PricedRow, A>>;
+
+const priced = pricedBucket({
+  bucket: "1 hour",
+  range: { start, end },
+  aggregate: {
+    total: { sum: "price" }, // Decimal source, default output is number (cast to double precision)
+    exact: { sum: "price", as: "string" }, // exact decimal text
+    vol: { sum: "volume", as: "bigint" }, // BigInt source stays exact
+    avgPrice: { avg: "price" },
+    stats: { stats: "price" },
+    top: { max: "price" },
+  },
+});
+type PricedResult = (typeof priced)[number];
+type _pricedTotal = Expect<Equal<PricedResult["total"], number>>;
+type _pricedExact = Expect<Equal<PricedResult["exact"], string>>;
+type _pricedVol = Expect<Equal<PricedResult["vol"], bigint>>;
+type _pricedAvg = Expect<Equal<PricedResult["avgPrice"], number>>;
+
+pricedBucket({
+  bucket: "1 hour",
+  range: { start, end },
+  // @ts-expect-error - a string column is still not a numeric aggregate target
+  aggregate: { x: { sum: "label" } },
+});
+
+// --- issue #163: the Interval type rejects the shapes the runtime rejects that it can see ---
+timeBucket({
+  // @ts-expect-error - a negative amount is not an Interval
+  bucket: "-1 hour",
+  range: { start, end },
+  aggregate: { n: { count: "label" } },
+});
+timeBucket({
+  // @ts-expect-error - an amount must start with a digit
+  bucket: ".5 hours",
+  range: { start, end },
+  aggregate: { n: { count: "label" } },
+});
+timeBucket({
+  bucket: "1.5 hours", // a decimal amount is fine
+  range: { start, end },
+  aggregate: { n: { count: "label" } },
+});

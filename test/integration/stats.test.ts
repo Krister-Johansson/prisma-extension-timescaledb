@@ -62,4 +62,26 @@ describe.skipIf(!DOCKER_OK)("timeBucket stats_agg / 1-D summary (real TimescaleD
     expect(typeof s.kurtosis).toBe("number");
     expect(Number.isFinite(s.kurtosis)).toBe(true);
   });
+
+  // Issue #163: Postgres serialises a float8 NaN through jsonb_build_object as the JSON string
+  // "NaN", so a one-sample bucket used to hand back strings in fields typed number.
+  it("a one-sample bucket yields NaN numbers, never the string \"NaN\"", async () => {
+    await prisma.sensorReading.createMany({
+      data: [{ deviceId: 2, time: new Date("2026-06-15T00:10:00Z"), temperature: 42 }],
+    });
+    const rows = await prisma.sensorReading.timeBucket({
+      bucket: "1 hour",
+      range,
+      groupBy: ["deviceId"],
+      aggregate: { temp: { stats: "temperature" } },
+      orderBy: { deviceId: "asc" },
+    });
+    const lone = rows.find((r: { deviceId: number }) => r.deviceId === 2)!.temp;
+    expect(lone.numVals).toBe(1);
+    expect(lone.average).toBe(42);
+    expect(typeof lone.stddev).toBe("number");
+    expect(Number.isNaN(lone.stddev)).toBe(true);
+    expect(Number.isNaN(lone.skewness)).toBe(true);
+    expect(Number.isNaN(lone.kurtosis)).toBe(true);
+  });
 });

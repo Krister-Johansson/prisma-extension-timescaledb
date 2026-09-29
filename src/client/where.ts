@@ -347,9 +347,55 @@ function likeClause(
   return `${col} ${operator} ${ctx.push(pattern)} ESCAPE '\\'`;
 }
 
-/** True for the JS values bindable as a single SQL scalar parameter (Date/string/number/boolean/bigint). */
+/**
+ * A `Prisma.Decimal` (decimal.js) without importing Prisma's runtime: the shape every decimal.js
+ * instance has and no filter object ever has. Prisma types a Decimal column's filter value as
+ * `Decimal | string | number`, so the object form must bind, not fall through to the operator
+ * map and fail with `unsupported where operator "constructor"`.
+ */
+export interface DecimalLike {
+  toFixed(): string;
+  toNumber(): number;
+}
+export function isDecimalLike(v: unknown): v is DecimalLike {
+  return (
+    typeof v === "object" &&
+    v !== null &&
+    !(v instanceof Date) &&
+    typeof (v as Partial<DecimalLike>).toFixed === "function" &&
+    typeof (v as Partial<DecimalLike>).toNumber === "function"
+  );
+}
+
+/** True for the JS values bindable as a single SQL scalar parameter: Date, string, number,
+ * boolean, bigint, a Decimal, or bytes (Prisma 7 hands `Bytes` columns out as Uint8Array). */
 function isScalar(v: unknown): boolean {
-  return v instanceof Date || typeof v === "string" || typeof v === "number" || typeof v === "boolean" || typeof v === "bigint";
+  return (
+    v instanceof Date ||
+    typeof v === "string" ||
+    typeof v === "number" ||
+    typeof v === "boolean" ||
+    typeof v === "bigint" ||
+    v instanceof Uint8Array ||
+    isDecimalLike(v)
+  );
+}
+
+/**
+ * The form a scalar is bound in. A Date goes as its ISO string with an explicit `Z`: the pg
+ * adapter formats a Date as a zone-less UTC wall clock, which Postgres reads in the SESSION time
+ * zone when the column is timestamptz, so under `TimeZone = 'Europe/Stockholm'` every bound
+ * Date landed two hours off (issue #163). A string passes through the adapter untouched, and
+ * Postgres parses the `Z`; on a plain `timestamp` column the zone is ignored, which is the same
+ * UTC wall clock as before. A Decimal binds as its exact decimal text (toFixed, no exponent).
+ */
+export function bindable(v: unknown): unknown {
+  if (v instanceof Date) {
+    if (Number.isNaN(v.getTime())) throw new Error("timeBucket: an Invalid Date cannot be bound as a parameter.");
+    return v.toISOString();
+  }
+  if (isDecimalLike(v)) return v.toFixed();
+  return v;
 }
 
 /** Assert a value is a non-null scalar (for operators that require one), or throw a clear error. */

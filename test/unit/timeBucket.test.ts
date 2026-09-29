@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildTimeBucketQuery, type TimeBucketRuntimeArgs } from "../../src/client/timeBucket.js";
+import { buildTimeBucketQuery, jsonNumbers, type TimeBucketRuntimeArgs } from "../../src/client/timeBucket.js";
 import type { RelationConfig } from "../../src/core/types.js";
 
 const range = { start: new Date("2026-06-15T00:00:00Z"), end: new Date("2026-06-16T00:00:00Z") };
@@ -18,7 +18,7 @@ describe("buildTimeBucketQuery", () => {
     expect(sql).toContain(`FROM "SensorReading"`);
     expect(sql).toContain(`GROUP BY time_bucket($1, "time"), "deviceId"`);
     expect(sql).not.toContain("::regclass");
-    expect(params).toEqual(["1 hour", range.start, range.end]);
+    expect(params).toEqual(["1 hour", range.start.toISOString(), range.end.toISOString()]);
   });
 
   it("casts sum/avg to double precision (integer-column aggregates return JS numbers)", () => {
@@ -71,13 +71,13 @@ describe("buildTimeBucketQuery", () => {
   it("appends equality filters as bound params", () => {
     const { sql, params } = buildTimeBucketQuery("SensorReading", "time", { ...base, where: { deviceId: 1 } });
     expect(sql).toContain(`AND ("deviceId" = $4)`);
-    expect(params).toEqual(["1 hour", range.start, range.end, 1]);
+    expect(params).toEqual(["1 hour", range.start.toISOString(), range.end.toISOString(), 1]);
   });
 
   it("skips undefined where values instead of binding them as NULL", () => {
     const { sql, params } = buildTimeBucketQuery("SensorReading", "time", { ...base, where: { deviceId: undefined } });
     expect(sql).not.toContain("deviceId");
-    expect(params).toEqual(["1 hour", range.start, range.end]);
+    expect(params).toEqual(["1 hour", range.start.toISOString(), range.end.toISOString()]);
   });
 
   it("supports comparison operators in where (parameterized)", () => {
@@ -86,7 +86,7 @@ describe("buildTimeBucketQuery", () => {
       where: { deviceId: { in: [1, 2] }, temperature: { gte: 20 } },
     });
     expect(sql).toContain(`AND ("deviceId" IN ($4, $5) AND "temperature" >= $6)`);
-    expect(params).toEqual(["1 hour", range.start, range.end, 1, 2, 20]);
+    expect(params).toEqual(["1 hour", range.start.toISOString(), range.end.toISOString(), 1, 2, 20]);
   });
 
   it("throws on an unsupported where operator", () => {
@@ -141,7 +141,7 @@ describe("buildTimeBucketQuery", () => {
     expect(sql).toContain(`avg("temperature")::double precision AS "avgTemp"`); // unmapped column = identity
     expect(sql).toContain(`AND ("device_id" = $4)`); // where key resolved to DB column
     expect(sql).toContain(`GROUP BY time_bucket($1, "ts"), "device_id"`); // group by the source expression
-    expect(params).toEqual(["1 hour", range.start, range.end, 1]);
+    expect(params).toEqual(["1 hour", range.start.toISOString(), range.end.toISOString(), 1]);
   });
 
   it("schema-qualifies the table under multiSchema (@@schema)", () => {
@@ -183,7 +183,7 @@ describe("buildTimeBucketQuery", () => {
     expect(sql).toContain(`time_bucket_gapfill($1, "time") AS "bucket"`);
     expect(sql).not.toMatch(/time_bucket\(\$1/); // not the plain (non-gapfill) form
     expect(sql).toContain(`WHERE "time" >= $2 AND "time" < $3`);
-    expect(params).toEqual(["1 hour", range.start, range.end]);
+    expect(params).toEqual(["1 hour", range.start.toISOString(), range.end.toISOString()]);
   });
 
   it("fill locf / interpolate wrap the aggregate; an unfilled aggregate stays plain", () => {
@@ -595,5 +595,72 @@ describe("buildTimeBucketQuery: schema-qualified function names", () => {
     const sql = buildTimeBucketQuery("SensorReading", "time", { bucket: "1 hour", range, aggregate: { a: { avg: "temperature" } } }).sql;
     expect(sql).toContain("time_bucket($1, \"time\")");
     expect(sql).not.toContain('".time_bucket');
+  });
+});
+
+// Issue #163: the pg adapter formats a bound Date as a zone-less UTC wall clock, which Postgres
+// reads in the session time zone on a timestamptz column. Every Date now binds as an ISO string
+// with an explicit Z, and Decimal filter values bind as exact decimal text.
+describe("buildTimeBucketQuery parameter binding (issue #163)", () => {
+  const range = { start: new Date("2026-06-15T00:00:00.000Z"), end: new Date("2026-06-16T00:00:00.000Z") };
+  const base = { bucket: "1 hour" as const, range, aggregate: { n: { count: "deviceId" } } };
+
+  it("binds the range and every Date in where as ISO strings with a Z", () => {
+    const since = new Date("2026-06-15T12:00:00.000Z");
+    const { params } = buildTimeBucketQuery("SensorReading", "time", { ...base, where: { time: { gte: since }, deviceId: 1 } });
+    expect(params).toEqual(["1 hour", "2026-06-15T00:00:00.000Z", "2026-06-16T00:00:00.000Z", "2026-06-15T12:00:00.000Z", 1]);
+    expect(params.some((p) => p instanceof Date)).toBe(false);
+  });
+
+  it("rejects an Invalid Date in where before it reaches the adapter", () => {
+    expect(() =>
+      buildTimeBucketQuery("SensorReading", "time", { ...base, where: { time: { gte: new Date("nope") } } }),
+    ).toThrow(/Invalid Date cannot be bound/);
+  });
+
+  it("binds a Decimal as its exact decimal text, in shorthand, operators and lists", () => {
+    // The shape of Prisma.Decimal (decimal.js) without depending on it.
+    const decimal = (text: string) => ({ toFixed: () => text, toNumber: () => Number(text) });
+    const { sql, params } = buildTimeBucketQuery("SensorReading", "time", {
+      ...base,
+      where: { price: decimal("1.50"), cost: { gte: decimal("0.25") }, tier: { in: [decimal("1"), decimal("2")] } },
+    });
+    expect(sql).toContain(`"price" = $4`);
+    expect(sql).toContain(`"cost" >= $5`);
+    expect(sql).toContain(`"tier" IN ($6, $7)`);
+    expect(params.slice(3)).toEqual(["1.50", "0.25", "1", "2"]);
+  });
+
+  it("binds bytes as they are", () => {
+    const bytes = new Uint8Array([1, 2, 3]);
+    const { sql, params } = buildTimeBucketQuery("SensorReading", "time", { ...base, where: { payload: bytes } });
+    expect(sql).toContain(`"payload" = $4`);
+    expect(params[3]).toBe(bytes);
+  });
+
+  it("names the jsonb result columns so their NaN strings can be restored", () => {
+    const q = buildTimeBucketQuery("SensorReading", "time", {
+      ...base,
+      aggregate: { s: { stats: "temperature" }, c: { candlestick: "temperature", volume: "deviceId" }, n: { count: "deviceId" } },
+    });
+    expect(q.jsonColumns).toEqual(["s", "c"]);
+    expect(buildTimeBucketQuery("SensorReading", "time", base).jsonColumns).toEqual([]);
+  });
+});
+
+describe("jsonNumbers (issue #163)", () => {
+  it("turns the JSON strings Postgres uses for NaN and the infinities back into numbers", () => {
+    const rows = [
+      { bucket: "b1", s: { average: 1, stddev: "NaN", skewness: "NaN", kurtosis: "-Infinity", numVals: 1 }, c: { vwap: "Infinity", open: 2 }, n: 1 },
+      { bucket: "b2", s: null, c: { vwap: 3 }, n: 0 },
+    ];
+    const out = jsonNumbers(rows, ["s", "c"]);
+    expect(out).toBe(rows); // in place
+    expect(out[0]!.s).toEqual({ average: 1, stddev: NaN, skewness: NaN, kurtosis: -Infinity, numVals: 1 });
+    expect(out[0]!.c).toEqual({ vwap: Infinity, open: 2 });
+    expect(out[1]!.s).toBeNull();
+    // Other columns and ordinary strings are left alone.
+    expect(jsonNumbers([{ s: { label: "NaN?" }, t: "NaN" }], ["s"])).toEqual([{ s: { label: "NaN?" }, t: "NaN" }]);
+    expect(jsonNumbers("not rows" as unknown, ["s"])).toBe("not rows");
   });
 });

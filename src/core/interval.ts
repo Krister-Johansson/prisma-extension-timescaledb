@@ -33,11 +33,17 @@ const UNITS = [
 
 type Unit = (typeof UNITS)[number];
 
+type Digit = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9";
+
 /**
  * A Postgres/TimescaleDB interval literal, branded at the type level to catch typos at
  * compile time, e.g. `"1 hour"`, `"7 days"`, `"30 minutes"`, `"2 years"`.
+ *
+ * The type is a typo guard, not the authority: it requires a digit-leading number and a known
+ * unit, so `"-1 hour"` and `".5 hours"` fail to compile, but `"0 days"` or `"1e3 hours"` still
+ * do, and `isInterval` / `assertInterval` reject those at runtime.
  */
-export type Interval = `${number} ${Unit}`;
+export type Interval = `${number} ${Unit}` & `${Digit}${string}`;
 
 // `<digits>[.<digits>] <unit>` — exactly one space, a non-negative amount, a known unit
 // (mirrors the `${number} ${Unit}` template type).

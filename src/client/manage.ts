@@ -845,7 +845,13 @@ export function makeManage<HModels extends string = string, CModels extends stri
       }
       if (options.scheduled !== undefined) args.push(`scheduled => ${options.scheduled ? "TRUE" : "FALSE"}`);
       if (options.nextStart !== undefined) {
-        params.push(options.nextStart);
+        // Bound as an ISO string with an explicit zone: the pg adapter formats a Date as a
+        // zone-less UTC wall clock, which alter_job's timestamptz parameter would read in the
+        // session time zone (issue #163). Invalid Date would throw a bare RangeError here.
+        if (!(options.nextStart instanceof Date) || Number.isNaN(options.nextStart.getTime())) {
+          throw new Error("alterJob: `nextStart` must be a valid Date.");
+        }
+        params.push(options.nextStart.toISOString());
         args.push(`next_start => $${params.length}`);
       }
       if (options.config !== undefined) {
