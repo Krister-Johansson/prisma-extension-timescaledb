@@ -751,22 +751,90 @@ describe("emitMigrations state-file gaps (issue #160)", () => {
     expect(healed.nextState?.sequence).toBe(4);
   });
 
-  it("a missing latest folder and a schema change land in one version, removals included", async () => {
+  // The state file records the state the latest migration diffed against, so the lost
+  // migration can be rebuilt exactly. A first run has nothing before it.
+  it("records the state the latest migration diffed against", async () => {
     const schema = await loadSchema();
     const first = emitMigrations(schema);
+    expect(first.nextState?.previous).toBeUndefined();
     const withoutCagg: typeof schema = { ...schema, continuousAggregates: [] };
-    const healed = emitMigrations(withoutCagg, first.nextState, 0, true, false);
-    expect(Object.keys(healed.files)).toEqual([V2]);
-    expect(healed.files[V2]).toContain(`DROP MATERIALIZED VIEW IF EXISTS "SensorHourly"`);
-    expect(healed.files[V2]).toContain(`'"SensorReading"'`);
+    const second = emitMigrations(withoutCagg, first.nextState, 1, true);
+    expect(second.nextState?.previous).toEqual(first.nextState?.state);
+    expect(second.nextState?.state.continuousAggregates).toEqual([]);
+    // Regenerating an unchanged schema stays a no-op with the field present.
+    expect(emitMigrations(withoutCagg, second.nextState, 2, true)).toEqual({ files: {} });
   });
 
-  // A lost migration that held nothing but removals cannot be rebuilt: the state before it is
-  // not recorded. An empty migration would only record a version that does nothing.
-  it("an empty recorded state with its folder missing emits nothing", () => {
+  // v1 creates cagg A; an undeployed v2 replaces its definition with B and is then deleted. The
+  // saved state says B, so a diff against it would emit no drop, and the guarded create would
+  // leave A in place on a replay. The rebuilt v3 must carry v2's drop.
+  it("a lost migration that replaced a cagg definition is rebuilt with its drop", async () => {
+    const schema = await loadSchema();
+    const first = emitMigrations(schema);
+    const replaced: typeof schema = {
+      ...schema,
+      continuousAggregates: schema.continuousAggregates.map((c) => ({ ...c, bucket: "2 hours" as typeof c.bucket })),
+    };
+    const second = emitMigrations(replaced, first.nextState, 1, true);
+    expect(second.files[V2]).toContain(`DROP MATERIALIZED VIEW IF EXISTS "SensorHourly"`);
+    const healed = emitMigrations(replaced, second.nextState, 1, true, false);
+    const v3 = `${objectsMigrationName(3)}/migration.sql`;
+    expect(Object.keys(healed.files)).toEqual([v3]);
+    expect(healed.files[v3]).toContain(`DROP MATERIALIZED VIEW IF EXISTS "SensorHourly"`);
+    expect(healed.files[v3]).toContain(`time_bucket('2 hours'`);
+    // The rebuilt version diffed against the same base, so the record carries forward.
+    expect(healed.nextState?.previous).toEqual(second.nextState?.previous);
+    expect(healed.nextState?.sequence).toBe(3);
+  });
+
+  it("a lost migration is rebuilt together with any schema change made since", async () => {
+    const schema = await loadSchema();
+    const first = emitMigrations(schema);
+    const replaced: typeof schema = {
+      ...schema,
+      continuousAggregates: schema.continuousAggregates.map((c) => ({ ...c, bucket: "2 hours" as typeof c.bucket })),
+    };
+    const second = emitMigrations(replaced, first.nextState, 1, true);
+    // v2 is lost, and the cagg has been removed from the schema since.
+    const withoutCagg: typeof schema = { ...schema, continuousAggregates: [] };
+    const healed = emitMigrations(withoutCagg, second.nextState, 1, true, false);
+    const v3 = healed.files[`${objectsMigrationName(3)}/migration.sql`]!;
+    expect(v3).toContain(`DROP MATERIALIZED VIEW IF EXISTS "SensorHourly"`);
+    expect(v3).not.toContain("CREATE MATERIALIZED VIEW");
+    expect(healed.nextState?.state.continuousAggregates).toEqual([]);
+  });
+
+  // A state file written before the `previous` field existed cannot rebuild a lost migration
+  // beyond v0001. A healed version without its removals would leave old objects in place, so
+  // the generator stops and says how to recover.
+  it("throws for a lost migration beyond v0001 when the state file does not record the previous state", async () => {
+    const schema = await loadSchema();
+    const previous = { version: 1 as const, sequence: 2, state: emitMigrations(schema).nextState!.state };
+    expect(() => emitMigrations(schema, previous, 1, true, false)).toThrow(/v0002 is missing/);
+    expect(() => emitMigrations(schema, previous, 1, true, false)).toThrow(/Restore the folder/);
+    // The same file with its folder present is business as usual.
+    expect(emitMigrations(schema, previous, 2, true, true)).toEqual({ files: {} });
+  });
+
+  // Nothing before it and nothing in it: an empty migration would only record a version that
+  // does nothing.
+  it("an empty state whose lost migration also had nothing before it emits nothing", () => {
     const bare = { hypertables: [], continuousAggregates: [], relationsByModel: {} };
-    const previous = { version: 1 as const, sequence: 2, state: { hypertables: [], continuousAggregates: [] } };
+    const empty = { hypertables: [], continuousAggregates: [] };
+    const previous = { version: 1 as const, sequence: 2, state: empty, previous: empty };
     expect(emitMigrations(bare, previous, 1, true, false)).toEqual({ files: {} });
+  });
+
+  it("parseGeneratorState accepts a well-formed previous state and rejects a malformed one", async () => {
+    const schema = await loadSchema();
+    const good = emitMigrations(schema).nextState!;
+    const withPrevious = { ...good, previous: good.state };
+    expect(parseGeneratorState(JSON.stringify(withPrevious))).toEqual(withPrevious);
+    expect(parseGeneratorState(JSON.stringify({ ...good, previous: null }))).toBeUndefined();
+    expect(parseGeneratorState(JSON.stringify({ ...good, previous: { hypertables: [] } }))).toBeUndefined();
+    expect(
+      parseGeneratorState(JSON.stringify({ ...good, previous: { hypertables: [{ table: "T" }], continuousAggregates: [] } })),
+    ).toBeUndefined();
   });
 
   it("the latest-folder flag means nothing without a previous state", async () => {

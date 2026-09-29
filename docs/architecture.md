@@ -73,8 +73,9 @@ test/
    since TimescaleDB never updates an existing policy in place. The previous state is persisted in
    `migrations/.prisma-extension-timescaledb.json`; an unchanged schema emits
    nothing, unless the folder for the recorded version is missing, in which
-   case the full state is emitted again as the next version. A state file from
-   a newer release aborts the run instead of being rewritten. Within a version, hypertable conversions come before continuous
+   case that migration is rebuilt as the next version from the previous state
+   the file also records. A state file from a newer release aborts the run
+   instead of being rewritten. Within a version, hypertable conversions come before continuous
    aggregates, which need their source to already be a hypertable.
    `emit-types.ts` writes the typed registry the client extension imports.
 3. **Runtime.** The client extension reads the registry (or a manual config)

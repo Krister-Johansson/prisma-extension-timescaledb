@@ -135,10 +135,10 @@ one, and the next `migrate deploy` (or `migrate dev`) applies it. Regenerating
 an unchanged schema writes nothing. The generator keeps its state in
 `migrations/.prisma-extension-timescaledb.json`; commit that file with your
 migrations. If you delete the newest generated objects migration before
-deploying it, the next `prisma generate` writes the same state again under the
-next version number. A state file written by a newer release of this package
-stops the generator with a message to upgrade, so it is never rewritten in an
-older format.
+deploying it, the next `prisma generate` rebuilds it under the next version
+number from the previous state recorded in that file. A state file written by
+a newer release of this package stops the generator with a message to upgrade,
+so it is never rewritten in an older format.
 
 Indexes on a hypertable come from your Prisma schema and nowhere else. The
 generated conversion passes `create_default_indexes => FALSE`, because the

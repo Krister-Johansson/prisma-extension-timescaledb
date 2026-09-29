@@ -59,6 +59,10 @@ export interface GeneratorState {
   version: typeof STATE_VERSION;
   sequence: number;
   state: ObjectsState;
+  /** The state the latest objects migration diffed against, so that migration can be rebuilt
+   * if its folder disappears. Absent on a first run (nothing came before v0001) and in files
+   * written before this field existed. */
+  previous?: ObjectsState;
 }
 
 /**
@@ -334,36 +338,43 @@ export function parseGeneratorState(raw: string | undefined): GeneratorState | u
   if (typeof version === "number" && Number.isInteger(version) && version > STATE_VERSION) {
     throw new NewerStateFileError(version);
   }
-  try {
-    const parsed = json as Partial<GeneratorState>;
-    if (
-      parsed.version === STATE_VERSION &&
-      Number.isInteger(parsed.sequence) &&
-      (parsed.sequence as number) >= 1 &&
-      parsed.state !== null &&
-      typeof parsed.state === "object" &&
-      Array.isArray(parsed.state?.hypertables) &&
-      Array.isArray(parsed.state?.continuousAggregates) &&
-      // Entry-level shape: the removal diff reads these fields directly, so a null or
-      // truncated entry must fall back to full re-assert, not throw mid-diff.
-      parsed.state.hypertables.every(
-        (h) => h !== null && typeof h === "object" && typeof h.table === "string" && typeof h.column === "string",
-      ) &&
-      parsed.state.continuousAggregates.every(
-        (c) =>
-          c !== null &&
-          typeof c === "object" &&
-          typeof c.name === "string" &&
-          typeof c.source === "string" &&
-          Array.isArray(c.aggregates),
-      )
-    ) {
-      return parsed as GeneratorState;
-    }
-  } catch {
-    // fall through
+  const parsed = json as Partial<GeneratorState>;
+  if (
+    parsed.version === STATE_VERSION &&
+    Number.isInteger(parsed.sequence) &&
+    (parsed.sequence as number) >= 1 &&
+    isObjectsState(parsed.state) &&
+    (parsed.previous === undefined || isObjectsState(parsed.previous))
+  ) {
+    return parsed as GeneratorState;
   }
   return undefined;
+}
+
+/** Entry-level shape check: the removal diff reads these fields directly, so a null or
+ * truncated entry must fall back to full re-assert, not throw mid-diff. */
+function isObjectsState(value: unknown): value is ObjectsState {
+  if (value === null || typeof value !== "object") return false;
+  const { hypertables, continuousAggregates } = value as Partial<ObjectsState>;
+  return (
+    Array.isArray(hypertables) &&
+    Array.isArray(continuousAggregates) &&
+    hypertables.every(
+      (h: unknown) =>
+        h !== null &&
+        typeof h === "object" &&
+        typeof (h as Partial<HypertableConfig>).table === "string" &&
+        typeof (h as Partial<HypertableConfig>).column === "string",
+    ) &&
+    continuousAggregates.every(
+      (c: unknown) =>
+        c !== null &&
+        typeof c === "object" &&
+        typeof (c as Partial<CaggConfig>).name === "string" &&
+        typeof (c as Partial<CaggConfig>).source === "string" &&
+        Array.isArray((c as Partial<CaggConfig>).aggregates),
+    )
+  );
 }
 
 /** The highest existing `..._v000N` sequence among migration folder names (0 when none). */
@@ -400,9 +411,11 @@ export function maxObjectsSequence(folderNames: readonly string[]): number {
  *
  * `latestObjectsMigrationExists` says whether the folder for `previous.sequence` is still on
  * disk (ignored without a previous state). When it is gone, the recorded state has no
- * migration behind it, so the full state is re-emitted as the next version even if the schema
- * is unchanged. Removals that lived only in the lost migration cannot be rebuilt, because the
- * state before it is not recorded; the diff runs against the recorded state as usual.
+ * migration behind it, so the next version rebuilds it: the diff runs from the state the lost
+ * migration itself diffed against (`previous.previous`), which brings back its removals and
+ * drop-and-recreates, and covers any schema change made since. A state file that predates the
+ * `previous` field cannot rebuild a lost migration beyond v0001 and throws instead, because a
+ * healed version without those removals would leave old objects in place silently.
  */
 export function emitMigrations(
   schema: TimescaleSchema,
@@ -414,9 +427,24 @@ export function emitMigrations(
   const state = canonicalState(schema);
   const empty = state.hypertables.length === 0 && state.continuousAggregates.length === 0;
 
+  // The state file names the latest objects migration; when that folder is gone, the recorded
+  // state has nothing behind it (an undeployed migration a developer deleted to redo it, or a
+  // folder lost in a merge). Decided before the unchanged-state return below: an unchanged
+  // schema is exactly the case that would otherwise emit nothing forever.
+  const latestMissing = previous !== undefined && !latestObjectsMigrationExists;
+  if (latestMissing && previous.sequence > 1 && previous.previous === undefined) {
+    throw new Error(
+      `${objectsMigrationName(previous.sequence)} is missing and the state file does not record the state before it, so the migration cannot be rebuilt. Restore the folder from version control, or delete the state file to re-assert the full state as a new version (objects that migration removed are not removed again).`,
+    );
+  }
+
   // Canonicalize the persisted state too: a pre-versioning state file may carry the
   // registry-only fields the canonical form strips, and that must not read as a change.
-  const prevState = previous ? canonicalObjects(previous.state) : undefined;
+  // While healing, the base is the state the lost migration diffed against, so the rebuilt
+  // version carries the same removals. For a lost v0001 nothing came before it.
+  const prevState = latestMissing
+    ? previous.previous && canonicalObjects(previous.previous)
+    : previous && canonicalObjects(previous.state);
 
   // The extension migration is fixed-name, and once it exists on disk it is applied history:
   // rewriting it would change its checksum and make `migrate dev` reject it as "modified after
@@ -436,11 +464,6 @@ ${createExtensionSql().up}
 `;
   }
 
-  // Decided before the unchanged-state return below: an unchanged schema is exactly the case
-  // that would otherwise emit nothing forever once the latest folder is gone (an undeployed
-  // migration a developer deleted to redo it, or a folder lost in a merge).
-  const latestMissing = previous !== undefined && !latestObjectsMigrationExists;
-
   const noHistory = !previous && maxExistingSequence === 0;
   if (noHistory && empty) return { files };
   if (prevState && !latestMissing && stableStringify(prevState) === stableStringify(state)) return { files };
@@ -454,9 +477,8 @@ ${createExtensionSql().up}
   const creates = renderCreates(state);
   const removals = prevState ? renderRemovals(prevState, state) : [];
   const sections = [...removals, ...creates];
-  // Only reachable while healing an empty recorded state: the lost migration held nothing but
-  // removals that cannot be rebuilt, and an empty migration would just record a version that
-  // does nothing.
+  // Only reachable while healing: an empty state whose lost migration also had nothing before
+  // it. An empty migration would just record a version that does nothing.
   if (sections.length === 0) return { files };
 
   files[`${objectsMigrationName(sequence)}/migration.sql`] = `${GENERATED_BANNER}
@@ -468,5 +490,8 @@ ${createExtensionSql().up}
 ${sections.join("\n\n")}
 `;
 
-  return { files, nextState: { version: STATE_VERSION, sequence, state } };
+  return {
+    files,
+    nextState: { version: STATE_VERSION, sequence, state, ...(prevState ? { previous: prevState } : {}) },
+  };
 }
