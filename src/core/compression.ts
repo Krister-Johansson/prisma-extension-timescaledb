@@ -62,6 +62,8 @@ export function columnstoreReloptions(
   segmentBy?: readonly string[],
   orderBy?: readonly CompressionOrderBy[],
 ): string[] {
+  const problem = compressionColumnsProblem(segmentBy, orderBy);
+  if (problem) throw new Error(`Invalid compression settings: ${problem}`);
   const opts = ["timescaledb.enable_columnstore = true"];
   if (segmentBy && segmentBy.length > 0) {
     for (const col of segmentBy) assertSafeIdent(col, "compression segmentBy column");
@@ -71,6 +73,32 @@ export function columnstoreReloptions(
     opts.push(`timescaledb.orderby = ${quoteLiteral(orderBy.map(renderOrderByTerm).join(", "))}`);
   }
   return opts;
+}
+
+/**
+ * The cross-column rules TimescaleDB enforces at ALTER TABLE time, checked up front so they name
+ * the annotation instead of failing the whole objects migration: no column twice in segmentby,
+ * none twice in orderby, and none in both ("cannot use column for both ordering and segmenting").
+ * Returns the problem as a sentence, or undefined when the settings are fine.
+ */
+export function compressionColumnsProblem(
+  segmentBy?: readonly string[],
+  orderBy?: readonly CompressionOrderBy[],
+): string | undefined {
+  const segments = new Set<string>();
+  for (const col of segmentBy ?? []) {
+    if (segments.has(col)) return `segmentBy lists column "${col}" more than once.`;
+    segments.add(col);
+  }
+  const orders = new Set<string>();
+  for (const o of orderBy ?? []) {
+    if (orders.has(o.column)) return `orderBy lists column "${o.column}" more than once.`;
+    orders.add(o.column);
+    if (segments.has(o.column)) {
+      return `column "${o.column}" is in both segmentBy and orderBy; TimescaleDB cannot use a column for both ordering and segmenting.`;
+    }
+  }
+  return undefined;
 }
 
 /**

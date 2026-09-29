@@ -462,11 +462,12 @@ model SensorReading {
   it("supports multi-column segmentBy / orderBy (with NULLS) and maps @map names", async () => {
     const result = await extract(`
 /// @timescale.hypertable(column: "time", chunkInterval: "1 day")
-/// @timescale.compression(after: "7 days", segmentBy: "deviceId, siteId", orderBy: "time DESC, deviceId ASC NULLS LAST")
+/// @timescale.compression(after: "7 days", segmentBy: "deviceId, siteId", orderBy: "time DESC, batch ASC NULLS LAST")
 model SensorReading {
   time     DateTime @map("ts")
   deviceId Int      @map("device_id")
   siteId   Int
+  batch    Int      @map("batch_no")
   @@id([deviceId, time])
   @@map("sensor_readings")
 }
@@ -476,7 +477,7 @@ model SensorReading {
       segmentBy: ["device_id", "siteId"],
       orderBy: [
         { column: "ts", direction: "desc" },
-        { column: "device_id", direction: "asc", nulls: "last" },
+        { column: "batch_no", direction: "asc", nulls: "last" },
       ],
     });
   });
@@ -1335,5 +1336,114 @@ model Category {
       outerColumn: "A",
       relatedColumn: "B",
     });
+  });
+});
+
+// Issue #162: inputs that passed prisma generate and failed inside a DO block at migrate deploy,
+// where the error named neither the model nor the annotation.
+describe("extractTimescaleSchema inputs that used to fail only at migrate deploy (issue #162)", () => {
+  /** SOURCE with model-level annotations placed directly above its `model` line. */
+  const annotated = (...lines: string[]): string =>
+    SOURCE.replace("model SensorReading", `${lines.join("\n")}\nmodel SensorReading`);
+  const HYPERTABLE = `/// @timescale.hypertable(column: "time", chunkInterval: "1 day")`;
+  const cagg = (annotation: string, viewBody = `
+  bucket  DateTime /// @timescale.bucket
+  avgTemp Float    /// @timescale.aggregate(fn: "avg", column: "temperature")
+  @@unique([bucket])`): string => `
+${annotated(HYPERTABLE)}
+${annotation}
+view SensorHourly {${viewBody}
+}
+`;
+
+  it("rejects an inverted refresh window, naming the view", async () => {
+    await expect(
+      extract(cagg(`/// @timescale.continuousAggregate(source: "SensorReading", bucket: "1 hour", timeColumn: "time", refresh: { startOffset: "1 hour", endOffset: "1 day", scheduleInterval: "1 hour" })`)),
+    ).rejects.toThrow(/view "SensorHourly" refresh: refresh startOffset "1 hour" must be further in the past than endOffset "1 day"/);
+  });
+
+  it("rejects a refresh window narrower than two buckets", async () => {
+    await expect(
+      extract(cagg(`/// @timescale.continuousAggregate(source: "SensorReading", bucket: "1 day", timeColumn: "time", refresh: { startOffset: "1 day", endOffset: "1 hour", scheduleInterval: "1 hour" })`)),
+    ).rejects.toThrow(/must span at least two buckets of "1 day"/);
+    // Exactly two buckets is the smallest window TimescaleDB accepts.
+    const ok = await extract(cagg(`/// @timescale.continuousAggregate(source: "SensorReading", bucket: "1 day", timeColumn: "time", refresh: { startOffset: "3 days", endOffset: "1 day", scheduleInterval: "1 hour" })`));
+    expect(ok.continuousAggregates[0]?.refresh?.startOffset).toBe("3 days");
+  });
+
+  it("skips the window arithmetic when a value is month-based", async () => {
+    const ok = await extract(cagg(`/// @timescale.continuousAggregate(source: "SensorReading", bucket: "1 month", timeColumn: "time", refresh: { startOffset: "2 months", endOffset: "1 hour", scheduleInterval: "1 day" })`));
+    expect(ok.continuousAggregates[0]?.bucket).toBe("1 month");
+  });
+
+  it("rejects a fractional month bucket", async () => {
+    await expect(
+      extract(cagg(`/// @timescale.continuousAggregate(source: "SensorReading", bucket: "1.5 months", timeColumn: "time")`)),
+    ).rejects.toThrow(/view "SensorHourly": bucket "1.5 months" is not a whole number of months/);
+    // 1.5 years is 18 whole months, which time_bucket takes.
+    const ok = await extract(cagg(`/// @timescale.continuousAggregate(source: "SensorReading", bucket: "1.5 years", timeColumn: "time")`));
+    expect(ok.continuousAggregates[0]?.bucket).toBe("1.5 years");
+  });
+
+  it("rejects a column in both segmentBy and orderBy, and a duplicated segmentBy column", async () => {
+    const model = (compression: string): string => annotated(HYPERTABLE, compression);
+    await expect(extract(model(`/// @timescale.compression(after: "7 days", segmentBy: "deviceId", orderBy: "time DESC, deviceId")`))).rejects.toThrow(
+      /@timescale.compression on model "SensorReading": column "deviceId" is in both segmentBy and orderBy/,
+    );
+    await expect(extract(model(`/// @timescale.compression(after: "7 days", segmentBy: "deviceId, deviceId")`))).rejects.toThrow(
+      /segmentBy lists column "deviceId" more than once/,
+    );
+    await expect(extract(model(`/// @timescale.compression(after: "7 days", orderBy: "time DESC, time ASC")`))).rejects.toThrow(
+      /orderBy lists column "time" more than once/,
+    );
+  });
+
+  it("rejects a model-level annotation declared twice instead of taking the first", async () => {
+    await expect(
+      extract(annotated(HYPERTABLE, `/// @timescale.retention(dropAfter: "30 days")`, `/// @timescale.retention(dropAfter: "7 days")`)),
+    ).rejects.toThrow(/model "SensorReading": @timescale.retention is declared more than once/);
+  });
+
+  it("rejects a field-level annotation declared twice", async () => {
+    await expect(
+      extract(cagg(`/// @timescale.continuousAggregate(source: "SensorReading", bucket: "1 hour", timeColumn: "time")`, `
+  bucket  DateTime /// @timescale.bucket
+  avgTemp Float    /// @timescale.aggregate(fn: "avg", column: "temperature") @timescale.aggregate(fn: "max", column: "temperature")
+  @@unique([bucket])`)),
+    ).rejects.toThrow(/"SensorHourly.avgTemp": @timescale.aggregate is declared more than once/);
+  });
+
+  it("rejects a repeated argument key instead of taking the last", async () => {
+    await expect(
+      extract(annotated(`/// @timescale.hypertable(column: "deviceId", column: "time", chunkInterval: "1 day")`)),
+    ).rejects.toThrow(/Duplicate annotation argument "column"/);
+  });
+
+  it("rejects an @@map name that is not a plain identifier, naming the model", async () => {
+    await expect(
+      extract(`
+/// @timescale.hypertable(column: "time", chunkInterval: "1 day")
+model SensorReading {
+  time     DateTime
+  deviceId Int
+  @@id([deviceId, time])
+  @@map("sensor-readings")
+}`),
+    ).rejects.toThrow(/@timescale.hypertable on model "SensorReading": Invalid table name "sensor-readings"/);
+    await expect(
+      extract(`
+/// @timescale.hypertable(column: "time", chunkInterval: "1 day")
+model SensorReading {
+  time     DateTime @map("recorded at")
+  deviceId Int
+  @@id([deviceId, time])
+}`),
+    ).rejects.toThrow(/model "SensorReading": Invalid column "recorded at"/);
+    await expect(
+      extract(cagg(`/// @timescale.continuousAggregate(source: "SensorReading", bucket: "1 hour", timeColumn: "time")`, `
+  bucket  DateTime /// @timescale.bucket
+  avgTemp Float    @map("avg temp") /// @timescale.aggregate(fn: "avg", column: "temperature")
+  @@unique([bucket])`)),
+    ).rejects.toThrow(/view "SensorHourly": Invalid aggregate output column "avg temp"/);
   });
 });

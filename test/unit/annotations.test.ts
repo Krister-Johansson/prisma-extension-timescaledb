@@ -80,4 +80,15 @@ describe("parseAnnotations", () => {
   it("rejects trailing characters after an object value", () => {
     expect(() => parseAnnotations(`@timescale.x(refresh: { a: "1" }junk)`)).toThrow(/trailing characters after object/);
   });
+
+  // Issue #162: a repeated key let the last value win, so `column: "a", column: "time"` was
+  // silently the second one.
+  it("rejects a repeated argument key, at the top level and inside a nested object", () => {
+    expect(() => parseAnnotations('/// @timescale.hypertable(column: "a", column: "time")')).toThrow(
+      /Duplicate annotation argument "column"/,
+    );
+    expect(() =>
+      parseAnnotations('/// @timescale.continuousAggregate(refresh: { startOffset: "1 day", startOffset: "2 days" })'),
+    ).toThrow(/Duplicate annotation argument "startOffset"/);
+  });
 });

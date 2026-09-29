@@ -366,11 +366,11 @@ END $$;`);
       segmentBy: ["deviceId", "siteId"],
       orderBy: [
         { column: "time", direction: "desc" },
-        { column: "deviceId", direction: "asc", nulls: "last" },
+        { column: "batch", direction: "asc", nulls: "last" },
       ],
     });
     expect(q.up).toContain(`timescaledb.segmentby = '"deviceId", "siteId"'`);
-    expect(q.up).toContain(`timescaledb.orderby = '"time" DESC, "deviceId" ASC NULLS LAST'`);
+    expect(q.up).toContain(`timescaledb.orderby = '"time" DESC, "batch" ASC NULLS LAST'`);
   });
 
   it("omits segmentby / orderby when not given (columnstore defaults)", () => {
@@ -457,5 +457,52 @@ END $$;`);
     expect(() => createChunkSkippingSql({ table: "X", schema: "a-b", columns: ["x"] })).toThrow(/Invalid/);
     expect(() => createChunkSkippingSql({ table: "X", columns: ["a-b"] })).toThrow(/Invalid/);
     expect(() => createChunkSkippingSql({ table: "X", columns: [] })).toThrow(/at least one/);
+  });
+});
+
+// Issue #162: the builders are the last line of defence for the manual-config and runtime paths,
+// so the cross-value rules live in core and the generator only adds the model name.
+describe("builders cross-value validation (issue #162)", () => {
+  const cagg = (over: Partial<Parameters<typeof createContinuousAggregateSql>[0]>) =>
+    createContinuousAggregateSql({
+      name: "SensorHourly",
+      source: "SensorReading",
+      bucket: "1 hour",
+      timeColumn: "time",
+      bucketColumn: "bucket",
+      groupBy: [],
+      aggregates: [{ name: "avgTemp", fn: "avg", column: "temperature" }],
+      ...over,
+    });
+
+  it("rejects a refresh window that is inverted or narrower than two buckets", () => {
+    expect(() => cagg({ refresh: { startOffset: "1 hour", endOffset: "1 day", scheduleInterval: "1 hour" } })).toThrow(
+      /Continuous aggregate "SensorHourly": refresh startOffset "1 hour" must be further in the past than endOffset "1 day"/,
+    );
+    expect(() => cagg({ bucket: "1 day", refresh: { startOffset: "1 day", endOffset: "1 hour", scheduleInterval: "1 hour" } })).toThrow(
+      /must span at least two buckets of "1 day"/,
+    );
+    expect(() => cagg({ bucket: "1 day", refresh: { startOffset: "49 hours", endOffset: "1 hour", scheduleInterval: "1 hour" } })).not.toThrow();
+    // Calendar units skip the arithmetic.
+    expect(() => cagg({ refresh: { startOffset: "1 month", endOffset: "1 hour", scheduleInterval: "1 hour" } })).not.toThrow();
+  });
+
+  it("rejects a fractional month bucket and an aggregate named like its source", () => {
+    expect(() => cagg({ bucket: "1.5 months" })).toThrow(/bucket "1.5 months" is not a whole number of months/);
+    expect(() => cagg({ bucket: "1.5 years" })).not.toThrow();
+    expect(() => cagg({ name: "SensorReading" })).toThrow(/cannot be named like its own source relation/);
+    // The same name in another schema is a different relation.
+    expect(() => cagg({ name: "SensorReading", schema: "rollups" })).not.toThrow();
+  });
+
+  it("rejects a column in both segmentBy and orderBy, and duplicates within either", () => {
+    const policy = (segmentBy: string[], orderBy: { column: string }[]) =>
+      createCompressionPolicySql({ table: "T", after: "1 day", segmentBy, orderBy });
+    expect(() => policy(["deviceId"], [{ column: "deviceId" }])).toThrow(
+      /column "deviceId" is in both segmentBy and orderBy; TimescaleDB cannot use a column for both ordering and segmenting/,
+    );
+    expect(() => policy(["deviceId", "deviceId"], [])).toThrow(/segmentBy lists column "deviceId" more than once/);
+    expect(() => policy([], [{ column: "time" }, { column: "time" }])).toThrow(/orderBy lists column "time" more than once/);
+    expect(() => policy(["deviceId"], [{ column: "time" }])).not.toThrow();
   });
 });

@@ -132,6 +132,10 @@ function parseArgs(body: string): AnnotationArgs {
     if (!m || m[1] === undefined || m[2] === undefined) {
       throw new Error(`Malformed annotation argument: ${JSON.stringify(entry.trim())} (expected "key: value").`);
     }
+    // A repeated key used to let the last one win silently (`column: "a", column: "time"`).
+    if (Object.hasOwn(args, m[1])) {
+      throw new Error(`Duplicate annotation argument ${JSON.stringify(m[1])}: each key may be given once.`);
+    }
     args[m[1]] = parseValue(m[2]);
   }
   return args;
