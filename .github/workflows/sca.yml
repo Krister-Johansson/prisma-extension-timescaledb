@@ -5,6 +5,13 @@ name: SCA
 
 on:
   pull_request:
+  # Advisories are published between pull requests too. The weekly run and the run on every
+  # push to main mean a new advisory against the shipped tree is seen without waiting for a PR.
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
 
 permissions:
   contents: read
