@@ -115,18 +115,18 @@ view SensorHourly {
 }
 ```
 
+The example declares a continuous aggregate, and the `migrate dev` step below
+validates every migration against Prisma's shadow database. Before running it,
+point `shadowDatabaseUrl` at a TimescaleDB-capable database and turn its
+telemetry off, as described under [Shadow database](#shadow-database). Without
+that, `migrate dev` can fail intermittently with `P3016`, and the error message
+does not name the cause.
+
 ```bash
 npx prisma migrate dev --create-only --name init   # your normal CREATE TABLE
 npx prisma generate                                # emits the timescale migrations + registry
 npx prisma migrate deploy                          # applies everything, in the right order
 ```
-
-The example declares a continuous aggregate, and `migrate dev` validates every
-migration against Prisma's shadow database. Before the first run, point
-`shadowDatabaseUrl` at a TimescaleDB-capable database and turn its telemetry
-off, as described under [Shadow database](#shadow-database). Without that,
-`migrate dev` can fail intermittently with `P3016`, and the error message does
-not name the cause.
 
 The same three steps cover later schema changes: when the annotated objects
 change, `prisma generate` appends a new versioned migration
