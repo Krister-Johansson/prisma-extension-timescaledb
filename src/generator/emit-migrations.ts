@@ -60,9 +60,24 @@ export interface GeneratorState {
   sequence: number;
   state: ObjectsState;
   /** The state the latest objects migration diffed against, so that migration can be rebuilt
-   * if its folder disappears. Absent on a first run (nothing came before v0001) and in files
-   * written before this field existed. */
+   * if its folder disappears. Empty when nothing came before it (a first run, or a recovery
+   * from a lost state file). Absent only in files written before this field existed. */
   previous?: ObjectsState;
+}
+
+const EMPTY_STATE: ObjectsState = { hypertables: [], continuousAggregates: [] };
+
+/**
+ * Thrown by emitMigrations when the latest objects migration is missing and the state file
+ * predates the `previous` field, so the migration cannot be rebuilt. The caller adds the path.
+ */
+export class MissingMigrationError extends Error {
+  constructor(readonly migration: string) {
+    super(
+      `${migration} is missing and the state file does not record the state before it, so the migration cannot be rebuilt. Restore the folder from version control, or delete the state file to re-assert the full state as a new version (objects that migration removed are not removed again).`,
+    );
+    this.name = "MissingMigrationError";
+  }
 }
 
 /**
@@ -414,8 +429,9 @@ export function maxObjectsSequence(folderNames: readonly string[]): number {
  * migration behind it, so the next version rebuilds it: the diff runs from the state the lost
  * migration itself diffed against (`previous.previous`), which brings back its removals and
  * drop-and-recreates, and covers any schema change made since. A state file that predates the
- * `previous` field cannot rebuild a lost migration beyond v0001 and throws instead, because a
- * healed version without those removals would leave old objects in place silently.
+ * `previous` field cannot rebuild a lost migration beyond v0001 and throws instead
+ * (MissingMigrationError), because a healed version without those removals would leave old
+ * objects in place silently.
  */
 export function emitMigrations(
   schema: TimescaleSchema,
@@ -433,9 +449,7 @@ export function emitMigrations(
   // schema is exactly the case that would otherwise emit nothing forever.
   const latestMissing = previous !== undefined && !latestObjectsMigrationExists;
   if (latestMissing && previous.sequence > 1 && previous.previous === undefined) {
-    throw new Error(
-      `${objectsMigrationName(previous.sequence)} is missing and the state file does not record the state before it, so the migration cannot be rebuilt. Restore the folder from version control, or delete the state file to re-assert the full state as a new version (objects that migration removed are not removed again).`,
-    );
+    throw new MissingMigrationError(objectsMigrationName(previous.sequence));
   }
 
   // Canonicalize the persisted state too: a pre-versioning state file may carry the
@@ -445,6 +459,10 @@ export function emitMigrations(
   const prevState = latestMissing
     ? previous.previous && canonicalObjects(previous.previous)
     : previous && canonicalObjects(previous.state);
+  // The base the emitted migration diffs against, recorded so it can be rebuilt if lost. It is
+  // the empty state, never absent, when there was nothing before: an absent field means only
+  // "written by an older release", which is what the throw above keys on.
+  const base = prevState ?? EMPTY_STATE;
 
   // The extension migration is fixed-name, and once it exists on disk it is applied history:
   // rewriting it would change its checksum and make `migrate dev` reject it as "modified after
@@ -490,8 +508,5 @@ ${createExtensionSql().up}
 ${sections.join("\n\n")}
 `;
 
-  return {
-    files,
-    nextState: { version: STATE_VERSION, sequence, state, ...(prevState ? { previous: prevState } : {}) },
-  };
+  return { files, nextState: { version: STATE_VERSION, sequence, state, previous: base } };
 }

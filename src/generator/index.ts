@@ -20,6 +20,7 @@ import {
   objectsMigrationName,
   parseGeneratorState,
   EXTENSION_MIGRATION,
+  MissingMigrationError,
   NewerStateFileError,
   STATE_FILE,
   type FileMap,
@@ -69,20 +70,30 @@ generatorHandler({
     const existing = listDir(migrationsDir);
     const previous = readState(join(migrationsDir, STATE_FILE));
     // The state file names the latest objects migration; when that folder is gone, the
-    // recorded state has nothing behind it and the emitter re-asserts it as the next version.
+    // recorded state has nothing behind it and the emitter rebuilds it as the next version.
     const latestExists = previous === undefined || existing.includes(objectsMigrationName(previous.sequence));
-    if (!latestExists) {
+    let result: ReturnType<typeof emitMigrations>;
+    try {
+      result = emitMigrations(
+        schema,
+        previous,
+        maxObjectsSequence(existing),
+        existing.includes(EXTENSION_MIGRATION),
+        latestExists,
+      );
+    } catch (e) {
+      if (e instanceof MissingMigrationError) {
+        throw new Error(`prisma-extension-timescaledb: ${join(migrationsDir, e.migration)}: ${e.message}`);
+      }
+      throw e;
+    }
+    const { files, nextState } = result;
+    // Warned only once something is actually written, so the message never precedes an abort.
+    if (!latestExists && nextState) {
       console.warn(
-        `prisma-extension-timescaledb: ${objectsMigrationName(previous.sequence)} is missing from ${migrationsDir}; re-emitting the full state as the next version.`,
+        `prisma-extension-timescaledb: ${objectsMigrationName(previous.sequence)} is missing from ${migrationsDir}; rebuilding it as ${objectsMigrationName(nextState.sequence)}. If the missing migration was already applied somewhere, the rebuilt one re-runs its drop-and-recreate of changed continuous aggregates there, and their data refills on the next refresh.`,
       );
     }
-    const { files, nextState } = emitMigrations(
-      schema,
-      previous,
-      maxObjectsSequence(existing),
-      existing.includes(EXTENSION_MIGRATION),
-      latestExists,
-    );
     writeFileMap(migrationsDir, files);
     if (nextState) {
       mkdirSync(migrationsDir, { recursive: true });

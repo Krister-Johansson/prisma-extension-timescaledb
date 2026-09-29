@@ -9,6 +9,7 @@ import {
   emitMigrations,
   objectsMigrationName,
   maxObjectsSequence,
+  MissingMigrationError,
   NewerStateFileError,
   parseGeneratorState,
   EXTENSION_MIGRATION,
@@ -752,11 +753,12 @@ describe("emitMigrations state-file gaps (issue #160)", () => {
   });
 
   // The state file records the state the latest migration diffed against, so the lost
-  // migration can be rebuilt exactly. A first run has nothing before it.
+  // migration can be rebuilt exactly. A first run has nothing before it: an empty base, never
+  // an absent field, since absence marks a file from an older release.
   it("records the state the latest migration diffed against", async () => {
     const schema = await loadSchema();
     const first = emitMigrations(schema);
-    expect(first.nextState?.previous).toBeUndefined();
+    expect(first.nextState?.previous).toEqual({ hypertables: [], continuousAggregates: [] });
     const withoutCagg: typeof schema = { ...schema, continuousAggregates: [] };
     const second = emitMigrations(withoutCagg, first.nextState, 1, true);
     expect(second.nextState?.previous).toEqual(first.nextState?.state);
@@ -804,12 +806,31 @@ describe("emitMigrations state-file gaps (issue #160)", () => {
     expect(healed.nextState?.state.continuousAggregates).toEqual([]);
   });
 
+  // Review finding on #170: a healed v0002 for a lost v0001 used to leave `previous` out, so
+  // deleting v0002 as well hit the older-release throw. The same held for a recovery from a
+  // lost state file. Both have an empty base and must heal again.
+  it("a rebuilt migration with nothing before it can itself be rebuilt", async () => {
+    const schema = await loadSchema();
+    const first = emitMigrations(schema);
+    const healedOnce = emitMigrations(schema, first.nextState, 0, true, false); // v0001 lost, v0002 written
+    expect(healedOnce.nextState?.previous).toEqual({ hypertables: [], continuousAggregates: [] });
+    const healedTwice = emitMigrations(schema, healedOnce.nextState, 0, true, false); // v0002 lost too
+    expect(Object.keys(healedTwice.files)).toEqual([`${objectsMigrationName(3)}/migration.sql`]);
+    expect(healedTwice.nextState?.sequence).toBe(3);
+
+    const recovered = emitMigrations(schema, undefined, 3); // lost state file, v0004 written
+    expect(recovered.nextState?.previous).toEqual({ hypertables: [], continuousAggregates: [] });
+    const healedAfterRecovery = emitMigrations(schema, recovered.nextState, 3, true, false); // v0004 lost
+    expect(Object.keys(healedAfterRecovery.files)).toEqual([`${objectsMigrationName(5)}/migration.sql`]);
+  });
+
   // A state file written before the `previous` field existed cannot rebuild a lost migration
   // beyond v0001. A healed version without its removals would leave old objects in place, so
   // the generator stops and says how to recover.
   it("throws for a lost migration beyond v0001 when the state file does not record the previous state", async () => {
     const schema = await loadSchema();
     const previous = { version: 1 as const, sequence: 2, state: emitMigrations(schema).nextState!.state };
+    expect(() => emitMigrations(schema, previous, 1, true, false)).toThrow(MissingMigrationError);
     expect(() => emitMigrations(schema, previous, 1, true, false)).toThrow(/v0002 is missing/);
     expect(() => emitMigrations(schema, previous, 1, true, false)).toThrow(/Restore the folder/);
     // The same file with its folder present is business as usual.
