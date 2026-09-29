@@ -65,13 +65,12 @@ Practical safeguards if the maintainer is unavailable:
 - Repository access is protected by GitHub's account security requirements for
   contributors, and standard account recovery applies.
 - The build, test, and release workflows live in this repository in full,
-  with every action pinned to a commit. The one remaining external
-  configuration is `.coderabbit.yaml`, which pulls the automated-review
-  settings from
+  with every action pinned to a commit. The only external configuration file
+  is `.coderabbit.yaml`, which pulls the automated-review settings from
   [Krister-Johansson/shared-configs](https://github.com/Krister-Johansson/shared-configs);
-  losing it would only change how the review bot behaves. Publishing also
-  depends on the Trusted Publisher registration for this repository on
-  npmjs.com. The MIT license lets any user fork and continue the project if
+  losing it would only change how the review bot behaves. Outside the
+  repository, publishing depends on the Trusted Publisher registration for
+  this repository on npmjs.com. The MIT license lets any user fork and continue the project if
   it goes quiet, re-registering publishing for their fork.
 
 If the maintainer expects to be unreachable for an extended period, the plan is
