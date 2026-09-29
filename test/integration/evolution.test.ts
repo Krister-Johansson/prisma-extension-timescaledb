@@ -3,7 +3,7 @@
 // (the pre-v1 fixed-name rewrite was silently skipped there), replay cleanly through
 // `migrate reset` after a table is dropped (guarded blocks), and drop removed caggs.
 import { execFileSync } from "node:child_process";
-import { readdirSync, writeFileSync, readFileSync } from "node:fs";
+import { readdirSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startHarness, type Harness, dockerAvailable } from "./harness.js";
@@ -38,6 +38,16 @@ view SensorHourly {
 
 // v3 removes the cagg and the EventLog model (its table gets dropped by a Prisma migration).
 const MODELS_V3 = MODELS_V1;
+
+// v4 adds a retention policy to the remaining hypertable.
+const MODELS_V4 = `/// @timescale.hypertable(column: "time", chunkInterval: "1 day")
+/// @timescale.retention(dropAfter: "30 days")
+model SensorReading {
+  time        DateTime
+  deviceId    Int
+  temperature Float
+  @@id([deviceId, time])
+}`;
 
 describe.skipIf(!DOCKER_OK)("schema evolution (real TimescaleDB)", () => {
   let h: Harness;
@@ -122,5 +132,53 @@ describe.skipIf(!DOCKER_OK)("schema evolution (real TimescaleDB)", () => {
     h.prisma(["migrate", "reset", "--force"]);
     expect(await hypertables()).toEqual(["SensorReading"]);
     expect(await caggs()).toEqual([]);
+  });
+
+  const policies = async (): Promise<string[]> =>
+    (await h.query<{ proc_name: string }>(
+      "SELECT proc_name FROM timescaledb_information.jobs WHERE hypertable_name = 'SensorReading' ORDER BY 1",
+    )).map((r) => r.proc_name);
+
+  // Issue #160: the state file said v0004 had been emitted, so once its folder was gone every
+  // later generate compared the unchanged schema against the recorded state and wrote nothing.
+  it("deleting the latest objects migration before deploying it re-emits the state as the next version", async () => {
+    const migrations = join(h.projectDir, "migrations");
+    setModels(MODELS_V4);
+    h.prisma(["generate"]); // appends v0004: adds the retention policy
+    expect(readdirSync(migrations)).toContain("99999999999999_timescaledb_objects_v0004");
+
+    // The developer discards the undeployed migration to redo it.
+    rmSync(join(migrations, "99999999999999_timescaledb_objects_v0004"), { recursive: true });
+    h.prisma(["generate"]);
+    const folders = readdirSync(migrations).sort();
+    expect(folders).not.toContain("99999999999999_timescaledb_objects_v0004"); // a number is never reused
+    expect(folders).toContain("99999999999999_timescaledb_objects_v0005");
+    const v5 = readFileSync(join(migrations, "99999999999999_timescaledb_objects_v0005", "migration.sql"), "utf8");
+    expect(v5).toContain(`add_retention_policy('"SensorReading"'`);
+
+    h.prisma(["migrate", "deploy"]);
+    expect(await policies()).toEqual(["policy_retention"]);
+
+    // The healed history still replays from scratch.
+    h.prisma(["migrate", "reset", "--force"]);
+    expect(await hypertables()).toEqual(["SensorReading"]);
+    expect(await policies()).toEqual(["policy_retention"]);
+  });
+
+  // Issue #160: a version-2 file used to read as corrupt, which emitted a full re-assert
+  // migration and rewrote the file as version 1.
+  it("a state file from a newer release stops generate instead of being overwritten", () => {
+    const migrations = join(h.projectDir, "migrations");
+    const statePath = join(migrations, ".prisma-extension-timescaledb.json");
+    const original = readFileSync(statePath, "utf8");
+    const before = readdirSync(migrations).sort();
+    writeFileSync(statePath, JSON.stringify({ ...(JSON.parse(original) as object), version: 2 }), "utf8");
+    try {
+      expect(() => h.prisma(["generate"])).toThrow(/newer prisma-extension-timescaledb/);
+      expect((JSON.parse(readFileSync(statePath, "utf8")) as { version: number }).version).toBe(2);
+      expect(readdirSync(migrations).sort()).toEqual(before);
+    } finally {
+      writeFileSync(statePath, original, "utf8");
+    }
   });
 });

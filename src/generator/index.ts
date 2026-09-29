@@ -17,8 +17,10 @@ const { generatorHandler } = generatorHelper;
 import {
   emitMigrations,
   maxObjectsSequence,
+  objectsMigrationName,
   parseGeneratorState,
   EXTENSION_MIGRATION,
+  NewerStateFileError,
   STATE_FILE,
   type FileMap,
   type GeneratorState,
@@ -65,11 +67,21 @@ generatorHandler({
     // existing ..._v000N folder pins the next sequence, so recovery re-asserts the full state
     // as a NEW migration and never overwrites an applied one.
     const existing = listDir(migrationsDir);
+    const previous = readState(join(migrationsDir, STATE_FILE));
+    // The state file names the latest objects migration; when that folder is gone, the
+    // recorded state has nothing behind it and the emitter re-asserts it as the next version.
+    const latestExists = previous === undefined || existing.includes(objectsMigrationName(previous.sequence));
+    if (!latestExists) {
+      console.warn(
+        `prisma-extension-timescaledb: ${objectsMigrationName(previous.sequence)} is missing from ${migrationsDir}; re-emitting the full state as the next version.`,
+      );
+    }
     const { files, nextState } = emitMigrations(
       schema,
-      readState(join(migrationsDir, STATE_FILE)),
+      previous,
       maxObjectsSequence(existing),
       existing.includes(EXTENSION_MIGRATION),
+      latestExists,
     );
     writeFileMap(migrationsDir, files);
     if (nextState) {
@@ -80,16 +92,26 @@ generatorHandler({
   },
 });
 
-/** Read the generator state file; undefined (with a warning) when absent or unusable. The
- * shape validation lives in parseGeneratorState so it is unit-testable without a filesystem. */
+/** Read the generator state file; undefined when absent (first run, or a pre-v1 project) or,
+ * with a warning, when unusable. Any read error other than ENOENT rethrows, like listDir: an
+ * EACCES or EISDIR read as "first run" would put a full re-assert migration on disk and then
+ * fail on the state write. A file from a newer release aborts with the path in the message.
+ * The shape validation lives in parseGeneratorState so it is unit-testable without a filesystem. */
 function readState(path: string): GeneratorState | undefined {
   let raw: string;
   try {
     raw = readFileSync(path, "utf8");
-  } catch {
-    return undefined; // no file — first run, or pre-v1 project
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw e;
   }
-  const state = parseGeneratorState(raw);
+  let state: GeneratorState | undefined;
+  try {
+    state = parseGeneratorState(raw);
+  } catch (e) {
+    if (e instanceof NewerStateFileError) throw new Error(`prisma-extension-timescaledb: ${path}: ${e.message}`);
+    throw e;
+  }
   if (state === undefined) {
     console.warn(
       `prisma-extension-timescaledb: ignoring unreadable state file at ${path}; re-asserting the full state as a new migration.`,

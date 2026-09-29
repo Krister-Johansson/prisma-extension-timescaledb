@@ -51,11 +51,28 @@ export interface ObjectsState {
   continuousAggregates: readonly CaggConfig[];
 }
 
+/** The state-file format this release reads and writes. */
+export const STATE_VERSION = 1;
+
 /** Contents of the state file: the last emitted state and the migration sequence number. */
 export interface GeneratorState {
-  version: 1;
+  version: typeof STATE_VERSION;
   sequence: number;
   state: ObjectsState;
+}
+
+/**
+ * Thrown by parseGeneratorState for a state file whose `version` is above STATE_VERSION. Such a
+ * file was written by a newer prisma-extension-timescaledb. Treating it as corrupt would emit a
+ * full re-assert migration and rewrite the file in the old format, so the generator aborts.
+ */
+export class NewerStateFileError extends Error {
+  constructor(readonly fileVersion: number) {
+    super(
+      `state file was written by a newer prisma-extension-timescaledb (state version ${fileVersion}; this release reads version ${STATE_VERSION}). Upgrade the package before running prisma generate.`,
+    );
+    this.name = "NewerStateFileError";
+  }
 }
 
 export interface EmitResult {
@@ -298,16 +315,29 @@ export function objectsMigrationName(sequence: number): string {
 }
 
 /**
- * Parse and validate a state-file's raw JSON. Returns undefined (never throws) for anything
- * that is not a fully-shaped v1 state — a hand-edited file with a missing array would
- * otherwise surface later as a TypeError deep inside the removal diff.
+ * Parse and validate a state-file's raw JSON. Returns undefined for anything that is not a
+ * fully-shaped v1 state. A hand-edited file with a missing array would otherwise surface
+ * later as a TypeError deep inside the removal diff. The one exception throws: a `version`
+ * that is an integer above STATE_VERSION is a newer release's file, not a corrupt one, and
+ * the caller must abort rather than overwrite it (NewerStateFileError).
  */
 export function parseGeneratorState(raw: string | undefined): GeneratorState | undefined {
   if (raw === undefined) return undefined;
+  let json: unknown;
   try {
-    const parsed = JSON.parse(raw) as Partial<GeneratorState>;
+    json = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+  if (json === null || typeof json !== "object") return undefined;
+  const version = (json as Record<string, unknown>)["version"];
+  if (typeof version === "number" && Number.isInteger(version) && version > STATE_VERSION) {
+    throw new NewerStateFileError(version);
+  }
+  try {
+    const parsed = json as Partial<GeneratorState>;
     if (
-      parsed.version === 1 &&
+      parsed.version === STATE_VERSION &&
       Number.isInteger(parsed.sequence) &&
       (parsed.sequence as number) >= 1 &&
       parsed.state !== null &&
@@ -367,12 +397,19 @@ export function maxObjectsSequence(folderNames: readonly string[]): number {
  * disk. It is emitted only when absent: it is applied history, and rewriting it would change
  * the checksum Prisma recorded for it. A missing one is re-emitted even when nothing else
  * changed, so deleting the folder heals on the next generate.
+ *
+ * `latestObjectsMigrationExists` says whether the folder for `previous.sequence` is still on
+ * disk (ignored without a previous state). When it is gone, the recorded state has no
+ * migration behind it, so the full state is re-emitted as the next version even if the schema
+ * is unchanged. Removals that lived only in the lost migration cannot be rebuilt, because the
+ * state before it is not recorded; the diff runs against the recorded state as usual.
  */
 export function emitMigrations(
   schema: TimescaleSchema,
   previous?: GeneratorState,
   maxExistingSequence = 0,
   extensionMigrationExists = false,
+  latestObjectsMigrationExists = true,
 ): EmitResult {
   const state = canonicalState(schema);
   const empty = state.hypertables.length === 0 && state.continuousAggregates.length === 0;
@@ -399,9 +436,14 @@ ${createExtensionSql().up}
 `;
   }
 
+  // Decided before the unchanged-state return below: an unchanged schema is exactly the case
+  // that would otherwise emit nothing forever once the latest folder is gone (an undeployed
+  // migration a developer deleted to redo it, or a folder lost in a merge).
+  const latestMissing = previous !== undefined && !latestObjectsMigrationExists;
+
   const noHistory = !previous && maxExistingSequence === 0;
   if (noHistory && empty) return { files };
-  if (prevState && stableStringify(prevState) === stableStringify(state)) return { files };
+  if (prevState && !latestMissing && stableStringify(prevState) === stableStringify(state)) return { files };
   // State file lost but versioned migrations exist, and the schema is empty: without the
   // previous state there is nothing to diff removals against; emit nothing rather than a
   // migration of pure guesses. (The normal empty case with intact state emits removals.)
@@ -412,6 +454,10 @@ ${createExtensionSql().up}
   const creates = renderCreates(state);
   const removals = prevState ? renderRemovals(prevState, state) : [];
   const sections = [...removals, ...creates];
+  // Only reachable while healing an empty recorded state: the lost migration held nothing but
+  // removals that cannot be rebuilt, and an empty migration would just record a version that
+  // does nothing.
+  if (sections.length === 0) return { files };
 
   files[`${objectsMigrationName(sequence)}/migration.sql`] = `${GENERATED_BANNER}
 -- TimescaleDB objects, state v${sequence}. Sorts last so the tables Prisma created in its own
@@ -422,5 +468,5 @@ ${createExtensionSql().up}
 ${sections.join("\n\n")}
 `;
 
-  return { files, nextState: { version: 1, sequence, state } };
+  return { files, nextState: { version: STATE_VERSION, sequence, state } };
 }
