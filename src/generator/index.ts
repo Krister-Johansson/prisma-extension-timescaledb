@@ -6,6 +6,7 @@
 // This file is intentionally NOT imported by the runtime entry (src/index.ts): the client
 // extension must work without the generator (CLAUDE.md resilience requirement).
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, isAbsolute, join } from "node:path";
 // Default import (not named): @prisma/generator-helper is CommonJS, and Node's ESM loader
 // rejects named imports from it at runtime. Default import resolves to module.exports under
@@ -28,6 +29,7 @@ import {
   type GeneratorState,
 } from "./emit-migrations.js";
 import { emitTypes } from "./emit-types.js";
+import { assertSupportedPrismaVersion } from "./prismaVersion.js";
 
 const DEFAULT_OUTPUT = "node_modules/.prisma-extension-timescaledb";
 
@@ -49,6 +51,7 @@ generatorHandler({
   },
 
   async onGenerate(options) {
+    assertSupportedPrismaVersion(installedPrismaVersion());
     const schema = extractTimescaleSchema(options.dmmf);
 
     const typesDir = options.generator.output?.value ?? DEFAULT_OUTPUT;
@@ -112,6 +115,18 @@ generatorHandler({
     writeFileMap(typesDir, emitTypes(schema));
   },
 });
+
+/** The version of the `prisma` package this generator was spawned by, resolved from this file's
+ * own location so it is the consumer's copy (prisma is a peer, installed next to this package).
+ * Undefined when it cannot be resolved, which only happens in an unusual layout. */
+function installedPrismaVersion(): string | undefined {
+  try {
+    const require = createRequire(import.meta.url);
+    return (require("prisma/package.json") as { version?: string }).version;
+  } catch {
+    return undefined;
+  }
+}
 
 /** Read the generator state file; undefined when absent (first run, or a pre-v1 project) or,
  * with a warning, when unusable. Any read error other than ENOENT rethrows, like listDir: an
