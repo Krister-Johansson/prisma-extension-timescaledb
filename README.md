@@ -130,6 +130,13 @@ npx prisma generate                                # emits the timescale migrati
 npx prisma migrate deploy                          # applies everything, in the right order
 ```
 
+A continuous aggregate is a Prisma `view` block, which needs
+`previewFeatures = ["views"]` on the client generator. The quick start uses
+the `prisma-client` generator. The runtime imports only
+`@prisma/client/extension`, so it also loads under the older `prisma-client-js`
+generator, but Prisma 7 has deprecated that generator and this package tests
+only `prisma-client`.
+
 The same three steps cover later schema changes: when the annotated objects
 change, `prisma generate` appends a new versioned migration
 (`..._timescaledb_objects_v0002`, and so on) instead of rewriting an applied

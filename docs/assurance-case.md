@@ -81,8 +81,9 @@ The realistic threats are:
 - `main` is protected: changes arrive by pull request, required CI (including
   the integration suite against a real TimescaleDB) must pass, and versioning
   is automated with release-please rather than done by hand on a laptop.
-- The published package contains only `dist/`, the compiled output of the
-  repository's TypeScript.
+- The published package contains `dist/`, the compiled output of the
+  repository's TypeScript, plus the package manifest, README, LICENSE and
+  CHANGELOG; no source, tests, configuration or maps.
 
 ### 4. The dependency surface is one package deep
 
