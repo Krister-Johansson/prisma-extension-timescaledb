@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.5](https://github.com/Krister-Johansson/prisma-extension-timescaledb/compare/prisma-extension-timescaledb-v1.0.4...prisma-extension-timescaledb-v1.0.5) (2026-09-29)
+
+
+### Bug Fixes
+
+* **client:** bind Dates as instants, accept Decimal and bytes in where, and restore NaN in stats ([#175](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/175)) ([77b3d98](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/77b3d98b6d0fe090eddfb6673c511e40998ed231)), closes [#163](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/163)
+* **generator:** heal a missing latest objects migration and stop on a newer state file ([#170](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/170)) ([bc8d585](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/bc8d585ceb762d339d9db4040afec2349a3b4096)), closes [#160](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/160)
+* **generator:** make schema changes converge instead of emitting migrations that do nothing ([#172](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/172)) ([090a2b4](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/090a2b467a8ae2f83c56caee95b15630b13f67c4)), closes [#161](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/161)
+* **generator:** reject at generate time the inputs that failed only at migrate deploy ([#174](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/174)) ([2dfbeca](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/2dfbeca25605d636a876fbebc9393108e839110c)), closes [#162](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/162)
+* **packaging:** honest engines, a Prisma version guard, node10 types, and a smaller tarball ([#176](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/176)) ([cc256f2](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/cc256f2abec17b7b6527cafc17db38d2c0e379a7)), closes [#166](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/166)
+
 ## [1.0.4](https://github.com/Krister-Johansson/prisma-extension-timescaledb/compare/prisma-extension-timescaledb-v1.0.3...prisma-extension-timescaledb-v1.0.4) (2026-09-29)
 
 
