@@ -75,7 +75,14 @@ test/
    nothing, unless the folder for the recorded version is missing, in which
    case that migration is rebuilt as the next version from the previous state
    the file also records. A state file from a newer release aborts the run
-   instead of being rewritten. Within a version, hypertable conversions come before continuous
+   instead of being rewritten. The state file also keeps the time column and
+   partition column of a hypertable whose annotation was removed while its
+   model stayed in the schema, so an annotation that comes back with another
+   layout stops the generator. Each hypertable block reads
+   `timescaledb_information.dimensions` and raises when the live time column
+   or hash dimension differs from the declared one, because
+   `create_hypertable` and `add_dimension` would otherwise run without error
+   and leave the two apart. Within a version, hypertable conversions come before continuous
    aggregates, which need their source to already be a hypertable.
    `emit-types.ts` writes the typed registry the client extension imports.
 3. **Runtime.** The client extension reads the registry (or a manual config)
@@ -103,6 +110,18 @@ integration test against a real TimescaleDB container, and every change to
 emitted SQL must keep that test green. The evolution test extends it: objects
 added after the first deploy are applied by the next deploy, and a replay
 through dropped tables and removed annotations still converges.
+
+One history does not replay. A model is removed, so Prisma drops its table,
+and the model is later declared again under the same table name with another
+time column or partition column while the new table still has the old columns.
+The objects migrations run after all of Prisma's own, so on a replay the first
+version converts the final table with the old layout, and the layout check in
+the later version raises. Without the check that replay completed and built a
+hypertable the live database does not have. The fix is to delete the objects
+migrations older than the newest one: every version re-asserts the full state,
+so the newest alone rebuilds it, and a database that already applied the
+deleted versions still deploys. `layout-readd.test.ts` covers the failing
+replay and the fix.
 
 Three code rules matter throughout:
 

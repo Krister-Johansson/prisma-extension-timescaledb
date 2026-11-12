@@ -34,6 +34,10 @@ export interface TimescaleSchema {
   /** Relations of every non-hypertable model, keyed by Prisma model name — lets timeBucket where
    * resolve relation filters nested through other relations to any depth. */
   relationsByModel: Record<string, RelationConfig[]>;
+  /** The DB relation of every model and view in the schema, annotated or not. The migration
+   * emitter reads it to tell a hypertable whose annotation was removed (the table is still
+   * there) from one whose model is gone (Prisma drops the table). */
+  tables: { table: string; schema?: string }[];
 }
 
 // Field types acceptable as a hypertable / continuous-aggregate partitioning column. DateTime
@@ -221,7 +225,9 @@ export function extractTimescaleSchema(dmmf: DMMF.Document): TimescaleSchema {
     if (rels.length > 0) relationsByModel[model.name] = rels;
   }
 
-  return { hypertables, continuousAggregates, relationsByModel };
+  const tables = models.map((m) => ({ table: dbTable(m), ...(m.schema ? { schema: m.schema } : {}) }));
+
+  return { hypertables, continuousAggregates, relationsByModel, tables };
 }
 
 /** Build a HypertableConfig from a `@timescale.hypertable` model — validates the time column and

@@ -17,6 +17,7 @@ import {
   OBJECTS_MIGRATION_PREFIX,
   objectsMigrationName,
   parseGeneratorState,
+  STATE_VERSION,
   type GeneratorState,
 } from "../../src/generator/emit-migrations.js";
 
@@ -480,7 +481,7 @@ describe("property-based invariants", () => {
 
   describe("parseGeneratorState", () => {
     const validStateArb: fc.Arbitrary<GeneratorState> = fc.integer({ min: 1, max: 1_000_000 }).map((sequence) => ({
-      version: 1,
+      version: STATE_VERSION,
       sequence,
       state: { hypertables: [], continuousAggregates: [] },
     }));
@@ -498,11 +499,13 @@ describe("property-based invariants", () => {
       fc.assert(
         fc.property(validStateArb, (state) => {
           expect(parseGeneratorState(JSON.stringify(state))).toEqual(state);
+          // A version 1 file is the same shape and comes back marked as the current version.
+          expect(parseGeneratorState(JSON.stringify({ ...state, version: 1 }))).toEqual(state);
         }),
       );
     });
 
-    it("rejects any sequence below 1 or not an integer, and any version that is not 1 or a newer integer", () => {
+    it("rejects any sequence below 1 or not an integer, and any version that is not a readable or newer integer", () => {
       fc.assert(
         fc.property(
           validStateArb,
@@ -516,11 +519,11 @@ describe("property-based invariants", () => {
       );
     });
 
-    // Issue #160: an integer version above 1 is a newer release's file, never "unreadable",
-    // whatever the rest of the file looks like.
-    it("throws NewerStateFileError for every integer version above 1", () => {
+    // Issue #160: an integer version above the current one is a newer release's file, never
+    // "unreadable", whatever the rest of the file looks like.
+    it("throws NewerStateFileError for every integer version above the current one", () => {
       fc.assert(
-        fc.property(validStateArb, fc.integer({ min: 2 }), fc.boolean(), (state, newer, wholeShape) => {
+        fc.property(validStateArb, fc.integer({ min: STATE_VERSION + 1 }), fc.boolean(), (state, newer, wholeShape) => {
           const file = wholeShape ? { ...state, version: newer } : { version: newer };
           expect(() => parseGeneratorState(JSON.stringify(file))).toThrow(NewerStateFileError);
         }),

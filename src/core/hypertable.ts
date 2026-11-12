@@ -77,8 +77,15 @@ export function createHypertableSql(config: HypertableConfig): MigrationSql {
   // set_number_partitions does the same for the hash dimension's partition count: add_dimension's
   // if_not_exists skips a column that is already a dimension, so a changed `partitions` would
   // otherwise keep the old count silently (issue #161). A no-op when already equal.
+  //
+  // The layout check sits between the conversion and add_dimension. create_hypertable's
+  // if_not_exists ignores a different time column on a live hypertable, and add_dimension on a
+  // new column adds a THIRD dimension, so a declared layout that differs from the live one
+  // would otherwise apply without error and leave the two apart (issue #173). The raise rolls
+  // the block back before add_dimension runs.
   const body =
     `  PERFORM ${indentBody(convert)};` +
+    `\n${layoutCheck(rel, column, spacePartition?.column)}` +
     (dimension ? `\n  PERFORM ${dimension};` : "") +
     (spacePartition
       ? `\n  PERFORM set_number_partitions(${rel}, ${spacePartition.partitions}, ${quoteLiteral(spacePartition.column)});`
@@ -95,6 +102,44 @@ export function createHypertableSql(config: HypertableConfig): MigrationSql {
   const down = `-- No separate un-hypertable step: dropping "${table}" (Prisma's own down) removes the hypertable.`;
 
   return { up, down, guardedUp };
+}
+
+/**
+ * A nested plpgsql block that raises when the live hypertable's time column, or any of its hash
+ * dimensions, is not the declared one. TimescaleDB cannot change a time column or remove a
+ * dimension, so there is nothing to converge to: the migration stops and the database stays as
+ * it was.
+ *
+ * `timescaledb_information.dimensions` reports one row per dimension, with `dimension_type`
+ * `Time` for the range dimension and `Space` for a hash dimension (probed on 2.27.2). The view
+ * lives in that schema wherever the extension is installed. The relation is matched through
+ * `to_regclass`, the same cast-free lookup the existence guard uses. A hypertable the view does
+ * not report leaves both variables NULL and raises nothing.
+ */
+function layoutCheck(rel: string, column: string, spaceColumn: string | undefined): string {
+  const from = `FROM timescaledb_information.dimensions d
+      JOIN pg_class c ON c.relname = d.hypertable_name
+      JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = d.hypertable_schema
+     WHERE c.oid = to_regclass(${rel})`;
+  const otherSpace = spaceColumn === undefined ? "" : ` AND d.column_name <> ${quoteLiteral(spaceColumn)}`;
+  const declaredSpace =
+    spaceColumn === undefined ? "no space dimension" : `a space dimension on "${spaceColumn}"`;
+  return `  DECLARE live_time text; live_space text;
+  BEGIN
+    SELECT d.column_name INTO live_time
+      ${from} AND d.dimension_type = 'Time'
+     ORDER BY d.dimension_number LIMIT 1;
+    IF live_time <> ${quoteLiteral(column)} THEN
+      RAISE EXCEPTION 'prisma-extension-timescaledb: hypertable % is partitioned on time column "%", but the schema declares "%"', ${rel}, live_time, ${quoteLiteral(column)}
+        USING HINT = 'TimescaleDB cannot change the time column of an existing hypertable. Declare the live column again, or move the data to a table with the new layout.';
+    END IF;
+    SELECT string_agg('"' || d.column_name || '"', ', ' ORDER BY d.dimension_number) INTO live_space
+      ${from} AND d.dimension_type = 'Space'${otherSpace};
+    IF live_space IS NOT NULL THEN
+      RAISE EXCEPTION 'prisma-extension-timescaledb: hypertable % has a space dimension on %, but the schema declares ${declaredSpace}', ${rel}, live_space
+        USING HINT = 'TimescaleDB cannot remove or replace a dimension. Declare the live partition column again, or move the data to a table with the new layout.';
+    END IF;
+  END;`;
 }
 
 /** Re-indent a multi-line call expression by two spaces for embedding in a DO body. */
