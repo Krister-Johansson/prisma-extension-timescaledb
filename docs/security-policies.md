@@ -76,9 +76,31 @@ such finding gets a statement here with the advisory ID, the affected
 component, the verdict, and the reasoning, and the corresponding alert is
 dismissed with the same justification so the two records match.
 
-Current statements: none. There are no open component vulnerabilities
-assessed as not affecting the project (last reviewed 2026-09-03). Recent
-history of the process, for the record: the dev-scope undici
+Current statements (last reviewed 2026-11-13):
+
+| Advisory | Component | Verdict |
+| --- | --- | --- |
+| GHSA-3g3m-2fjr-6pw4 | glob 10.5.0 | Not affected: vulnerable code is not in the execute path |
+| GHSA-g3hv-75wg-m249 | minimatch 9.0.9 | Not affected: vulnerable code is not in the execute path |
+
+Both sit in the development tree under testcontainers > archiver 7 >
+archiver-utils, and neither is in the published package, whose production
+tree is one runtime dependency. minimatch 9.0.9 is installed only as a
+dependency of that glob. archiver-utils uses glob in its file-expansion
+helpers; archiver itself walks directories with readdir-glob. Testcontainers
+calls archiver only from its copy-to-container functions, and the integration
+tests never call those, so no test run reaches the glob code and no glob
+pattern comes from outside the repository. No update is available to take:
+the fixes are in glob 14.0.2 and minimatch 11.0.1, archiver-utils requires
+glob ^10, and testcontainers 12.2.1 still requires archiver ^7.0.1 (archiver
+8 no longer depends on archiver-utils). The same assessment is in
+`osv-scanner.toml` at the repository root, which the Scorecard
+Vulnerabilities check reads, and on the dismissed Dependabot alert for
+minimatch (Dependabot auto-dismissed the glob alert). Both statements and the `osv-scanner.toml` entries are removed when
+testcontainers moves to archiver 8
+([#187](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/187)).
+
+Recent history of the process, for the record: the dev-scope undici
 (GHSA-8xcm-r25x-g524 and related), protobufjs (GHSA-j3f2-48v5-ccww), and
 valibot (GHSA-5qjj-4xww-7phc) advisories were removed by the dependency
 upgrades in [#82](https://github.com/Krister-Johansson/prisma-extension-timescaledb/pull/82),

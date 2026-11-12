@@ -1,0 +1,13 @@
+# Exploitability assessments for the OSV scan that the OpenSSF Scorecard
+# Vulnerabilities check runs over package-lock.json. Each entry mirrors a
+# statement in docs/security-policies.md ("Exploitability assessments (VEX)").
+# Remove both entries when testcontainers depends on archiver 8, which no
+# longer pulls in archiver-utils and its glob ^10 requirement (#187).
+
+[[IgnoredVulns]]
+id = "GHSA-3g3m-2fjr-6pw4"
+reason = "glob 10.5.0 is a development dependency (testcontainers > archiver 7 > archiver-utils) and is not in the published package. The integration tests never call the Testcontainers copy functions, the only path into archiver, and archiver itself walks directories with readdir-glob. The fix exists only in glob 14.0.2, outside the ^10 range archiver-utils requires."
+
+[[IgnoredVulns]]
+id = "GHSA-g3hv-75wg-m249"
+reason = "minimatch 9.0.9 is installed only as a dependency of the glob 10.5.0 above, with the same unreachable path and no untrusted glob patterns. The fix exists only in minimatch 11.0.1, outside the ^9 range glob 10 requires."
