@@ -86,18 +86,19 @@ Current statements (last reviewed 2026-11-13):
 Both sit in the development tree under testcontainers > archiver 7 >
 archiver-utils, and neither is in the published package, whose production
 tree is one runtime dependency. minimatch 9.0.9 is installed only as a
-dependency of that glob. archiver-utils uses glob in its file-expansion
-helpers; archiver itself walks directories with readdir-glob. Testcontainers
-calls archiver only from its copy-to-container functions, and the integration
-tests never call those, so no test run reaches the glob code and no glob
+dependency of that glob. Importing testcontainers loads both modules, but
+nothing calls them: archiver-utils uses glob only in its file-expansion
+helper, which archiver never invokes (archiver walks directories with
+readdir-glob), and Testcontainers calls archiver only from its
+copy-to-container functions, which the integration tests never use. No glob
 pattern comes from outside the repository. No update is available to take:
 the fixes are in glob 14.0.2 and minimatch 11.0.1, archiver-utils requires
 glob ^10, and testcontainers 12.2.1 still requires archiver ^7.0.1 (archiver
 8 no longer depends on archiver-utils). The same assessment is in
 `osv-scanner.toml` at the repository root, which the Scorecard
 Vulnerabilities check reads, and on the dismissed Dependabot alert for
-minimatch (Dependabot auto-dismissed the glob alert). Both statements and the `osv-scanner.toml` entries are removed when
-testcontainers moves to archiver 8
+minimatch (Dependabot auto-dismissed the glob alert). Both statements and the
+`osv-scanner.toml` entries are removed when testcontainers moves to archiver 8
 ([#187](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/187)).
 
 Recent history of the process, for the record: the dev-scope undici

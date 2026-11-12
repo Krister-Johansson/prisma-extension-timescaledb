@@ -6,8 +6,8 @@
 
 [[IgnoredVulns]]
 id = "GHSA-3g3m-2fjr-6pw4"
-reason = "glob 10.5.0 is a development dependency (testcontainers > archiver 7 > archiver-utils) and is not in the published package. The integration tests never call the Testcontainers copy functions, the only path into archiver, and archiver itself walks directories with readdir-glob. The fix exists only in glob 14.0.2, outside the ^10 range archiver-utils requires."
+reason = "glob 10.5.0 is a development dependency (testcontainers > archiver 7 > archiver-utils) and is not in the published package. Importing testcontainers loads it, but nothing calls it: archiver-utils uses glob only in a file-expansion helper that archiver never invokes, and the integration tests never use the Testcontainers copy functions, the only callers of archiver. The fix exists only in glob 14.0.2, outside the ^10 range archiver-utils requires."
 
 [[IgnoredVulns]]
 id = "GHSA-g3hv-75wg-m249"
-reason = "minimatch 9.0.9 is installed only as a dependency of the glob 10.5.0 above, with the same unreachable path and no untrusted glob patterns. The fix exists only in minimatch 11.0.1, outside the ^9 range glob 10 requires."
+reason = "minimatch 9.0.9 is installed only as a dependency of the glob 10.5.0 above, so it is loaded but never called, and no glob pattern comes from outside the repository. The fix exists only in minimatch 11.0.1, outside the ^9 range glob 10 requires."
