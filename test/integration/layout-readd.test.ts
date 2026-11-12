@@ -3,7 +3,7 @@
 // state file still knows the old layout, and at `migrate deploy` when it does not (a lost state
 // file). In both cases the live hypertable keeps its dimensions and the history still replays
 // through `migrate reset`.
-import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startHarness, type Harness, dockerAvailable } from "./harness.js";
@@ -147,5 +147,94 @@ describe.skipIf(!DOCKER_OK)("hypertable layout across an annotation removal (rea
       /hypertable "SensorReading" is partitioned on time column "time", but the schema declares "createdAt"/,
     );
     expect(await dimensions()).toEqual(["time:Time", "deviceId:Space"]);
+  });
+});
+
+// The one history the deploy-time check stops from replaying. A model is removed (its table
+// dropped) and later declared again under the same table name with another layout, and the new
+// table still has the old columns. Every objects migration runs after all of Prisma's own, so on
+// a replay v0001 converts the FINAL table with the old layout. Before the check that replay ran
+// clean and built a hypertable the live database does not have; now the later version raises.
+// The way out is to delete the objects migrations older than the newest one.
+describe.skipIf(!DOCKER_OK)("a table dropped and recreated with another layout (real TimescaleDB)", () => {
+  let h: Harness;
+  let header: string;
+  let migrations: string;
+
+  const PLACEHOLDER = `model Device {\n  id Int @id\n}`;
+  const CREATE_DEVICE = `CREATE TABLE "Device" ("id" INTEGER NOT NULL, CONSTRAINT "Device_pkey" PRIMARY KEY ("id"));`;
+
+  beforeAll(async () => {
+    h = await startHarness({ models: `${HASHED_ON_DEVICE}\n\n${PLACEHOLDER}`, initSql: `${INIT_SQL}\n${CREATE_DEVICE}` });
+    const schema = readFileSync(join(h.projectDir, "schema.prisma"), "utf8");
+    header = schema.slice(0, schema.indexOf("/// @timescale"));
+    migrations = join(h.projectDir, "migrations");
+    h.prisma(["generate"]);
+    h.prisma(["migrate", "deploy"]);
+  }, 180_000);
+
+  afterAll(async () => {
+    await h?.stop();
+  });
+
+  const setModels = (models: string): void => {
+    writeFileSync(join(h.projectDir, "schema.prisma"), header + models + "\n", "utf8");
+  };
+  const userMigration = (name: string, sql: string): void => {
+    mkdirSync(join(migrations, name), { recursive: true });
+    writeFileSync(join(migrations, name, "migration.sql"), sql, "utf8");
+  };
+  const dimensions = async (): Promise<string[]> =>
+    (
+      await h.query<{ d: string }>(
+        `SELECT column_name || ':' || dimension_type AS d FROM timescaledb_information.dimensions
+          WHERE hypertable_name = 'SensorReading' ORDER BY dimension_number`,
+      )
+    ).map((r) => r.d);
+
+  it("deploys on the live database, where the new table starts as a plain table", async () => {
+    userMigration("20260102000000_drop_readings", `DROP TABLE "SensorReading";`);
+    setModels(PLACEHOLDER);
+    h.prisma(["generate"]); // v0002: the model is gone, so no layout is recorded
+    h.prisma(["migrate", "deploy"]);
+
+    userMigration("20260103000000_recreate_readings", INIT_SQL);
+    setModels(`${HASHED_ON_SENSOR}\n\n${PLACEHOLDER}`);
+    h.prisma(["generate"]); // v0003: a new table is free to choose its layout
+    h.prisma(["migrate", "deploy"]);
+    expect(await dimensions()).toEqual(["time:Time", "sensorId:Space"]);
+  });
+
+  // The fix for this history is to delete the objects migrations older than the newest one.
+  // Every version re-asserts the full state, so the newest alone rebuilds it, and its number
+  // stays the highest, so the next generated version is never one a database already applied.
+  it("deleting the older objects migrations leaves a deployed database deployable", async () => {
+    const aside = join(h.projectDir, "aside");
+    for (const n of [1, 2]) cpSync(join(migrations, objects(n)), join(aside, objects(n)), { recursive: true });
+    for (const n of [1, 2]) rmSync(join(migrations, objects(n)), { recursive: true });
+    try {
+      h.prisma(["migrate", "deploy"]); // v0001 and v0002 are applied here and absent on disk
+      h.prisma(["generate"]);
+      expect(readdirSync(migrations).filter((f) => f.includes("timescaledb_objects"))).toEqual([objects(3)]);
+      expect(await dimensions()).toEqual(["time:Time", "sensorId:Space"]);
+    } finally {
+      for (const n of [1, 2]) cpSync(join(aside, objects(n)), join(migrations, objects(n)), { recursive: true });
+    }
+  });
+
+  it("migrate reset stops on the later version instead of building the old layout", async () => {
+    expect(() => h.prisma(["migrate", "reset", "--force"])).toThrow(
+      /hypertable "SensorReading" has a space dimension on "deviceId", but the schema declares a space dimension on "sensorId"/,
+    );
+  });
+
+  it("with the older objects migrations deleted, the history replays again", async () => {
+    for (const n of [1, 2]) rmSync(join(migrations, objects(n)), { recursive: true });
+    h.prisma(["migrate", "reset", "--force"]);
+    h.prisma(["migrate", "deploy"]);
+    expect(await dimensions()).toEqual(["time:Time", "sensorId:Space"]);
+    // The state file still names v0003, so the next change is v0004.
+    h.prisma(["generate"]);
+    expect(readdirSync(migrations).filter((f) => f.includes("timescaledb_objects"))).toEqual([objects(3)]);
   });
 });

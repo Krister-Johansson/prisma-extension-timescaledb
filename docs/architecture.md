@@ -111,6 +111,18 @@ emitted SQL must keep that test green. The evolution test extends it: objects
 added after the first deploy are applied by the next deploy, and a replay
 through dropped tables and removed annotations still converges.
 
+One history does not replay. A model is removed, so Prisma drops its table,
+and the model is later declared again under the same table name with another
+time column or partition column while the new table still has the old columns.
+The objects migrations run after all of Prisma's own, so on a replay the first
+version converts the final table with the old layout, and the layout check in
+the later version raises. Without the check that replay completed and built a
+hypertable the live database does not have. The fix is to delete the objects
+migrations older than the newest one: every version re-asserts the full state,
+so the newest alone rebuilds it, and a database that already applied the
+deleted versions still deploys. `layout-readd.test.ts` covers the failing
+replay and the fix.
+
 Three code rules matter throughout:
 
 - All quoting and escaping goes through `core/sql.ts`. In `timeBucket` and
