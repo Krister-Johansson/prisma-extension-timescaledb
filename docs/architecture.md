@@ -75,7 +75,14 @@ test/
    nothing, unless the folder for the recorded version is missing, in which
    case that migration is rebuilt as the next version from the previous state
    the file also records. A state file from a newer release aborts the run
-   instead of being rewritten. Within a version, hypertable conversions come before continuous
+   instead of being rewritten. The state file also keeps the time column and
+   partition column of a hypertable whose annotation was removed while its
+   model stayed in the schema, so an annotation that comes back with another
+   layout stops the generator. Each hypertable block reads
+   `timescaledb_information.dimensions` and raises when the live time column
+   or hash dimension differs from the declared one, because
+   `create_hypertable` and `add_dimension` would otherwise run without error
+   and leave the two apart. Within a version, hypertable conversions come before continuous
    aggregates, which need their source to already be a hypertable.
    `emit-types.ts` writes the typed registry the client extension imports.
 3. **Runtime.** The client extension reads the registry (or a manual config)

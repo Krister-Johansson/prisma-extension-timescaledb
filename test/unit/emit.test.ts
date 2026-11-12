@@ -14,6 +14,7 @@ import {
   parseGeneratorState,
   EXTENSION_MIGRATION,
   OBJECTS_MIGRATION_PREFIX,
+  STATE_VERSION,
   type GeneratorState,
 } from "../../src/generator/emit-migrations.js";
 import { emitTypes } from "../../src/generator/emit-types.js";
@@ -222,6 +223,28 @@ describe("emitMigrations (append-only versioned objects migrations)", () => {
           migrate_data           => TRUE,
           create_default_indexes => FALSE
         );
+        DECLARE live_time text; live_space text;
+        BEGIN
+          SELECT d.column_name INTO live_time
+            FROM timescaledb_information.dimensions d
+            JOIN pg_class c ON c.relname = d.hypertable_name
+            JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = d.hypertable_schema
+           WHERE c.oid = to_regclass('"SensorReading"') AND d.dimension_type = 'Time'
+           ORDER BY d.dimension_number LIMIT 1;
+          IF live_time <> 'time' THEN
+            RAISE EXCEPTION 'prisma-extension-timescaledb: hypertable % is partitioned on time column "%", but the schema declares "%"', '"SensorReading"', live_time, 'time'
+              USING HINT = 'TimescaleDB cannot change the time column of an existing hypertable. Declare the live column again, or move the data to a table with the new layout.';
+          END IF;
+          SELECT string_agg('"' || d.column_name || '"', ', ' ORDER BY d.dimension_number) INTO live_space
+            FROM timescaledb_information.dimensions d
+            JOIN pg_class c ON c.relname = d.hypertable_name
+            JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = d.hypertable_schema
+           WHERE c.oid = to_regclass('"SensorReading"') AND d.dimension_type = 'Space';
+          IF live_space IS NOT NULL THEN
+            RAISE EXCEPTION 'prisma-extension-timescaledb: hypertable % has a space dimension on %, but the schema declares no space dimension', '"SensorReading"', live_space
+              USING HINT = 'TimescaleDB cannot remove or replace a dimension. Declare the live partition column again, or move the data to a table with the new layout.';
+          END IF;
+        END;
         PERFORM set_partitioning_interval('"SensorReading"', INTERVAL '1 day');
       END $$;
 
@@ -674,9 +697,9 @@ model SensorReading {
     expect(
       parseGeneratorState(JSON.stringify({ version: 1, sequence: 1, state: { hypertables: [] } })), // no caggs array
     ).toBeUndefined();
-    // A version above 1 is not "unknown shape": it is a newer release's file (see the #160 cases).
+    // A version above the current one is not "unknown shape": it is a newer release's file (see the #160 cases).
     expect(() =>
-      parseGeneratorState(JSON.stringify({ version: 2, sequence: 1, state: { hypertables: [], continuousAggregates: [] } })),
+      parseGeneratorState(JSON.stringify({ version: STATE_VERSION + 1, sequence: 1, state: { hypertables: [], continuousAggregates: [] } })),
     ).toThrow(NewerStateFileError);
     expect(parseGeneratorState(JSON.stringify({ version: 1, sequence: 0, state: { hypertables: [], continuousAggregates: [] } }))).toBeUndefined();
   });
@@ -840,9 +863,9 @@ describe("emitMigrations state-file gaps (issue #160)", () => {
   // Nothing before it and nothing in it: an empty migration would only record a version that
   // does nothing.
   it("an empty state whose lost migration also had nothing before it emits nothing", () => {
-    const bare = { hypertables: [], continuousAggregates: [], relationsByModel: {} };
+    const bare = { hypertables: [], continuousAggregates: [], relationsByModel: {}, tables: [] };
     const empty = { hypertables: [], continuousAggregates: [] };
-    const previous = { version: 1 as const, sequence: 2, state: empty, previous: empty };
+    const previous = { version: STATE_VERSION, sequence: 2, state: empty, previous: empty };
     expect(emitMigrations(bare, previous, 1, true, false)).toEqual({ files: {} });
   });
 
@@ -867,14 +890,14 @@ describe("emitMigrations state-file gaps (issue #160)", () => {
   // A file written by a newer release used to parse as "unreadable", which emitted a full
   // re-assert migration and rewrote the file as version 1. It must stop the generator instead.
   it("parseGeneratorState throws a named error for a state file from a newer release", () => {
-    const newer = JSON.stringify({ version: 2, sequence: 7, state: { hypertables: [], continuousAggregates: [] } });
+    const newer = JSON.stringify({ version: STATE_VERSION + 1, sequence: 7, state: { hypertables: [], continuousAggregates: [] } });
     expect(() => parseGeneratorState(newer)).toThrow(NewerStateFileError);
     expect(() => parseGeneratorState(newer)).toThrow(/newer prisma-extension-timescaledb/);
-    expect(() => parseGeneratorState(newer)).toThrow(/version 2/);
+    expect(() => parseGeneratorState(newer)).toThrow(/version 3/);
     // Even a newer file with a shape this release cannot read is a newer file, not a corrupt one.
-    expect(() => parseGeneratorState(JSON.stringify({ version: 3 }))).toThrow(NewerStateFileError);
-    // Anything that is not an integer above 1 stays "unreadable".
-    expect(parseGeneratorState(JSON.stringify({ version: "2", sequence: 1 }))).toBeUndefined();
+    expect(() => parseGeneratorState(JSON.stringify({ version: 4 }))).toThrow(NewerStateFileError);
+    // Anything that is not an integer above the current version stays "unreadable".
+    expect(parseGeneratorState(JSON.stringify({ version: "3", sequence: 1 }))).toBeUndefined();
     expect(parseGeneratorState(JSON.stringify({ version: 1.5, sequence: 1 }))).toBeUndefined();
     expect(parseGeneratorState(JSON.stringify({ version: 0, sequence: 1 }))).toBeUndefined();
     expect(parseGeneratorState("null")).toBeUndefined();
@@ -1124,5 +1147,151 @@ describe("emitMigrations converging diffs (issue #161)", () => {
       expect.stringMatching(/SensorDaily is dropped and recreated because a continuous aggregate it is built on changed/),
       expect.stringMatching(/SensorHourly is dropped and recreated because its definition changed/),
     ]);
+  });
+});
+
+// Issue #173: the layout rules of #161 compared only hypertables present in both states, so
+// removing the annotation in one run and adding it back with another layout in the next got
+// past them. The state file now remembers the layout while the model is still in the schema.
+describe("emitMigrations hypertable layout across an annotation removal (issue #173)", () => {
+  const V3 = `${objectsMigrationName(3)}/migration.sql`;
+  type Schema = Awaited<ReturnType<typeof loadSchema>>;
+  type Hypertable = Schema["hypertables"][number];
+  const hashedOn = (schema: Schema, column: string, partitions = 4): Schema => ({
+    ...schema,
+    continuousAggregates: [],
+    hypertables: schema.hypertables.map((h): Hypertable => ({ ...h, spacePartition: { column, partitions } })),
+  });
+  /** The annotation is gone; the model (and so its table) is still in the schema. */
+  const unannotated = (schema: Schema): Schema => ({ ...schema, hypertables: [], continuousAggregates: [] });
+  /** v1 hashed on deviceId, v2 with the annotation removed. */
+  const removedAfterV1 = async () => {
+    const schema = await loadSchema();
+    const v1 = emitMigrations(hashedOn(schema, "deviceId"));
+    const v2 = emitMigrations(unannotated(schema), v1.nextState, 1, true);
+    return { schema, v1, v2 };
+  };
+
+  it("the DMMF extraction lists every model and view, annotated or not", async () => {
+    const schema = await loadSchema();
+    expect(schema.tables).toEqual([{ table: "SensorReading" }, { table: "SensorHourly" }]);
+  });
+
+  it("removing the annotation records the layout the table keeps", async () => {
+    const { v2 } = await removedAfterV1();
+    expect(v2.nextState?.version).toBe(STATE_VERSION);
+    expect(v2.nextState?.state.hypertables).toEqual([]);
+    expect(v2.nextState?.state.formerHypertables).toEqual([
+      { table: "SensorReading", column: "time", spacePartition: { column: "deviceId" } },
+    ]);
+  });
+
+  it("throws when the annotation comes back with another partition column, time column, or no space dimension", async () => {
+    const { schema, v2 } = await removedAfterV1();
+    expect(() => emitMigrations(hashedOn(schema, "temperature"), v2.nextState, 2, true)).toThrow(
+      /Hypertable SensorReading: the space partition column changed from "deviceId" to "temperature".*annotation was removed/,
+    );
+    const otherTime: Schema = {
+      ...hashedOn(schema, "deviceId"),
+      hypertables: hashedOn(schema, "deviceId").hypertables.map((h) => ({ ...h, column: "createdAt" })),
+    };
+    expect(() => emitMigrations(otherTime, v2.nextState, 2, true)).toThrow(
+      /Hypertable SensorReading: the time column changed from "time" to "createdAt"/,
+    );
+    const timeOnly: Schema = { ...schema, continuousAggregates: [] };
+    expect(() => emitMigrations(timeOnly, v2.nextState, 2, true)).toThrow(/space dimension on "deviceId" was removed/);
+  });
+
+  it("the same layout comes back as the next version and leaves the list", async () => {
+    const { schema, v2 } = await removedAfterV1();
+    // Another partition count on the same column converges through set_number_partitions.
+    const v3 = emitMigrations(hashedOn(schema, "deviceId", 8), v2.nextState, 2, true);
+    expect(v3.files[V3]).toContain(`PERFORM set_number_partitions('"SensorReading"', 8, 'deviceId');`);
+    expect(v3.nextState?.state.formerHypertables).toBeUndefined();
+    expect(v3.nextState?.previous?.formerHypertables).toHaveLength(1);
+  });
+
+  it("the layout stays recorded through later versions that do not touch the table", async () => {
+    const { schema, v2 } = await removedAfterV1();
+    const other: Hypertable = { table: "EventLog", column: "at" };
+    const withOther: Schema = { ...unannotated(schema), hypertables: [other], tables: [...schema.tables, { table: "EventLog" }] };
+    const v3 = emitMigrations(withOther, v2.nextState, 2, true);
+    expect(v3.files[V3]).toBeDefined();
+    expect(v3.nextState?.state.formerHypertables).toHaveLength(1);
+    const both: Schema = { ...withOther, hypertables: [other, ...hashedOn(schema, "temperature").hypertables] };
+    expect(() => emitMigrations(both, v3.nextState, 3, true)).toThrow(/space partition column changed/);
+    // An unchanged schema is still a no-op with the list in place.
+    expect(emitMigrations(withOther, v3.nextState, 3, true)).toEqual({ files: {} });
+  });
+
+  it("a model that leaves the schema takes its recorded layout with it, without a new migration", async () => {
+    const { schema, v2 } = await removedAfterV1();
+    const gone: Schema = { ...unannotated(schema), tables: [] };
+    const forgotten = emitMigrations(gone, v2.nextState, 2, true);
+    expect(forgotten.files).toEqual({});
+    expect(forgotten.nextState?.sequence).toBe(2);
+    expect(forgotten.nextState?.state.formerHypertables).toBeUndefined();
+    // A new table under the old name is free to choose its layout.
+    expect(() => emitMigrations(hashedOn(schema, "temperature"), forgotten.nextState, 2, true)).not.toThrow();
+  });
+
+  it("a model removed together with its annotation is not recorded", async () => {
+    const schema = await loadSchema();
+    const v1 = emitMigrations(hashedOn(schema, "deviceId"));
+    const v2 = emitMigrations({ ...unannotated(schema), tables: [] }, v1.nextState, 1, true);
+    expect(v2.nextState?.state.formerHypertables).toBeUndefined();
+  });
+
+  it("a rebuilt lost migration still holds the re-added annotation to the old layout", async () => {
+    const { schema, v2 } = await removedAfterV1();
+    // v0002 (the removal) is gone from disk and the annotation is back on another column.
+    expect(() => emitMigrations(hashedOn(schema, "temperature"), v2.nextState, 1, true, false)).toThrow(
+      /space partition column changed from "deviceId" to "temperature"/,
+    );
+  });
+
+  it("a multiSchema flip re-qualifies a recorded layout instead of forgetting it", async () => {
+    const { schema, v2 } = await removedAfterV1();
+    const qualifiedTables = [{ table: "SensorReading", schema: "public" }];
+    const flipped = emitMigrations({ ...unannotated(schema), tables: qualifiedTables }, v2.nextState, 2, true);
+    expect(flipped.files).toEqual({});
+    expect(flipped.nextState?.state.formerHypertables).toEqual([
+      { table: "SensorReading", schema: "public", column: "time", spacePartition: { column: "deviceId" } },
+    ]);
+    const readded: Schema = {
+      ...hashedOn(schema, "temperature"),
+      hypertables: hashedOn(schema, "temperature").hypertables.map((h) => ({ ...h, schema: "public" })),
+      tables: qualifiedTables,
+    };
+    expect(() => emitMigrations(readded, v2.nextState, 2, true)).toThrow(/space partition column changed/);
+    expect(() => emitMigrations(readded, flipped.nextState, 2, true)).toThrow(/space partition column changed/);
+    // A table of the same name in another schema is another relation: the entry goes.
+    const elsewhere = emitMigrations({ ...unannotated(schema), tables: [{ table: "SensorReading", schema: "metrics" }] }, v2.nextState, 2, true);
+    expect(elsewhere.nextState?.state.formerHypertables).toBeUndefined();
+  });
+
+  it("reads a version 1 state file and writes version 2 on the next change", async () => {
+    const schema = await loadSchema();
+    const v1 = emitMigrations(hashedOn(schema, "deviceId"));
+    const legacy = parseGeneratorState(JSON.stringify({ ...v1.nextState, version: 1 }));
+    expect(legacy).toBeDefined();
+    // Unchanged schema: the version 1 file is left alone.
+    expect(emitMigrations(hashedOn(schema, "deviceId"), legacy, 1, true)).toEqual({ files: {} });
+    const v2 = emitMigrations(unannotated(schema), legacy, 1, true);
+    expect(v2.nextState?.version).toBe(2);
+    expect(v2.nextState?.state.formerHypertables).toHaveLength(1);
+  });
+
+  it("parseGeneratorState round-trips the recorded layouts and rejects malformed ones", async () => {
+    const { v2 } = await removedAfterV1();
+    expect(parseGeneratorState(JSON.stringify(v2.nextState))).toEqual(v2.nextState);
+    const withFormer = (formerHypertables: unknown): string =>
+      JSON.stringify({ ...v2.nextState, state: { hypertables: [], continuousAggregates: [], formerHypertables } });
+    expect(parseGeneratorState(withFormer("nope"))).toBeUndefined();
+    expect(parseGeneratorState(withFormer([null]))).toBeUndefined();
+    expect(parseGeneratorState(withFormer([{ table: "T" }]))).toBeUndefined();
+    expect(parseGeneratorState(withFormer([{ table: "T", column: "time", spacePartition: {} }]))).toBeUndefined();
+    expect(parseGeneratorState(withFormer([{ table: "T", column: "time", schema: 5 }]))).toBeUndefined();
+    expect(parseGeneratorState(withFormer([{ table: "T", column: "time" }]))).toBeDefined();
   });
 });

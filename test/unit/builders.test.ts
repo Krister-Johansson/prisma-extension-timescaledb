@@ -80,6 +80,28 @@ BEGIN
     migrate_data           => TRUE,
     create_default_indexes => FALSE
   );
+  DECLARE live_time text; live_space text;
+  BEGIN
+    SELECT d.column_name INTO live_time
+      FROM timescaledb_information.dimensions d
+      JOIN pg_class c ON c.relname = d.hypertable_name
+      JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = d.hypertable_schema
+     WHERE c.oid = to_regclass('"SensorReading"') AND d.dimension_type = 'Time'
+     ORDER BY d.dimension_number LIMIT 1;
+    IF live_time <> 'time' THEN
+      RAISE EXCEPTION 'prisma-extension-timescaledb: hypertable % is partitioned on time column "%", but the schema declares "%"', '"SensorReading"', live_time, 'time'
+        USING HINT = 'TimescaleDB cannot change the time column of an existing hypertable. Declare the live column again, or move the data to a table with the new layout.';
+    END IF;
+    SELECT string_agg('"' || d.column_name || '"', ', ' ORDER BY d.dimension_number) INTO live_space
+      FROM timescaledb_information.dimensions d
+      JOIN pg_class c ON c.relname = d.hypertable_name
+      JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = d.hypertable_schema
+     WHERE c.oid = to_regclass('"SensorReading"') AND d.dimension_type = 'Space';
+    IF live_space IS NOT NULL THEN
+      RAISE EXCEPTION 'prisma-extension-timescaledb: hypertable % has a space dimension on %, but the schema declares no space dimension', '"SensorReading"', live_space
+        USING HINT = 'TimescaleDB cannot remove or replace a dimension. Declare the live partition column again, or move the data to a table with the new layout.';
+    END IF;
+  END;
   PERFORM set_partitioning_interval('"SensorReading"', INTERVAL '1 day');
 END $$;`);
   });
@@ -144,6 +166,41 @@ END $$;`);
       spacePartition: { column: "device_id", partitions: 8 },
     });
     expect(up).toContain(`PERFORM add_dimension('"metrics"."sensor_readings"', by_hash('device_id', 8), if_not_exists => TRUE);`);
+  });
+
+  // Issue #173: create_hypertable's if_not_exists ignores another time column, and add_dimension
+  // on another column adds a third dimension. The block reads the live layout and raises instead.
+  it("checks the live time column after the conversion and raises on a mismatch", () => {
+    const { up, guardedUp } = createHypertableSql({ table: "SensorReading", column: "time" });
+    for (const sql of [up, guardedUp]) {
+      expect(sql).toContain("FROM timescaledb_information.dimensions d");
+      expect(sql).toContain(`WHERE c.oid = to_regclass('"SensorReading"') AND d.dimension_type = 'Time'`);
+      expect(sql).toContain(`IF live_time <> 'time' THEN`);
+      expect(sql).toMatch(/RAISE EXCEPTION 'prisma-extension-timescaledb: hypertable % is partitioned on time column/);
+      expect(sql.indexOf("create_hypertable")).toBeLessThan(sql.indexOf("live_time <>"));
+      expect(sql).not.toContain("::regclass");
+      expect(sql).not.toContain("::name");
+    }
+  });
+
+  it("raises on any live space dimension when none is declared", () => {
+    const { up } = createHypertableSql({ table: "SensorReading", column: "time" });
+    expect(up).toContain(`WHERE c.oid = to_regclass('"SensorReading"') AND d.dimension_type = 'Space';`);
+    expect(up).toContain("but the schema declares no space dimension");
+  });
+
+  it("raises on a live space dimension on another column before add_dimension can add a third", () => {
+    const { up } = createHypertableSql({
+      table: "sensor_readings",
+      column: "ts",
+      schema: "metrics",
+      spacePartition: { column: "device_id", partitions: 8 },
+    });
+    expect(up).toContain(
+      `WHERE c.oid = to_regclass('"metrics"."sensor_readings"') AND d.dimension_type = 'Space' AND d.column_name <> 'device_id';`,
+    );
+    expect(up).toContain(`but the schema declares a space dimension on "device_id"`);
+    expect(up.indexOf("IF live_space IS NOT NULL")).toBeLessThan(up.indexOf("add_dimension"));
   });
 
   it("space partition rejects a non-positive / non-integer count and a bad column", () => {

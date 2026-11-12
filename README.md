@@ -154,7 +154,17 @@ schema is a move, and the generator treats it as a removal plus a new object.
 Three changes cannot be applied to a live hypertable and
 stop `prisma generate` with an error: the time column, the partition column,
 and removing a space partition. For those, declare the new layout on a new
-model, copy the data across, and drop the old one. If you delete the newest generated objects migration before
+model, copy the data across, and drop the old one. Removing the
+`@timescale.hypertable` annotation does not lift the rule: the table stays a
+hypertable, the state file keeps its layout for as long as the model is in
+the schema, and an annotation that comes back must declare the same time
+column and partition column. Each generated hypertable block also compares
+the declared layout with the live one at deploy time and raises when they
+differ, which covers what the generator cannot see (a lost state file, or a
+hypertable created outside this package). The migration then fails and the
+database is unchanged. To recover, mark the migration rolled back with
+`prisma migrate resolve --rolled-back`, delete its folder, declare the live
+layout again, and run `prisma generate`. If you delete the newest generated objects migration before
 deploying it, the next `prisma generate` rebuilds it under the next version
 number from the previous state recorded in that file. If the deleted migration
 had already been applied to a database, the rebuilt one is still safe to apply

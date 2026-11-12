@@ -224,17 +224,17 @@ describe.skipIf(!DOCKER_OK)("schema evolution (real TimescaleDB)", () => {
     }
   });
 
-  // Issue #160: a version-2 file used to read as corrupt, which emitted a full re-assert
-  // migration and rewrote the file as version 1.
+  // Issue #160: a file with a version above the one this release writes used to read as
+  // corrupt, which emitted a full re-assert migration and rewrote the file in the old format.
   it("a state file from a newer release stops generate instead of being overwritten", () => {
     const migrations = join(h.projectDir, "migrations");
     const statePath = join(migrations, ".prisma-extension-timescaledb.json");
     const original = readFileSync(statePath, "utf8");
     const before = readdirSync(migrations).sort();
-    writeFileSync(statePath, JSON.stringify({ ...(JSON.parse(original) as object), version: 2 }), "utf8");
+    writeFileSync(statePath, JSON.stringify({ ...(JSON.parse(original) as object), version: 3 }), "utf8");
     try {
       expect(() => h.prisma(["generate"])).toThrow(/newer prisma-extension-timescaledb/);
-      expect((JSON.parse(readFileSync(statePath, "utf8")) as { version: number }).version).toBe(2);
+      expect((JSON.parse(readFileSync(statePath, "utf8")) as { version: number }).version).toBe(3);
       expect(readdirSync(migrations).sort()).toEqual(before);
     } finally {
       writeFileSync(statePath, original, "utf8");
