@@ -87,9 +87,10 @@ brace-expansion (GHSA-3jxr-9vmj-r5cp and related) by
 and the dev-scope deepmerge-ts (GHSA-ggr8-5vv4-36mx) and esbuild
 (GHSA-g7r4-m6w7-qqqr) advisories by npm overrides in
 [#102](https://github.com/Krister-Johansson/prisma-extension-timescaledb/pull/102)
-([#103](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/103)
-tracks removing the overrides once the upstream pins move past the patched
-versions), rather than assessed away.
+(the overrides were removed again under
+[#103](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/103)
+once Prisma 7.10.1 and tsup 9 required the patched versions themselves),
+rather than assessed away.
 
 ## Static analysis (SAST)
 
