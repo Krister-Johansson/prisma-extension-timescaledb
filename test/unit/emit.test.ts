@@ -1061,6 +1061,8 @@ describe("emitMigrations converging diffs (issue #161)", () => {
       ...qualified,
       hypertables: qualified.hypertables.map((h) => ({ ...h, schema: "metrics" })),
       continuousAggregates: qualified.continuousAggregates.map((c) => ({ ...c, schema: "metrics", sourceSchema: "metrics" })),
+      // The schema's relation list moves with them, as it does in a real DMMF.
+      tables: qualified.tables.map((t) => ({ ...t, schema: "metrics" })),
     };
     const move = emitMigrations(moved, flip.nextState, 1, true).files[V2]!;
     expect(move).toContain("Removed hypertable annotation: public.SensorReading");
@@ -1268,6 +1270,28 @@ describe("emitMigrations hypertable layout across an annotation removal (issue #
     // A table of the same name in another schema is another relation: the entry goes.
     const elsewhere = emitMigrations({ ...unannotated(schema), tables: [{ table: "SensorReading", schema: "metrics" }] }, v2.nextState, 2, true);
     expect(elsewhere.nextState?.state.formerHypertables).toBeUndefined();
+  });
+
+  // Review finding on #189: the flip and the removal in the same run left the previous key
+  // unqualified, so it matched no table in the schema and the layout was dropped.
+  it("a multiSchema flip in the same run as the annotation removal still records the layout", async () => {
+    const schema = await loadSchema();
+    const v1 = emitMigrations(hashedOn(schema, "deviceId"));
+    const qualifiedTables = [{ table: "SensorReading", schema: "public" }];
+    const v2 = emitMigrations({ ...unannotated(schema), tables: qualifiedTables }, v1.nextState, 1, true);
+    expect(v2.nextState?.state.formerHypertables).toEqual([
+      { table: "SensorReading", schema: "public", column: "time", spacePartition: { column: "deviceId" } },
+    ]);
+    // The removal addresses the relation by its new, qualified name.
+    const sql = v2.files[`${objectsMigrationName(2)}/migration.sql`]!;
+    expect(sql).toContain("Removed hypertable annotation: public.SensorReading");
+    expect(sql).toContain(`remove_retention_policy('"public"."SensorReading"', if_exists => TRUE)`);
+    const readded: Schema = {
+      ...hashedOn(schema, "temperature"),
+      hypertables: hashedOn(schema, "temperature").hypertables.map((h) => ({ ...h, schema: "public" })),
+      tables: qualifiedTables,
+    };
+    expect(() => emitMigrations(readded, v2.nextState, 2, true)).toThrow(/space partition column changed/);
   });
 
   it("reads a version 1 state file and writes version 2 on the next change", async () => {

@@ -277,13 +277,19 @@ function alignSchemaFlips(
   const hypertables = previous.hypertables.map((prev): HypertableConfig => {
     const key = qualify(prev.schema, prev.table);
     if (curHyperKeys.has(key)) return prev;
-    const match = current.hypertables.find(
-      (c) => c.table === prev.table && flipped(prev.schema, c.schema) && !prevHyperKeys.has(qualify(c.schema, c.table)),
-    );
-    if (!match) return prev;
-    notes.push(`hypertable ${key} is now declared as ${qualify(match.schema, match.table)}: the same relation, nothing to drop or re-add.`);
+    const sameRelation = (c: { table: string; schema?: string }): boolean =>
+      c.table === prev.table && flipped(prev.schema, c.schema) && !prevHyperKeys.has(qualify(c.schema, c.table));
+    const match = current.hypertables.find(sameRelation);
+    // The annotation may be going away in this same run. The table is then no longer a declared
+    // hypertable, but it is still in the schema under its new key, and the removal (and the
+    // layout recorded for it) must carry that key.
+    const table = match ?? tables.find(sameRelation);
+    if (!table) return prev;
+    if (match) {
+      notes.push(`hypertable ${key} is now declared as ${qualify(match.schema, match.table)}: the same relation, nothing to drop or re-add.`);
+    }
     const { schema: _schema, ...rest } = prev;
-    return match.schema === undefined ? rest : { ...rest, schema: match.schema };
+    return table.schema === undefined ? rest : { ...rest, schema: table.schema };
   });
 
   const prevCaggKeys = new Set(previous.continuousAggregates.map((c) => qualify(c.schema, c.name)));
