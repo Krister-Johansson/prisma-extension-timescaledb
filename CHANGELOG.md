@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.0.6](https://github.com/Krister-Johansson/prisma-extension-timescaledb/compare/prisma-extension-timescaledb-v1.0.5...prisma-extension-timescaledb-v1.0.6) (2026-11-13)
+
+
+### Bug Fixes
+
+* **generator:** print notices on stdout so prisma generate shows them ([#203](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/203)) ([e095a53](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/e095a538e5349a47590dbd6f8441196fc539811d))
+* **generator:** refuse a hypertable annotation that comes back with another layout ([#189](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/189)) ([cddb7f8](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/cddb7f8402e41f88937c5dd5232e946582710599))
+* keep Prisma 8 away from Prisma 7 projects ([#202](https://github.com/Krister-Johansson/prisma-extension-timescaledb/issues/202)) ([a6e5229](https://github.com/Krister-Johansson/prisma-extension-timescaledb/commit/a6e5229d4df5bb3831a3e1baebfdadb074486459))
+
 ## [1.0.5](https://github.com/Krister-Johansson/prisma-extension-timescaledb/compare/prisma-extension-timescaledb-v1.0.4...prisma-extension-timescaledb-v1.0.5) (2026-09-29)
 
 
