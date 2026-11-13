@@ -60,9 +60,14 @@ Full docs live in the [wiki](https://github.com/Krister-Johansson/prisma-extensi
 
 ```bash
 npm install prisma-extension-timescaledb
-npm install -D prisma @prisma/client
+npm install -D prisma@7 @prisma/client@7
 npm install @prisma/adapter-pg            # or your preferred driver adapter
 ```
+
+Pin the major as shown: npm's `latest` tag for `prisma` can point at a Prisma 8
+build, and Prisma 8 has no schema generators and no `$extends`, so this package
+does not run on it. If you keep Prisma 7 beside Prisma 8 through the
+`@prisma/prisma7` package, run the generator with `npx prisma7 generate`.
 
 Requires Prisma 7, Node 20.19, 22.12 or 24 and newer (the range Prisma 7
 itself supports), TypeScript 5.4 or newer if you use TypeScript, and a

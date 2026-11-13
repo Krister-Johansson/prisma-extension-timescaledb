@@ -72,8 +72,8 @@
     "postgresql"
   ],
   "peerDependencies": {
-    "@prisma/client": ">=7.0.0",
-    "prisma": ">=7.0.0",
+    "@prisma/client": ">=7.0.0 <8",
+    "prisma": ">=7.0.0 <8",
     "typescript": ">=5.4"
   },
   "peerDependenciesMeta": {
