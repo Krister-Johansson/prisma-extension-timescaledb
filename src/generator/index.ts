@@ -28,6 +28,7 @@ import {
   type GeneratorState,
 } from "./emit-migrations.js";
 import { emitTypes } from "./emit-types.js";
+import { notice } from "./notice.js";
 import { assertSupportedPrismaVersion, installedPrismaVersion } from "./prismaVersion.js";
 
 const DEFAULT_OUTPUT = "node_modules/.prisma-extension-timescaledb";
@@ -51,7 +52,7 @@ generatorHandler({
 
   async onGenerate(options) {
     const versionWarning = assertSupportedPrismaVersion(installedPrismaVersion(import.meta.url));
-    if (versionWarning) console.warn(versionWarning);
+    if (versionWarning) notice(versionWarning);
     const schema = extractTimescaleSchema(options.dmmf);
 
     const typesDir = options.generator.output?.value ?? DEFAULT_OUTPUT;
@@ -100,10 +101,11 @@ generatorHandler({
       throw e;
     }
     const { files, nextState, warnings } = result;
-    for (const warning of warnings ?? []) console.warn(`prisma-extension-timescaledb: ${warning}`);
-    // Warned only once something is actually written, so the message never precedes an abort.
+    for (const warning of warnings ?? []) notice(`prisma-extension-timescaledb: ${warning}`);
+    // Printed only after emitMigrations has succeeded, so the message never precedes one of its
+    // refusals. A failed write below can still follow it.
     if (!latestExists && nextState) {
-      console.warn(
+      notice(
         `prisma-extension-timescaledb: ${objectsMigrationName(previous.sequence)} is missing from ${migrationsDir}; rebuilding it as ${objectsMigrationName(nextState.sequence)}. If the missing migration was already applied somewhere, the rebuilt one re-runs its drop-and-recreate of changed continuous aggregates there, and their data refills on the next refresh.`,
       );
     }
@@ -137,7 +139,7 @@ function readState(path: string): GeneratorState | undefined {
     throw e;
   }
   if (state === undefined) {
-    console.warn(
+    notice(
       `prisma-extension-timescaledb: ignoring unreadable state file at ${path}; re-asserting the full state as a new migration.`,
     );
   }
