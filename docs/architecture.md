@@ -140,5 +140,5 @@ Three code rules matter throughout:
 
 One runtime dependency: `@prisma/generator-helper`, which the generator binary
 needs to speak Prisma's generator protocol. `prisma` and `@prisma/client` are
-peer dependencies (`>=7.0.0`). The published package ships only `dist/`, built
+peer dependencies (`>=7.0.0 <8`). The published package ships only `dist/`, built
 as dual ESM and CJS with tsup and validated with `@arethetypeswrong/cli`.
