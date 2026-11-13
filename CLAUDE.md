@@ -69,7 +69,7 @@ zero errors. This must be covered by an integration test (`test/integration/`).
   client has no compile-time types) instead of scattering `any` declarations.
 - Single package with internal modules `src/core`, `src/generator`, `src/client`.
   (Not a monorepo.)
-- `@prisma/client` and `prisma` are **peerDependencies** (`>=7.0.0`), pinned in
+- `@prisma/client` and `prisma` are **peerDependencies** (`>=7.0.0 <8`), pinned in
   devDependencies for testing. Bundle nothing from Prisma. (Prisma 7+ only: the documented
   setup uses a url-less `datasource` block with the URL supplied from `prisma.config.ts`;
   Prisma 6 rejects that at schema validation with P1012, checked by hand; no CI job or test
