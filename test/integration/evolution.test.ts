@@ -120,6 +120,7 @@ describe.skipIf(!DOCKER_OK)("schema evolution (real TimescaleDB)", () => {
   });
 
   it("regenerating an unchanged schema adds no migration", async () => {
+    expect(h.prisma(["generate"])).not.toContain("prisma-extension-timescaledb:"); // and prints no notice
     const before = readdirSync(join(h.projectDir, "migrations")).sort();
     h.prisma(["generate"]);
     expect(readdirSync(join(h.projectDir, "migrations")).sort()).toEqual(before);
@@ -161,7 +162,12 @@ describe.skipIf(!DOCKER_OK)("schema evolution (real TimescaleDB)", () => {
 
     // The developer discards the undeployed migration to redo it.
     rmSync(join(migrations, "99999999999999_timescaledb_objects_v0004"), { recursive: true });
-    h.prisma(["generate"]);
+    // Issue #192: Prisma keeps a generator's stderr to itself unless the generator fails, so a
+    // notice written with console.warn never reached the terminal. It has to arrive on stdout.
+    const output = h.prisma(["generate"]);
+    expect(output).toMatch(
+      /prisma-extension-timescaledb: 99999999999999_timescaledb_objects_v0004 is missing from .*rebuilding it as 99999999999999_timescaledb_objects_v0005/,
+    );
     const folders = readdirSync(migrations).sort();
     expect(folders).not.toContain("99999999999999_timescaledb_objects_v0004"); // a number is never reused
     expect(folders).toContain("99999999999999_timescaledb_objects_v0005");

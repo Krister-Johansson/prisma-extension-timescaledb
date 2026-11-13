@@ -34,8 +34,11 @@ export interface Harness {
   shadowUrl: string;
   /** Run a query against the app database and return rows. */
   query<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<T[]>;
-  /** Run the prisma CLI in the temp project. */
-  prisma(args: string[]): void;
+  /**
+   * Run the prisma CLI in the temp project and return what it wrote to stdout. A generator
+   * inherits the CLI's stdout, so anything the generator prints there is part of the result.
+   */
+  prisma(args: string[]): string;
   stop(): Promise<void>;
 }
 
@@ -180,9 +183,8 @@ export async function startHarness(opts: HarnessOptions = {}): Promise<Harness> 
     PRISMA_USER_CONSENT_FOR_DANGEROUS_AI_ACTION: PRISMA_CONSENT,
   };
 
-  const prisma = (args: string[]): void => {
-    execFileSync(PRISMA_BIN, args, { cwd: projectDir, env, stdio: "pipe" });
-  };
+  const prisma = (args: string[]): string =>
+    execFileSync(PRISMA_BIN, args, { cwd: projectDir, env, stdio: "pipe", encoding: "utf8" });
 
   const query = async <T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T[]> => {
     const client = new pg.Client({ connectionString: databaseUrl });
