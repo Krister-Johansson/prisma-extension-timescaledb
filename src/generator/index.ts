@@ -102,7 +102,8 @@ generatorHandler({
     }
     const { files, nextState, warnings } = result;
     for (const warning of warnings ?? []) notice(`prisma-extension-timescaledb: ${warning}`);
-    // Warned only once something is actually written, so the message never precedes an abort.
+    // Printed only after emitMigrations has succeeded, so the message never precedes one of its
+    // refusals. A failed write below can still follow it.
     if (!latestExists && nextState) {
       notice(
         `prisma-extension-timescaledb: ${objectsMigrationName(previous.sequence)} is missing from ${migrationsDir}; rebuilding it as ${objectsMigrationName(nextState.sequence)}. If the missing migration was already applied somewhere, the rebuilt one re-runs its drop-and-recreate of changed continuous aggregates there, and their data refills on the next refresh.`,
