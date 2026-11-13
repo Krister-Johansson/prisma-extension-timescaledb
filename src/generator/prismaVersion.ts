@@ -16,9 +16,9 @@ function majorOf(version: string): number | undefined {
   return major === undefined ? undefined : Number(major);
 }
 
-function packageVersion(require: NodeJS.Require, name: string): string | undefined {
+function packageVersion(fromUrl: string, name: string): string | undefined {
   try {
-    return (require(`${name}/package.json`) as { version?: string }).version;
+    return (createRequire(fromUrl)(`${name}/package.json`) as { version?: string }).version;
   } catch {
     return undefined;
   }
@@ -32,16 +32,17 @@ function packageVersion(require: NodeJS.Require, name: string): string | undefin
  * local prisma; the CLI that spawned the generator is then unknown, since Prisma passes only
  * an engine hash, and the caller warns instead of guarding.
  *
- * When the root `prisma` is not the supported major and the wrapper package for the supported
+ * When the root `prisma` is a newer major, or absent, and the wrapper package for the supported
  * major is installed, the wrapper's version is returned. That is Prisma's side-by-side upgrade
  * layout, where the root `prisma` is 8 and has no generator protocol, so the CLI that spawned
- * the generator is the wrapper's.
+ * the generator is the wrapper's. An older root `prisma` is still reported as it is, because
+ * that CLI can spawn the generator itself.
  */
 export function installedPrismaVersion(fromUrl: string): string | undefined {
-  const require = createRequire(fromUrl);
-  const root = packageVersion(require, "prisma");
-  if (root !== undefined && majorOf(root) === SUPPORTED_PRISMA_MAJOR) return root;
-  const wrapper = packageVersion(require, WRAPPER_PACKAGE);
+  const root = packageVersion(fromUrl, "prisma");
+  const rootMajor = root === undefined ? undefined : majorOf(root);
+  if (rootMajor !== undefined && rootMajor <= SUPPORTED_PRISMA_MAJOR) return root;
+  const wrapper = packageVersion(fromUrl, WRAPPER_PACKAGE);
   if (wrapper !== undefined && majorOf(wrapper) === SUPPORTED_PRISMA_MAJOR) return wrapper;
   return root;
 }

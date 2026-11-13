@@ -52,6 +52,7 @@ describe("installedPrismaVersion", () => {
 
   it("is undefined where no prisma resolves", () => {
     expect(installedPrismaVersion("file:///nowhere/at/all/index.js")).toBeUndefined();
+    expect(installedPrismaVersion("not-a-file-url")).toBeUndefined();
   });
 
   // Issue #191: Prisma's incremental upgrade guide keeps the Prisma 7 CLI as @prisma/prisma7
@@ -86,6 +87,12 @@ describe("installedPrismaVersion", () => {
 
     it("keeps the root prisma when it is the supported major", () => {
       expect(installedPrismaVersion(project({ prisma: "7.4.2", "@prisma/prisma7": "7.10.1" }))).toBe("7.4.2");
+    });
+
+    it("keeps an older root prisma, whose CLI can spawn the generator itself", () => {
+      const from = project({ prisma: "6.19.3", "@prisma/prisma7": "7.10.1" });
+      expect(installedPrismaVersion(from)).toBe("6.19.3");
+      expect(() => assertSupportedPrismaVersion(installedPrismaVersion(from))).toThrow(/Upgrade prisma/);
     });
 
     it("still reports a root prisma of another major when there is no wrapper", () => {

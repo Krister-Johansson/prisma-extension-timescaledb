@@ -67,7 +67,9 @@ npm install @prisma/adapter-pg            # or your preferred driver adapter
 Pin the major as shown: npm's `latest` tag for `prisma` can point at a Prisma 8
 build, and Prisma 8 has no schema generators and no `$extends`, so this package
 does not run on it. If you keep Prisma 7 beside Prisma 8 through the
-`@prisma/prisma7` package, run the generator with `npx prisma7 generate`.
+`@prisma/prisma7` package, run the generator with `npx prisma7 generate`. npm
+refuses to install this package beside a root `prisma` 8 (`ERESOLVE` on the
+peer range), so that layout needs `--legacy-peer-deps` or an `overrides` entry.
 
 Requires Prisma 7, Node 20.19, 22.12 or 24 and newer (the range Prisma 7
 itself supports), TypeScript 5.4 or newer if you use TypeScript, and a
